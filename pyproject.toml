@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "memory-custodian"
+version = "0.3.0"
+description = "Repo-native plain-text memory governance for coding agents"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "MemoryCustodian contributors" }]
+dependencies = []
+
+[project.scripts]
+memory-custodian = "memory_custodian.main:main"
+
+[tool.setuptools.packages.find]
+where = ["cli"]
+
+[tool.pytest.ini_options]
+pythonpath = ["cli"]
+testpaths = ["tests"]
