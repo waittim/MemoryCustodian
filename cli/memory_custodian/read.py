@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from .protocol import budget_for, is_safe_memory_name, resolve_memory_dir, resolve_project_root, task_file_specs, trim_to_budget
+from .protocol import budget_for, is_safe_memory_name, manifest_task_file_specs, resolve_memory_dir, resolve_project_root, trim_to_budget
 
 
 def _optional_requested(kind: str, names: list[str]) -> list[tuple[str, bool]]:
@@ -17,7 +17,7 @@ def _optional_requested(kind: str, names: list[str]) -> list[tuple[str, bool]]:
 def run(args) -> int:
     project_root = resolve_project_root(args.project_root)
     memory_dir = resolve_memory_dir(project_root, args.memory_dir)
-    files = task_file_specs(args.task)
+    files = manifest_task_file_specs(memory_dir, args.task)
     files += _optional_requested("profiles", args.profile)
     files += _optional_requested("areas", args.area)
 

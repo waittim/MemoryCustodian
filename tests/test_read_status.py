@@ -38,6 +38,30 @@ class ReadStatusTests(unittest.TestCase):
             self.assertIn("Skipped optional:", text)
             self.assertIn("- preferences.md", text)
 
+    def test_read_uses_project_manifest_when_present(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            manifest = Path(tmp) / "docs" / "memory" / "manifest.md"
+            manifest.write_text(
+                "# Memory Manifest\n\n"
+                "## Always load\n"
+                "- brief.md\n\n"
+                "## Load by task\n\n"
+                "### Implementation\n"
+                "Load:\n"
+                "- constraints.md\n"
+                "Load if present:\n"
+                "- preferences.md\n",
+                encoding="utf-8",
+            )
+            out = StringIO()
+            with redirect_stdout(out):
+                self.assertEqual(main(["read", "--project-root", tmp, "--task", "implementation", "--names-only"]), 0)
+            text = out.getvalue()
+            self.assertIn("- brief.md", text)
+            self.assertIn("- constraints.md", text)
+            self.assertNotIn("- do-not-use.md", text)
+
     def test_status_reports_initialized_memory(self):
         with tempfile.TemporaryDirectory() as tmp:
             self.assertEqual(main(["init", "--project-root", tmp]), 0)

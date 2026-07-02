@@ -54,6 +54,24 @@ TASK_FILE_MAP = {
     ],
 }
 
+TASK_SECTION_KEYWORDS = {
+    "planning": ("planning", "architecture", "refactoring"),
+    "architecture": ("planning", "architecture", "refactoring"),
+    "refactoring": ("planning", "architecture", "refactoring"),
+    "implementation": ("implementation", "execution", "debugging"),
+    "execution": ("implementation", "execution", "debugging"),
+    "debugging": ("implementation", "execution", "debugging"),
+    "artifact": ("artifact", "user-facing", "output"),
+    "output": ("artifact", "user-facing", "output"),
+    "preferences": ("preference", "preferences"),
+    "recap": ("change history", "project recap", "history", "recap"),
+    "history": ("change history", "project recap", "history", "recap"),
+    "status": ("change history", "project recap", "history", "recap", "status"),
+    "maintenance": ("memory maintenance", "maintenance"),
+    "compact": ("memory maintenance", "maintenance"),
+    "forget": ("memory maintenance", "maintenance"),
+}
+
 COMMON_MEMORY_FILES = (
     "brief.md",
     "decisions.md",
@@ -175,6 +193,82 @@ def is_safe_memory_name(name: str) -> bool:
 
 def task_file_specs(task: str) -> list[tuple[str, bool]]:
     return TASK_FILE_MAP.get(task, TASK_FILE_MAP["default"])
+
+
+def _normalize_heading(text: str) -> str:
+    return text.strip().strip("#").strip().casefold()
+
+
+def _section_lines(manifest: str, heading_level: str, matcher) -> list[str]:
+    lines = manifest.splitlines()
+    captured: list[str] = []
+    in_section = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith(heading_level + " "):
+            if in_section:
+                break
+            in_section = matcher(_normalize_heading(stripped))
+            continue
+        if in_section and stripped.startswith("#" * len(heading_level) + " "):
+            break
+        if in_section:
+            captured.append(line)
+    return captured
+
+
+def _parse_bullets(lines: list[str], default_required: bool) -> list[tuple[str, bool]]:
+    specs: list[tuple[str, bool]] = []
+    required = default_required
+    for line in lines:
+        stripped = line.strip()
+        lowered = stripped.casefold()
+        if lowered in {"load:", "also load:"}:
+            required = True
+            continue
+        if lowered == "load if present:":
+            required = False
+            continue
+        if not stripped.startswith("- "):
+            continue
+        name = stripped[2:].strip().strip("`")
+        if name and not name.endswith("/"):
+            specs.append((name, required))
+    return specs
+
+
+def _dedupe_specs(specs: list[tuple[str, bool]]) -> list[tuple[str, bool]]:
+    seen: dict[str, bool] = {}
+    order: list[str] = []
+    for name, required in specs:
+        if name not in seen:
+            order.append(name)
+            seen[name] = required
+        else:
+            seen[name] = seen[name] or required
+    return [(name, seen[name]) for name in order]
+
+
+def parse_manifest_task_file_specs(manifest: str, task: str) -> list[tuple[str, bool]]:
+    always_lines = _section_lines(manifest, "##", lambda heading: heading == "always load")
+    specs = _parse_bullets(always_lines, default_required=True)
+
+    keywords = TASK_SECTION_KEYWORDS.get(task, ())
+    if keywords:
+        task_lines = _section_lines(manifest, "###", lambda heading: any(keyword in heading for keyword in keywords))
+        specs.extend(_parse_bullets(task_lines, default_required=True))
+
+    return _dedupe_specs(specs)
+
+
+def manifest_task_file_specs(memory_dir: Path, task: str) -> list[tuple[str, bool]]:
+    manifest = memory_dir / "manifest.md"
+    if not manifest.exists():
+        return task_file_specs(task)
+    specs = parse_manifest_task_file_specs(manifest.read_text(encoding="utf-8"), task)
+    if not specs:
+        return task_file_specs(task)
+    return specs
 
 
 def task_files(task: str) -> list[str]:
