@@ -54,6 +54,17 @@ class AddForgetCompactTests(unittest.TestCase):
             self.assertIn("Rule: Output", rule.read_text(encoding="utf-8"))
             self.assertIn("published text", rule.read_text(encoding="utf-8"))
 
+    def test_hard_forget_does_not_rewrite_topic_to_changelog(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            self.assertEqual(main(["enable", "changelog", "--project-root", tmp]), 0)
+            self.assertEqual(main(["add", "SensitiveTopic should not remain.", "--type", "decision", "--project-root", tmp]), 0)
+
+            self.assertEqual(main(["forget", "SensitiveTopic", "--mode", "hard", "--project-root", tmp]), 0)
+            memory = Path(tmp) / "docs" / "memory"
+            self.assertNotIn("SensitiveTopic", (memory / "changelog.md").read_text(encoding="utf-8"))
+            self.assertIn("Completed hard forget operation.", (memory / "changelog.md").read_text(encoding="utf-8"))
+
 
 if __name__ == "__main__":
     unittest.main()

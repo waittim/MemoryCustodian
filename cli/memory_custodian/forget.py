@@ -49,6 +49,12 @@ def _tombstone(topic: str, mode: str) -> str:
     )
 
 
+def _changelog_message(topic: str, mode: str) -> str:
+    if mode == "soft":
+        return f"Forgot topic '{topic}' with mode soft."
+    return f"Completed {mode} forget operation."
+
+
 def run(args) -> int:
     project_root = resolve_project_root(args.project_root)
     memory_dir = resolve_memory_dir(project_root, args.memory_dir)
@@ -67,7 +73,7 @@ def run(args) -> int:
             changed_files.append(str(path.relative_to(memory_dir)))
 
     append_text(memory_dir / "do-not-use.md", _tombstone(args.topic, args.mode))
-    append_changelog(memory_dir, f"Forgot topic '{args.topic}' with mode {args.mode}.")
+    append_changelog(memory_dir, _changelog_message(args.topic, args.mode))
 
     print(f"Forgot topic: {args.topic}")
     print(f"Removed matches: {total_removed}")
