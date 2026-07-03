@@ -75,6 +75,8 @@ docs/memory/
   inbox.md
 ```
 
+Custom memory directories, if explicitly configured, must still live under `docs/`.
+
 Create optional modules only when needed:
 
 ```bash

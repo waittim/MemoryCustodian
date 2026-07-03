@@ -26,7 +26,7 @@ Decision:
 Build the MVP CLI with Python standard library modules only.
 
 Reason:
-This keeps installation simple and works without network access.
+This keeps routine memory operations simple and usable without network access.
 
 ## 2026-07-02 - Adopt minimal-first v0.3 protocol
 Decision:
@@ -58,12 +58,42 @@ Implications:
 Status:
 active
 
+## 2026-07-03 - Keep memory changelog newest first
+Decision:
+Keep `changelog.md` entries in reverse chronological order, with the newest maintenance event at the top.
+
+Reason:
+History recaps and memory maintenance should surface the latest project memory changes first.
+
+Status:
+active
+
+## 2026-07-03 - Separate offline memory from online distribution
+Decision:
+Memory operations should work offline by default, but skill, plugin, and CLI installation or update flows may use network distribution.
+
+Reason:
+Local-first project memory should not require network access at runtime, while update delivery can use package managers, marketplaces, git, or other online distribution channels.
+
+Status:
+active
+
 ## 2026-07-03 - Index optional modules in manifest
 Decision:
 List enabled `rules/`, `profiles/`, and `areas/` files in a lightweight manifest optional module index.
 
 Reason:
 Agents need to discover which optional memory files exist before they can decide whether to load them. The index exposes paths and trigger conditions without loading optional file contents into default context.
+
+Status:
+active
+
+## 2026-07-03 - Require memory directories under docs
+Decision:
+Project memory directories must live under `docs/`; `docs/memory/` remains the default managed directory.
+
+Reason:
+Visible documentation paths are easier for teams and agents to discover, review, diff, commit, and roll back than hidden root-level memory directories.
 
 Status:
 active

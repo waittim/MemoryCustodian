@@ -78,6 +78,19 @@ class AddForgetCompactTests(unittest.TestCase):
             self.assertNotIn("SensitiveTopic", (memory / "changelog.md").read_text(encoding="utf-8"))
             self.assertIn("Completed hard forget operation.", (memory / "changelog.md").read_text(encoding="utf-8"))
 
+    def test_changelog_entries_are_newest_first(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            self.assertEqual(main(["enable", "changelog", "--project-root", tmp]), 0)
+            self.assertEqual(main(["add", "Use newest-first changelog entries.", "--type", "decision", "--project-root", tmp]), 0)
+
+            changelog = (Path(tmp) / "docs" / "memory" / "changelog.md").read_text(encoding="utf-8")
+            self.assertIn("Entries are newest first.", changelog)
+            self.assertLess(
+                changelog.index("Added decision memory to decisions.md."),
+                changelog.index("Enabled optional memory module changelog.md."),
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -19,7 +19,7 @@ from .templates import DEFAULT_MEMORY_DIR
 
 def _add_common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--project-root", default=".", help="Project root. Defaults to the current directory.")
-    parser.add_argument("--memory-dir", default=DEFAULT_MEMORY_DIR, help="Memory directory relative to the project root.")
+    parser.add_argument("--memory-dir", default=DEFAULT_MEMORY_DIR, help="Memory directory under docs/. Defaults to docs/memory.")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -29,7 +29,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     init_parser = sub.add_parser("init", help="Initialize memory files in a project.")
     _add_common(init_parser)
-    init_parser.add_argument("--path", help="Memory directory relative to the project root. Alias for --memory-dir.")
+    init_parser.add_argument("--path", help="Memory directory under docs/. Alias for --memory-dir.")
     init_parser.add_argument("--extended", action="store_true", help="Also create optional preferences, changelog, rules, profiles, and archive templates.")
     init_parser.add_argument("--with-codex", action="store_true", help="Add the Codex AGENTS.md entry snippet.")
     init_parser.add_argument("--with-claude", action="store_true", help="Add the Claude Code CLAUDE.md entry snippet.")
@@ -90,7 +90,11 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    return args.func(args)
+    try:
+        return args.func(args)
+    except ValueError as exc:
+        print(f"Error: {exc}")
+        return 1
 
 
 if __name__ == "__main__":

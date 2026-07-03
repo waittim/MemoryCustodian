@@ -16,7 +16,7 @@ Use it to:
 
 ## Core Workflow
 
-1. Locate memory: prefer `docs/memory/manifest.md`; fall back to `.memory/manifest.md` only if the project explicitly chose it.
+1. Locate memory at `docs/memory/manifest.md`, or another project-declared memory directory under `docs/`.
 2. Read `manifest.md` if present.
 3. Read `brief.md` before substantial work.
 4. Identify the task type.

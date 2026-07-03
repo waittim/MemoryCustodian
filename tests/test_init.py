@@ -1,3 +1,5 @@
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
 import sys
 import tempfile
@@ -31,6 +33,23 @@ class InitTests(unittest.TestCase):
             brief.write_text("# Custom Brief\n", encoding="utf-8")
             self.assertEqual(main(["init", "--project-root", tmp]), 0)
             self.assertEqual(brief.read_text(encoding="utf-8"), "# Custom Brief\n")
+
+    def test_init_accepts_custom_memory_dir_under_docs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(main(["init", "--project-root", tmp, "--memory-dir", "docs/team-memory", "--agent", "codex"]), 0)
+            memory = Path(tmp) / "docs" / "team-memory"
+            self.assertTrue((memory / "manifest.md").exists())
+            self.assertIn("docs/team-memory", (memory / "brief.md").read_text(encoding="utf-8"))
+            self.assertIn("docs/team-memory/manifest.md", (Path(tmp) / "AGENTS.md").read_text(encoding="utf-8"))
+
+    def test_init_rejects_memory_dir_outside_docs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = StringIO()
+            with redirect_stdout(out):
+                code = main(["init", "--project-root", tmp, "--memory-dir", ".memory"])
+            self.assertEqual(code, 1)
+            self.assertIn("Memory directory must live under docs/", out.getvalue())
+            self.assertFalse((Path(tmp) / ".memory").exists())
 
     def test_init_can_add_codex_snippet(self):
         with tempfile.TemporaryDirectory() as tmp:

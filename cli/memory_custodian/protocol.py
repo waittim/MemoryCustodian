@@ -9,6 +9,8 @@ from typing import Iterable
 
 from .templates import ALL_TEMPLATE_FILES, CORE_FILES, DEFAULT_MEMORY_DIR
 
+DOCS_MEMORY_ROOT = "docs"
+
 BUDGETS = {
     "brief.md": 500,
     "decisions.md": 800,
@@ -131,7 +133,15 @@ def resolve_memory_dir(project_root: Path, memory_dir: str | None = None) -> Pat
     path = Path(memory).expanduser()
     if not path.is_absolute():
         path = project_root / path
-    return path.resolve()
+    resolved = path.resolve()
+    docs_root = (project_root / DOCS_MEMORY_ROOT).resolve()
+    try:
+        relative = resolved.relative_to(docs_root)
+    except ValueError as exc:
+        raise ValueError("Memory directory must live under docs/, such as docs/memory.") from exc
+    if not relative.parts:
+        raise ValueError("Memory directory must be a subdirectory of docs/, such as docs/memory.")
+    return resolved
 
 
 def ensure_newline(text: str) -> str:
@@ -168,7 +178,30 @@ def append_changelog(memory_dir: Path, message: str, create: bool = False) -> No
     if not path.exists():
         write_text(path, "# Memory Changelog\n\n" + entry + "\n")
         return
-    append_text(path, entry)
+    existing = path.read_text(encoding="utf-8").rstrip()
+    if not existing:
+        write_text(path, "# Memory Changelog\n\n" + entry + "\n")
+        return
+
+    lines = existing.splitlines()
+    insert_at = 0
+    if lines and lines[0].strip() == "# Memory Changelog":
+        insert_at = len(lines)
+        for index, line in enumerate(lines[1:], start=1):
+            if line.startswith("## "):
+                insert_at = index
+                break
+
+    before = "\n".join(lines[:insert_at]).rstrip()
+    after = "\n".join(lines[insert_at:]).strip()
+    if before and after:
+        write_text(path, f"{before}\n\n{entry}\n\n{after}\n")
+    elif before:
+        write_text(path, f"{before}\n\n{entry}\n")
+    elif after:
+        write_text(path, f"{entry}\n\n{after}\n")
+    else:
+        write_text(path, entry + "\n")
 
 
 def existing_memory_files(memory_dir: Path) -> list[Path]:

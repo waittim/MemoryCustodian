@@ -2,7 +2,7 @@
 
 ## Default Location
 
-Use `docs/memory/` by default. Hidden `.memory/` directories are allowed for projects that explicitly choose them, but visible `docs/memory/` is preferred for review, diffs, and team workflows.
+Use `docs/memory/` by default. Custom memory directories, if used, must still live under `docs/` so project memory remains visible, reviewable, and easy to diff in team workflows.
 
 ## Core Files
 
@@ -130,7 +130,7 @@ Temporary holding area for memory candidates that need review or compaction.
 
 ### changelog.md
 
-Optional memory maintenance log. Keep it factual and brief.
+Optional memory maintenance log. Keep it factual, brief, and newest first.
 
 ### rules/
 

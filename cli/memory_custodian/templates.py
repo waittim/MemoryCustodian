@@ -121,7 +121,7 @@ This project uses MemoryCustodian to maintain local, plain-text project memory.
 
 Current status:
 - Minimal memory protocol is enabled.
-- Durable memory lives in `docs/memory/`.
+- Durable memory lives in `{memory_dir}`.
 - `AGENTS.md` and `CLAUDE.md` should stay short and only point to this memory folder.
 
 Default behavior:
@@ -140,7 +140,7 @@ Project memory should be local, plain-text, inspectable, and reusable across age
 
 Implications:
 - Keep platform entry files short.
-- Store durable context in `docs/memory/`.
+- Store durable context in `{memory_dir}`.
 - Avoid RAG or vector DB in MVP.
 
 Status:
@@ -149,7 +149,7 @@ active
     "constraints.md": """# Constraints
 
 - Keep AGENTS.md and CLAUDE.md short.
-- Store durable project memory in `docs/memory/`.
+- Store durable project memory in `{memory_dir}`.
 - Do not use RAG, embeddings, or vector databases in MVP.
 - Do not load archive files unless explicitly requested.
 """,
@@ -179,6 +179,8 @@ During compaction:
 Soft user or project preferences go here. Hard requirements belong in `constraints.md`.
 """,
     "changelog.md": """# Memory Changelog
+
+Entries are newest first.
 
 ## {date}
 - Enabled MemoryCustodian changelog.
@@ -216,8 +218,8 @@ EXPECTED_FILES = CORE_FILES
 ALL_TEMPLATE_FILES = CORE_FILES + OPTIONAL_FILES
 
 
-def render_template(name: str, date: str) -> str:
-    return MEMORY_FILES[name].format(date=date).rstrip() + "\n"
+def render_template(name: str, date: str, memory_dir: str = DEFAULT_MEMORY_DIR) -> str:
+    return MEMORY_FILES[name].format(date=date, memory_dir=memory_dir).rstrip() + "\n"
 
 
 def render_rule_template(name: str, date: str) -> str:
