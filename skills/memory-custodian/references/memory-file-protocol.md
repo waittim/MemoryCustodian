@@ -18,6 +18,19 @@ docs/memory/
 
 These six files are the core protocol. They are enough for minimal mode.
 
+## Non-Goals
+
+MemoryCustodian does not provide:
+
+- RAG retrieval
+- embedding-based search
+- vector database storage
+- cloud-hosted memory
+- opaque platform-specific memory stores
+- chat log archiving
+- a background daemon
+- automatic full-context loading
+
 ## Optional Files
 
 Create these only when the project needs them:

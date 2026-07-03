@@ -42,3 +42,18 @@ Implications:
 
 Status:
 active
+
+## 2026-07-02 - Keep Skill instructions operational
+Decision:
+Keep `SKILL.md` focused on agent execution: when to use the skill, which files to read, how to update memory, how to compact or forget, and which files not to load by default.
+
+Reason:
+`SKILL.md` is an execution entry point for agents, not a project positioning page.
+
+Implications:
+- Avoid prominent negative lists in the Skill body.
+- Put full non-goals in `README.md` and reference docs.
+- Keep hard architecture constraints in `docs/memory/constraints.md`.
+
+Status:
+active

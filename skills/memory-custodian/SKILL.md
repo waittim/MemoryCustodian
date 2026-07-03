@@ -5,15 +5,14 @@ description: Use when a project contains docs/memory/, or when the user asks to 
 
 # MemoryCustodian
 
-MemoryCustodian manages project memory as local plain-text files.
+MemoryCustodian stores durable project memory as local, human-readable Markdown files under `docs/memory/`.
 
-It does not use:
-- RAG
-- embeddings
-- vector databases
-- cloud memory
-- opaque storage
-- chat history as memory
+Use it to:
+- load the minimum relevant project memory for the current task
+- update project memory after meaningful decisions
+- compact unprocessed memory candidates
+- forget or tombstone memory the user no longer wants used
+- keep platform entry files such as `AGENTS.md` and `CLAUDE.md` short
 
 ## Core Workflow
 
@@ -22,10 +21,10 @@ It does not use:
 3. Read `brief.md` before substantial work.
 4. Identify the task type.
 5. Load only files allowed by the manifest.
-5. Respect `do-not-use.md` and tombstones before proposing plans or implementations.
-6. Never load `archive/` unless the user explicitly asks or the task is archive maintenance.
-7. Do not load `inbox.md` unless compacting, auditing unsorted memory, or asked by the user.
-8. After meaningful decisions, repeated corrections, or rejected approaches, update the appropriate memory file or propose a concise update.
+6. Respect `do-not-use.md` and tombstones before proposing plans or implementations.
+7. Never load `archive/` unless the user explicitly asks or the task is archive maintenance.
+8. Do not load `inbox.md` unless compacting, auditing unsorted memory, or asked by the user.
+9. After meaningful decisions, repeated corrections, or rejected approaches, update the appropriate memory file or propose a concise update.
 
 ## Memory Files
 

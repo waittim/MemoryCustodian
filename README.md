@@ -16,7 +16,17 @@ Memory can grow; context must stay small.
 
 ## Non-Goals
 
-MemoryCustodian is not a vector database, RAG system, cloud memory service, chat log archive, daemon, default Git workflow, or automatic context stuffing system.
+MemoryCustodian does not provide:
+
+- RAG retrieval
+- embedding-based search
+- vector database storage
+- cloud-hosted memory
+- opaque platform-specific memory stores
+- chat log archiving
+- a background daemon
+- a default Git workflow
+- automatic full-context loading
 
 ## Repository Layout
 

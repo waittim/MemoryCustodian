@@ -6,3 +6,4 @@
 
 ## 2026-07-02
 - Updated repository memory to the v0.3 minimal-first protocol.
+- Recorded the decision to keep `SKILL.md` focused on operational agent instructions.
