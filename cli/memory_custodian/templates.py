@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from . import __protocol_version__, __version__
+
 DEFAULT_MEMORY_DIR = "docs/memory"
 
 CORE_FILES = (
@@ -25,6 +27,11 @@ MEMORY_FILES = {
     "manifest.md": """# Memory Manifest
 
 MemoryCustodian uses this file to decide which local project memory files should be loaded for a task.
+
+## MemoryCustodian Protocol
+- protocol_version: {protocol_version}
+- initialized_with: memory-custodian {package_version}
+- last_migrated_with: memory-custodian {package_version}
 
 ## Always load
 - brief.md
@@ -219,7 +226,12 @@ ALL_TEMPLATE_FILES = CORE_FILES + OPTIONAL_FILES
 
 
 def render_template(name: str, date: str, memory_dir: str = DEFAULT_MEMORY_DIR) -> str:
-    return MEMORY_FILES[name].format(date=date, memory_dir=memory_dir).rstrip() + "\n"
+    return (
+        MEMORY_FILES[name]
+        .format(date=date, memory_dir=memory_dir, package_version=__version__, protocol_version=__protocol_version__)
+        .rstrip()
+        + "\n"
+    )
 
 
 def render_rule_template(name: str, date: str) -> str:

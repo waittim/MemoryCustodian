@@ -1,32 +1,11 @@
 # Decisions
 
-## 2026-06-30 - Use plain text memory files
+## 2026-06-30 - Establish local text memory foundation
 Decision:
-Store project memory as markdown files inside each project.
+Store project memory as Markdown files inside each project, defaulting to `docs/memory/`. Keep `AGENTS.md`, `CLAUDE.md`, and similar platform files as thin entry points. Build the MVP CLI with Python standard library modules only.
 
 Reason:
-This keeps memory local, inspectable, portable, and easy to version with git.
-
-## 2026-06-30 - Default to docs/memory
-Decision:
-Use `docs/memory/` as the default managed memory directory.
-
-Reason:
-A visible docs directory is easier to review, diff, commit, and share across agents than a hidden directory.
-
-## 2026-06-30 - Keep agent entry files small
-Decision:
-Use `AGENTS.md`, `CLAUDE.md`, and similar files only as entry points.
-
-Reason:
-The full memory belongs in dedicated memory files to avoid context bloat.
-
-## 2026-06-30 - Implement the CLI with Python stdlib
-Decision:
-Build the MVP CLI with Python standard library modules only.
-
-Reason:
-This keeps routine memory operations simple and usable without network access.
+This keeps memory local, inspectable, portable, easy to diff, and usable for routine operations without network access.
 
 ## 2026-07-02 - Adopt minimal-first v0.3 protocol
 Decision:
@@ -74,6 +53,21 @@ Memory operations should work offline by default, but skill, plugin, and CLI ins
 
 Reason:
 Local-first project memory should not require network access at runtime, while update delivery can use package managers, marketplaces, git, or other online distribution channels.
+
+Status:
+active
+
+## 2026-07-03 - Version package and memory protocol separately
+Decision:
+Track both the MemoryCustodian package version and the project memory protocol version. Generated manifests should record `protocol_version`, `initialized_with`, and `last_migrated_with`; CLI checks should report stale or missing protocol metadata.
+
+Reason:
+Updating the CLI or skill does not automatically update memory files already copied into user projects. Explicit protocol metadata lets users and agents detect when a project needs migration.
+
+Implications:
+- Package/plugin version uses SemVer.
+- Memory protocol version advances when generated memory structure or loading rules change.
+- Project migrations should be deterministic, reviewable, and offline by default.
 
 Status:
 active

@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 from .protocol import (
+    CURRENT_PROTOCOL_VERSION,
     budget_for,
+    compare_versions,
     count_h2_entries,
     count_inbox_items,
     estimate_tokens,
+    protocol_metadata,
     resolve_memory_dir,
     resolve_project_root,
 )
+from . import __version__
 from .templates import CORE_FILES
 
 
@@ -18,12 +22,32 @@ def run(args) -> int:
     memory_dir = resolve_memory_dir(project_root, args.memory_dir)
 
     print("MemoryCustodian status")
+    print(f"CLI version: {__version__}")
     print(f"Memory directory: {memory_dir}")
     if not memory_dir.exists():
         print("Status: MISSING")
         return 1
 
     exit_code = 0
+    manifest_path = memory_dir / "manifest.md"
+    manifest = manifest_path.read_text(encoding="utf-8") if manifest_path.exists() else ""
+    metadata = protocol_metadata(manifest)
+    protocol_version = metadata.get("protocol_version")
+    if protocol_version:
+        comparison = compare_versions(protocol_version, CURRENT_PROTOCOL_VERSION)
+        if comparison == 0:
+            print(f"Protocol version: {protocol_version} (current)")
+        elif comparison is not None and comparison < 0:
+            print(f"Protocol version: {protocol_version} (migration available to {CURRENT_PROTOCOL_VERSION})")
+        elif comparison is not None and comparison > 0:
+            print(f"Protocol version: {protocol_version} (newer than CLI supports {CURRENT_PROTOCOL_VERSION})")
+            exit_code = 1
+        else:
+            print(f"Protocol version: {protocol_version} (invalid)")
+            exit_code = 1
+    else:
+        print(f"Protocol version: missing (migration available to {CURRENT_PROTOCOL_VERSION})")
+
     for name in CORE_FILES:
         path = memory_dir / name
         if not path.exists():

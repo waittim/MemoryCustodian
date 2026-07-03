@@ -3,6 +3,7 @@
 Entries are newest first.
 
 ## 2026-07-03
+- Added v0.4 protocol metadata, migration checks, release notes, and plugin manifests.
 - Clarified that offline constraints apply to memory operations, not skill/plugin update distribution.
 - Established memory changelog entries as newest-first.
 - Added manifest optional module indexing for enabled rules, profiles, and areas.

@@ -70,6 +70,8 @@ class ReadStatusTests(unittest.TestCase):
                 code = main(["status", "--project-root", tmp])
             self.assertEqual(code, 0)
             text = out.getvalue()
+            self.assertIn("CLI version: 0.4.0", text)
+            self.assertIn("Protocol version: 0.4 (current)", text)
             self.assertIn("brief.md: OK", text)
             self.assertIn("inbox.md: OK", text)
             self.assertIn("preferences.md: not enabled", text)
@@ -94,6 +96,77 @@ class ReadStatusTests(unittest.TestCase):
                 code = main(["check", "--project-root", tmp])
             self.assertEqual(code, 1)
             self.assertIn("areas/frontend.md exists but is missing from optional module index", out.getvalue())
+
+    def test_check_reports_missing_protocol_metadata(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            manifest = Path(tmp) / "docs" / "memory" / "manifest.md"
+            manifest.write_text(
+                "# Memory Manifest\n\n"
+                "## Always load\n"
+                "- brief.md\n\n"
+                "## Load by task\n\n"
+                "### Planning / architecture / refactoring\n"
+                "Load:\n"
+                "- decisions.md\n"
+                "- constraints.md\n"
+                "- do-not-use.md\n\n"
+                "## Explicit only\n"
+                "- archive/\n\n"
+                "## Optional rules\n"
+                "- rules/\n\n"
+                "## Optional profiles\n"
+                "- profiles/\n",
+                encoding="utf-8",
+            )
+            out = StringIO()
+            with redirect_stdout(out):
+                code = main(["check", "--project-root", tmp])
+            self.assertEqual(code, 1)
+            self.assertIn("missing MemoryCustodian Protocol metadata", out.getvalue())
+
+    def test_migrate_adds_protocol_metadata_and_optional_index(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            manifest = Path(tmp) / "docs" / "memory" / "manifest.md"
+            manifest.write_text(
+                "# Memory Manifest\n\n"
+                "## Always load\n"
+                "- brief.md\n\n"
+                "## Load by task\n\n"
+                "### Planning / architecture / refactoring\n"
+                "Load:\n"
+                "- decisions.md\n"
+                "- constraints.md\n"
+                "- do-not-use.md\n\n"
+                "## Explicit only\n"
+                "- archive/\n\n"
+                "## Optional rules\n"
+                "- rules/\n\n"
+                "## Optional profiles\n"
+                "- profiles/\n",
+                encoding="utf-8",
+            )
+
+            out = StringIO()
+            with redirect_stdout(out):
+                self.assertEqual(main(["migrate", "--project-root", tmp]), 0)
+            self.assertIn("Dry run only", out.getvalue())
+            self.assertNotIn("MemoryCustodian Protocol", manifest.read_text(encoding="utf-8"))
+
+            out = StringIO()
+            with redirect_stdout(out):
+                self.assertEqual(main(["migrate", "--project-root", tmp, "--apply"]), 0)
+            migrated = manifest.read_text(encoding="utf-8")
+            self.assertIn("## MemoryCustodian Protocol", migrated)
+            self.assertIn("- protocol_version: 0.4", migrated)
+            self.assertIn("- initialized_with: unknown", migrated)
+            self.assertIn("## Optional module index", migrated)
+
+            out = StringIO()
+            with redirect_stdout(out):
+                code = main(["check", "--project-root", tmp])
+            self.assertEqual(code, 0)
 
 
 if __name__ == "__main__":

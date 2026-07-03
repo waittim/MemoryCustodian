@@ -116,6 +116,13 @@ memory-custodian status
 memory-custodian check
 ```
 
+Upgrade an existing memory folder to the current protocol:
+
+```bash
+memory-custodian migrate
+memory-custodian migrate --apply
+```
+
 ## Installing The Skill
 
 For Codex, use the installer from this repository:
@@ -138,6 +145,18 @@ A managed project should also include a short agent entry point. Use one of:
 - `adapters/generic/agent-instructions.md`
 
 Keep those entry files small. The complete project memory belongs in `docs/memory/`, not in `AGENTS.md` or `CLAUDE.md`.
+
+## Versioning And Updates
+
+MemoryCustodian tracks three related versions:
+
+- Package version: the CLI, skill bundle, and plugin metadata version.
+- Protocol version: the `docs/memory/manifest.md` schema and loading rules.
+- Project memory version: the protocol metadata recorded in each initialized project.
+
+`memory-custodian check` reports old or missing protocol metadata. `memory-custodian migrate --apply` updates the project manifest without requiring network access.
+
+Memory operations are local-first and offline by default. Skill, plugin, and CLI installation or update flows may use online distribution channels such as GitHub, package managers, or agent plugin marketplaces.
 
 ## Design Principles
 

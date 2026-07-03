@@ -4,7 +4,17 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .protocol import budget_for, count_inbox_items, estimate_tokens, optional_index_paths, resolve_memory_dir, resolve_project_root
+from .protocol import (
+    CURRENT_PROTOCOL_VERSION,
+    budget_for,
+    compare_versions,
+    count_inbox_items,
+    estimate_tokens,
+    optional_index_paths,
+    protocol_metadata,
+    resolve_memory_dir,
+    resolve_project_root,
+)
 from .templates import CORE_FILES
 
 
@@ -41,6 +51,30 @@ def _manifest_mentions_required_policy(text: str) -> list[str]:
     return issues
 
 
+def _check_protocol_metadata(text: str) -> list[str]:
+    issues: list[str] = []
+    metadata = protocol_metadata(text)
+    if not metadata:
+        return ["manifest.md: missing MemoryCustodian Protocol metadata; run `memory-custodian migrate --apply`"]
+    version = metadata.get("protocol_version")
+    if not version:
+        return ["manifest.md: missing protocol_version; run `memory-custodian migrate --apply`"]
+    comparison = compare_versions(version, CURRENT_PROTOCOL_VERSION)
+    if comparison is None:
+        issues.append(f"manifest.md: invalid protocol_version {version!r}")
+    elif comparison < 0:
+        issues.append(
+            f"manifest.md: protocol_version {version} is older than current {CURRENT_PROTOCOL_VERSION}; "
+            "run `memory-custodian migrate --apply`"
+        )
+    elif comparison > 0:
+        issues.append(
+            f"manifest.md: protocol_version {version} is newer than this CLI supports ({CURRENT_PROTOCOL_VERSION}); "
+            "update memory-custodian"
+        )
+    return issues
+
+
 def run(args) -> int:
     project_root = resolve_project_root(args.project_root)
     memory_dir = resolve_memory_dir(project_root, args.memory_dir)
@@ -55,7 +89,10 @@ def run(args) -> int:
         if not (memory_dir / name).exists():
             issues.append(f"{name}: missing required core file")
 
-    manifest = _read(memory_dir / "manifest.md")
+    manifest_path = memory_dir / "manifest.md"
+    manifest = _read(manifest_path)
+    if manifest_path.exists():
+        issues.extend(_check_protocol_metadata(manifest))
     if manifest:
         issues.extend(_manifest_mentions_required_policy(manifest))
 

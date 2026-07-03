@@ -103,6 +103,7 @@ memory-custodian enable rules/output
 memory-custodian compact --apply
 memory-custodian forget "topic" --mode soft
 memory-custodian check
+memory-custodian migrate --apply
 ```
 
 If the CLI is unavailable, edit the markdown files directly using the same protocol.

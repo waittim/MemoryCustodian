@@ -7,9 +7,12 @@ from pathlib import Path
 import re
 from typing import Iterable
 
+from . import __protocol_version__, __version__
 from .templates import ALL_TEMPLATE_FILES, CORE_FILES, DEFAULT_MEMORY_DIR
 
 DOCS_MEMORY_ROOT = "docs"
+CURRENT_PACKAGE_LABEL = f"memory-custodian {__version__}"
+CURRENT_PROTOCOL_VERSION = __protocol_version__
 
 BUDGETS = {
     "brief.md": 500,
@@ -85,6 +88,9 @@ COMMON_MEMORY_FILES = (
 SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 OPTIONAL_INDEX_HEADING = "## Optional module index"
+PROTOCOL_HEADING = "## MemoryCustodian Protocol"
+PROTOCOL_SECTION_NAME = "memorycustodian protocol"
+PROTOCOL_FIELD_RE = re.compile(r"^- ([A-Za-z_]+):\s*(.+)$")
 OPTIONAL_INDEX_SECTIONS = {
     "rules": "### Enabled rules",
     "profiles": "### Enabled profiles",
@@ -153,6 +159,28 @@ def estimate_tokens(text: str) -> int:
     return len(re.findall(r"[A-Za-z0-9_]+|[^\sA-Za-z0-9_]", text))
 
 
+def parse_version(value: str) -> tuple[int, ...] | None:
+    parts = value.strip().split(".")
+    if not parts or any(not part.isdigit() for part in parts):
+        return None
+    return tuple(int(part) for part in parts)
+
+
+def compare_versions(left: str, right: str) -> int | None:
+    left_parts = parse_version(left)
+    right_parts = parse_version(right)
+    if left_parts is None or right_parts is None:
+        return None
+    width = max(len(left_parts), len(right_parts))
+    padded_left = left_parts + (0,) * (width - len(left_parts))
+    padded_right = right_parts + (0,) * (width - len(right_parts))
+    if padded_left < padded_right:
+        return -1
+    if padded_left > padded_right:
+        return 1
+    return 0
+
+
 def read_text(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
@@ -202,6 +230,56 @@ def append_changelog(memory_dir: Path, message: str, create: bool = False) -> No
         write_text(path, f"{entry}\n\n{after}\n")
     else:
         write_text(path, entry + "\n")
+
+
+def protocol_metadata(manifest: str) -> dict[str, str]:
+    metadata: dict[str, str] = {}
+    lines = _section_lines(manifest, "##", lambda heading: heading == PROTOCOL_SECTION_NAME)
+    for line in lines:
+        match = PROTOCOL_FIELD_RE.match(line.strip())
+        if match:
+            metadata[match.group(1)] = match.group(2).strip()
+    return metadata
+
+
+def _protocol_section_lines(initialized_with: str, last_migrated_with: str) -> list[str]:
+    return [
+        PROTOCOL_HEADING,
+        f"- protocol_version: {CURRENT_PROTOCOL_VERSION}",
+        f"- initialized_with: {initialized_with}",
+        f"- last_migrated_with: {last_migrated_with}",
+    ]
+
+
+def manifest_with_protocol_metadata(manifest: str, last_migrated_with: str = CURRENT_PACKAGE_LABEL) -> tuple[str, bool]:
+    metadata = protocol_metadata(manifest)
+    initialized_with = metadata.get("initialized_with", "unknown")
+    replacement = _protocol_section_lines(initialized_with, last_migrated_with)
+    lines = manifest.splitlines()
+
+    for index, line in enumerate(lines):
+        if line.strip() == PROTOCOL_HEADING:
+            end = len(lines)
+            for next_index in range(index + 1, len(lines)):
+                if lines[next_index].startswith("## "):
+                    end = next_index
+                    break
+            updated = lines[:index] + replacement + lines[end:]
+            text = ensure_newline("\n".join(updated))
+            return text, text != ensure_newline(manifest)
+
+    insert_at = len(lines)
+    for index, line in enumerate(lines):
+        if line.startswith("## "):
+            insert_at = index
+            break
+    updated = lines[:insert_at] + [""] + replacement + [""] + lines[insert_at:]
+    text = ensure_newline("\n".join(updated).replace("\n\n\n", "\n\n"))
+    return text, text != ensure_newline(manifest)
+
+
+def manifest_with_current_protocol_metadata(manifest: str) -> tuple[str, bool]:
+    return manifest_with_protocol_metadata(manifest, CURRENT_PACKAGE_LABEL)
 
 
 def existing_memory_files(memory_dir: Path) -> list[Path]:
@@ -262,6 +340,14 @@ def is_safe_memory_name(name: str) -> bool:
 def optional_index_paths(manifest: str) -> set[str]:
     lines = _section_lines(manifest, "##", lambda heading: heading == "optional module index")
     return set(OPTIONAL_INDEX_PATH_RE.findall("\n".join(lines)))
+
+
+def manifest_with_optional_index(manifest: str) -> tuple[str, bool]:
+    updated, changed = _insert_optional_index(manifest)
+    for heading in OPTIONAL_INDEX_SECTIONS.values():
+        updated, subsection_changed = _ensure_optional_index_subsection(updated, heading)
+        changed = changed or subsection_changed
+    return updated, changed
 
 
 def is_indexable_optional_path(relative_path: str) -> bool:

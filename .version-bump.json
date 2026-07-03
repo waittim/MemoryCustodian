@@ -1,0 +1,28 @@
+{
+  "groups": {
+    "version": [
+      {
+        "path": "pyproject.toml",
+        "regex": "^version = \"([^\"]+)\""
+      },
+      {
+        "path": "cli/memory_custodian/__init__.py",
+        "regex": "^__version__ = \"([^\"]+)\""
+      },
+      {
+        "path": ".codex-plugin/plugin.json",
+        "json_path": "version"
+      },
+      {
+        "path": ".claude-plugin/plugin.json",
+        "json_path": "version"
+      }
+    ],
+    "protocol_version": [
+      {
+        "path": "cli/memory_custodian/__init__.py",
+        "regex": "^__protocol_version__ = \"([^\"]+)\""
+      }
+    ]
+  }
+}

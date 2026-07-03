@@ -2,6 +2,11 @@
 
 MemoryCustodian uses this file to decide which local project memory files should be loaded for a task.
 
+## MemoryCustodian Protocol
+- protocol_version: 0.4
+- initialized_with: memory-custodian 0.3.0
+- last_migrated_with: memory-custodian 0.4.0
+
 ## Always load
 - brief.md
 

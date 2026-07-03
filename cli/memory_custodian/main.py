@@ -11,6 +11,7 @@ from . import compact as compact_cmd
 from . import enable as enable_cmd
 from . import forget as forget_cmd
 from . import init as init_cmd
+from . import migrate as migrate_cmd
 from . import read as read_cmd
 from . import status as status_cmd
 from .protocol import TASK_FILE_MAP
@@ -83,6 +84,11 @@ def build_parser() -> argparse.ArgumentParser:
     check_parser = sub.add_parser("check", help="Check protocol consistency.")
     _add_common(check_parser)
     check_parser.set_defaults(func=check_cmd.run)
+
+    migrate_parser = sub.add_parser("migrate", help="Migrate memory files to the current protocol.")
+    _add_common(migrate_parser)
+    migrate_parser.add_argument("--apply", action="store_true", help="Write migration changes. Default is dry run.")
+    migrate_parser.set_defaults(func=migrate_cmd.run)
 
     return parser
 

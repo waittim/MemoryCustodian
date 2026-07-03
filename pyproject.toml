@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "memory-custodian"
-version = "0.3.0"
+version = "0.4.0"
 description = "Repo-native plain-text memory governance for coding agents"
 readme = "README.md"
 requires-python = ">=3.10"

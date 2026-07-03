@@ -1,0 +1,39 @@
+{
+  "name": "memory-custodian",
+  "version": "0.4.0",
+  "description": "Local-first plain-text project memory governance for coding agents.",
+  "author": {
+    "name": "MemoryCustodian contributors",
+    "url": "https://github.com/waittim/MemoryCustodian"
+  },
+  "homepage": "https://github.com/waittim/MemoryCustodian",
+  "repository": "https://github.com/waittim/MemoryCustodian",
+  "license": "MIT",
+  "keywords": [
+    "memory",
+    "skills",
+    "codex",
+    "project-context",
+    "local-first"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "MemoryCustodian",
+    "shortDescription": "Plain-text project memory for coding agents",
+    "longDescription": "Use MemoryCustodian to initialize, load, check, compact, and maintain local Markdown project memory under docs/ while keeping agent context small.",
+    "developerName": "MemoryCustodian contributors",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Read",
+      "Write"
+    ],
+    "websiteURL": "https://github.com/waittim/MemoryCustodian",
+    "defaultPrompt": [
+      "Initialize MemoryCustodian for this project.",
+      "Check this project's memory health.",
+      "Read the project memory for planning."
+    ],
+    "brandColor": "#2563EB",
+    "screenshots": []
+  }
+}

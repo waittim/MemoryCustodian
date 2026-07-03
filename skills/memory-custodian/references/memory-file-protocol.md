@@ -102,7 +102,7 @@ Recommended maximums:
 
 ### manifest.md
 
-Defines how agents should load memory, which files are default, and which files are conditional. It should also include a lightweight optional module index for enabled `rules/`, `profiles/`, and `areas/` files so agents can discover them without loading their contents.
+Defines how agents should load memory, which files are default, and which files are conditional. It should include MemoryCustodian Protocol metadata with `protocol_version`, `initialized_with`, and `last_migrated_with` fields. It should also include a lightweight optional module index for enabled `rules/`, `profiles/`, and `areas/` files so agents can discover them without loading their contents.
 
 ### brief.md
 
