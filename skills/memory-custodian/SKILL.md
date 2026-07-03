@@ -36,7 +36,7 @@ Use it to:
 - `do-not-use.md`: rejected options, failure paths, and tombstones.
 - `inbox.md`: unprocessed memory candidates.
 - `preferences.md`: optional user and project preferences.
-- `changelog.md`: optional memory maintenance history.
+- `changelog.md`: optional memory maintenance history, not product release notes or the project `CHANGELOG.md`.
 - `rules/`: optional task-specific rules.
 - `profiles/`: optional workflow-specific rules.
 - `areas/`: optional area-specific memory.
