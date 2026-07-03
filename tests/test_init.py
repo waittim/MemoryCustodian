@@ -53,7 +53,21 @@ class InitTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             self.assertEqual(main(["init", "--project-root", tmp]), 0)
             self.assertEqual(main(["enable", "rules/output", "--project-root", tmp]), 0)
-            self.assertTrue((Path(tmp) / "docs" / "memory" / "rules" / "output.md").exists())
+            memory = Path(tmp) / "docs" / "memory"
+            self.assertTrue((memory / "rules" / "output.md").exists())
+            self.assertIn("`rules/output.md`", (memory / "manifest.md").read_text(encoding="utf-8"))
+
+    def test_enable_indexes_optional_profiles_and_areas(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            self.assertEqual(main(["enable", "profile/git", "--project-root", tmp]), 0)
+            self.assertEqual(main(["enable", "area/frontend", "--project-root", tmp]), 0)
+            manifest = (Path(tmp) / "docs" / "memory" / "manifest.md").read_text(encoding="utf-8")
+            self.assertIn("## Optional module index", manifest)
+            self.assertIn("`profiles/git.md`", manifest)
+            self.assertIn("`areas/frontend.md`", manifest)
+            profiles_section = manifest.split("### Enabled profiles", 1)[1].split("### Enabled areas", 1)[0]
+            self.assertNotIn("None enabled", profiles_section)
 
 
 if __name__ == "__main__":

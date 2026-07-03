@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .protocol import budget_for, count_inbox_items, estimate_tokens, resolve_memory_dir, resolve_project_root
+from .protocol import budget_for, count_inbox_items, estimate_tokens, optional_index_paths, resolve_memory_dir, resolve_project_root
 from .templates import CORE_FILES
 
 
@@ -80,10 +80,19 @@ def run(args) -> int:
     if do_not_use.exists() and "Tombstone:" not in _read(do_not_use):
         warnings.append("do-not-use.md: no tombstones recorded")
 
-    for folder in ("rules", "profiles"):
+    indexed_optional_paths = optional_index_paths(manifest)
+    for folder in ("rules", "profiles", "areas"):
         directory = memory_dir / folder
-        if directory.exists() and folder + "/" not in manifest:
+        if not directory.exists():
+            continue
+        if folder + "/" not in manifest:
             issues.append(f"manifest.md: {folder}/ exists but manifest does not describe when to load it")
+        for path in sorted(directory.glob("*.md")):
+            if path.name == "README.md":
+                continue
+            relative = path.relative_to(memory_dir).as_posix()
+            if relative not in indexed_optional_paths:
+                issues.append(f"manifest.md: {relative} exists but is missing from optional module index")
 
     for entry_name in ("AGENTS.md", "CLAUDE.md"):
         warnings.extend(_check_agent_entry(project_root / entry_name))

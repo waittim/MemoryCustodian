@@ -7,3 +7,6 @@
 ## 2026-07-02
 - Updated repository memory to the v0.3 minimal-first protocol.
 - Recorded the decision to keep `SKILL.md` focused on operational agent instructions.
+
+## 2026-07-03
+- Added manifest optional module indexing for enabled rules, profiles, and areas.

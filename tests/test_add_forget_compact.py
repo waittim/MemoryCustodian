@@ -53,6 +53,19 @@ class AddForgetCompactTests(unittest.TestCase):
             rule = Path(tmp) / "docs" / "memory" / "rules" / "output.md"
             self.assertIn("Rule: Output", rule.read_text(encoding="utf-8"))
             self.assertIn("published text", rule.read_text(encoding="utf-8"))
+            manifest = Path(tmp) / "docs" / "memory" / "manifest.md"
+            self.assertIn("`rules/output.md`", manifest.read_text(encoding="utf-8"))
+
+    def test_add_area_indexes_optional_area_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            self.assertEqual(
+                main(["add", "CLI code lives under cli/memory_custodian.", "--type", "area", "--name", "backend", "--project-root", tmp]),
+                0,
+            )
+            memory = Path(tmp) / "docs" / "memory"
+            self.assertIn("Area: Backend", (memory / "areas" / "backend.md").read_text(encoding="utf-8"))
+            self.assertIn("`areas/backend.md`", (memory / "manifest.md").read_text(encoding="utf-8"))
 
     def test_hard_forget_does_not_rewrite_topic_to_changelog(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -83,6 +83,18 @@ class ReadStatusTests(unittest.TestCase):
             self.assertEqual(code, 0)
             self.assertIn("MemoryCustodian check: OK", out.getvalue())
 
+    def test_check_reports_unindexed_optional_memory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            area = Path(tmp) / "docs" / "memory" / "areas"
+            area.mkdir()
+            (area / "frontend.md").write_text("# Area: Frontend\n", encoding="utf-8")
+            out = StringIO()
+            with redirect_stdout(out):
+                code = main(["check", "--project-root", tmp])
+            self.assertEqual(code, 1)
+            self.assertIn("areas/frontend.md exists but is missing from optional module index", out.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()

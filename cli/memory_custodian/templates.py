@@ -74,21 +74,29 @@ Load:
 Load if present:
 - changelog.md
 
+## Optional module index
+Agents use this lightweight index to discover optional memory without loading its contents. Entries here are not default loads; load the referenced file only when the trigger applies.
+
+### Enabled rules
+- None enabled.
+
+### Enabled profiles
+- None enabled.
+
+### Enabled areas
+- None enabled.
+
+## Optional rules
+Task-specific rules are disabled until a `rules/<name>.md` file exists and is listed in the optional module index.
+Load rule files only when the current task clearly matches that rule or the user explicitly requests it.
+
 ## Optional profiles
+Workflow profiles are disabled until a `profiles/<name>.md` file exists and is listed in the optional module index.
 Load profile files only when the current task clearly matches that workflow or the user explicitly requests it.
-Examples:
-- profiles/git.md
-- profiles/docs.md
-- profiles/release.md
-- profiles/tickets.md
-- profiles/research.md
 
 ## Area-specific memory
+Area memory is disabled until an `areas/<name>.md` file exists and is listed in the optional module index.
 Load area files only when the current task clearly touches that area.
-Examples:
-- areas/frontend.md
-- areas/backend.md
-- areas/infra.md
 
 ## Explicit only
 Do not load these unless the user explicitly asks or the task is memory maintenance:

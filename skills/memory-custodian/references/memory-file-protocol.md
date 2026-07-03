@@ -102,7 +102,7 @@ Recommended maximums:
 
 ### manifest.md
 
-Defines how agents should load memory, which files are default, and which files are conditional.
+Defines how agents should load memory, which files are default, and which files are conditional. It should also include a lightweight optional module index for enabled `rules/`, `profiles/`, and `areas/` files so agents can discover them without loading their contents.
 
 ### brief.md
 
@@ -134,15 +134,15 @@ Optional memory maintenance log. Keep it factual and brief.
 
 ### rules/
 
-Optional task-specific rules. Load a rule file only when the current task clearly matches it.
+Optional task-specific rules. List enabled rule files in the manifest optional module index, then load a rule file only when the current task clearly matches it.
 
 ### profiles/
 
-Optional workflow-specific rules. Keep Git, release, ticket, docs, and research workflows out of the core protocol.
+Optional workflow-specific rules. Keep Git, release, ticket, docs, and research workflows out of the core protocol. List enabled profile files in the manifest optional module index, then load a profile only when its trigger matches.
 
 ### areas/
 
-Optional area-specific memory for monorepos or large projects. Load area files only when the task touches that area.
+Optional area-specific memory for monorepos or large projects. List enabled area files in the manifest optional module index, then load area files only when the task touches that area.
 
 ### archive/
 

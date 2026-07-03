@@ -85,6 +85,8 @@ memory-custodian enable profile/git
 memory-custodian enable area/frontend
 ```
 
+Enabling a `rules/`, `profiles/`, or `areas/` file also adds a short entry to `manifest.md` so agents can discover that optional memory without loading its contents.
+
 Read a small context pack:
 
 ```bash
@@ -139,6 +141,7 @@ Keep those entry files small. The complete project memory belongs in `docs/memor
 
 - Read `manifest.md` before substantial project work.
 - Load `brief.md` first and only load other files when relevant.
+- Use the manifest optional module index to discover enabled `rules/`, `profiles/`, and `areas/` without loading their contents.
 - Keep `archive/` and `inbox.md` out of default context.
 - Keep `preferences.md`, `changelog.md`, `rules/`, `profiles/`, `areas/`, and `archive/` optional.
 - Prefer proposed memory updates unless the user explicitly asks to remember or forget something.

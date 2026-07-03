@@ -57,3 +57,13 @@ Implications:
 
 Status:
 active
+
+## 2026-07-03 - Index optional modules in manifest
+Decision:
+List enabled `rules/`, `profiles/`, and `areas/` files in a lightweight manifest optional module index.
+
+Reason:
+Agents need to discover which optional memory files exist before they can decide whether to load them. The index exposes paths and trigger conditions without loading optional file contents into default context.
+
+Status:
+active

@@ -82,6 +82,41 @@ COMMON_MEMORY_FILES = (
 
 SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
+OPTIONAL_INDEX_HEADING = "## Optional module index"
+OPTIONAL_INDEX_SECTIONS = {
+    "rules": "### Enabled rules",
+    "profiles": "### Enabled profiles",
+    "areas": "### Enabled areas",
+}
+OPTIONAL_INDEX_TEMPLATE = """## Optional module index
+Agents use this lightweight index to discover optional memory without loading its contents. Entries here are not default loads; load the referenced file only when the trigger applies.
+
+### Enabled rules
+- None enabled.
+
+### Enabled profiles
+- None enabled.
+
+### Enabled areas
+- None enabled.
+"""
+OPTIONAL_INDEX_PATH_RE = re.compile(r"`((?:rules|profiles|areas)/[^`]+\.md)`")
+
+DEFAULT_OPTIONAL_TRIGGERS = {
+    "rules/output.md": "Load for user-facing artifacts, publishable text, or copied output.",
+    "rules/code-style.md": "Load when writing, reviewing, or refactoring code style.",
+    "rules/safety.md": "Load when safety-sensitive behavior, secrets, privacy, or permissions matter.",
+    "rules/review.md": "Load when performing code or document review.",
+    "profiles/git.md": "Load for branch, commit, merge, rebase, PR, or release-tag workflow tasks.",
+    "profiles/docs.md": "Load for documentation writing, editing, or publishing workflows.",
+    "profiles/release.md": "Load for release planning, changelogs, versioning, or packaging workflows.",
+    "profiles/tickets.md": "Load for issue, ticket, backlog, or project-tracking workflows.",
+    "profiles/research.md": "Load for research, source comparison, citations, or evidence-heavy tasks.",
+    "areas/frontend.md": "Load when touching UI, routes, client state, styling, browser behavior, or frontend tests.",
+    "areas/backend.md": "Load when touching APIs, persistence, services, CLI internals, or backend tests.",
+    "areas/infra.md": "Load when touching deployment, CI, environments, dependencies, or operational config.",
+}
+
 
 def today() -> str:
     return date.today().isoformat()
@@ -189,6 +224,88 @@ def trim_to_budget(text: str, budget: int | None) -> tuple[str, bool]:
 
 def is_safe_memory_name(name: str) -> bool:
     return bool(SAFE_NAME_RE.fullmatch(name))
+
+
+def optional_index_paths(manifest: str) -> set[str]:
+    lines = _section_lines(manifest, "##", lambda heading: heading == "optional module index")
+    return set(OPTIONAL_INDEX_PATH_RE.findall("\n".join(lines)))
+
+
+def is_indexable_optional_path(relative_path: str) -> bool:
+    parts = relative_path.split("/", 1)
+    if len(parts) != 2:
+        return False
+    folder, name = parts
+    return folder in OPTIONAL_INDEX_SECTIONS and name != "README.md" and name.endswith(".md")
+
+
+def default_optional_trigger(relative_path: str) -> str:
+    if relative_path in DEFAULT_OPTIONAL_TRIGGERS:
+        return DEFAULT_OPTIONAL_TRIGGERS[relative_path]
+    folder, _name = relative_path.split("/", 1)
+    if folder == "rules":
+        return "Load when this task-specific rule clearly matches the current task."
+    if folder == "profiles":
+        return "Load when this workflow clearly matches the current task or the user explicitly requests it."
+    return "Load when touched files or task scope clearly match this area or the user explicitly requests it."
+
+
+def _insert_optional_index(manifest: str) -> tuple[str, bool]:
+    if OPTIONAL_INDEX_HEADING in manifest:
+        return manifest, False
+    insertion = "\n" + OPTIONAL_INDEX_TEMPLATE.strip() + "\n"
+    for marker in ("## Optional profiles", "## Area-specific memory", "## Explicit only", "## Context budget"):
+        index = manifest.find(marker)
+        if index != -1:
+            prefix = manifest[:index].rstrip()
+            suffix = manifest[index:].lstrip()
+            return prefix + "\n\n" + insertion.strip() + "\n\n" + suffix, True
+    return manifest.rstrip() + "\n\n" + insertion.strip() + "\n", True
+
+
+def _ensure_optional_index_subsection(manifest: str, heading: str) -> tuple[str, bool]:
+    if heading in manifest:
+        return manifest, False
+    index = manifest.find(OPTIONAL_INDEX_HEADING)
+    if index == -1:
+        return manifest, False
+    next_major = manifest.find("\n## ", index + len(OPTIONAL_INDEX_HEADING))
+    insert_at = len(manifest) if next_major == -1 else next_major
+    prefix = manifest[:insert_at].rstrip()
+    suffix = manifest[insert_at:].lstrip()
+    inserted = f"{heading}\n- None enabled.\n"
+    return prefix + "\n\n" + inserted + ("\n" + suffix if suffix else ""), True
+
+
+def manifest_with_optional_module_index(manifest: str, relative_path: str) -> tuple[str, bool]:
+    if not is_indexable_optional_path(relative_path):
+        return manifest, False
+    manifest, changed = _insert_optional_index(manifest)
+    folder = relative_path.split("/", 1)[0]
+    heading = OPTIONAL_INDEX_SECTIONS[folder]
+    manifest, subsection_changed = _ensure_optional_index_subsection(manifest, heading)
+    changed = changed or subsection_changed
+
+    if relative_path in optional_index_paths(manifest):
+        return manifest, changed
+
+    lines = manifest.splitlines()
+    try:
+        heading_index = next(index for index, line in enumerate(lines) if line.strip() == heading)
+    except StopIteration:
+        return manifest, changed
+
+    end = len(lines)
+    for index in range(heading_index + 1, len(lines)):
+        stripped = lines[index].strip()
+        if stripped.startswith("### ") or stripped.startswith("## "):
+            end = index
+            break
+
+    entry = f"- `{relative_path}`: {default_optional_trigger(relative_path)}"
+    subsection = [line for line in lines[heading_index + 1 : end] if line.strip() != "- None enabled."]
+    lines = lines[: heading_index + 1] + [entry] + subsection + lines[end:]
+    return ensure_newline("\n".join(lines)), True
 
 
 def task_file_specs(task: str) -> list[tuple[str, bool]]:

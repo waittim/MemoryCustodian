@@ -4,7 +4,16 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .protocol import append_changelog, is_safe_memory_name, resolve_memory_dir, resolve_project_root, today, write_text
+from .protocol import (
+    append_changelog,
+    is_indexable_optional_path,
+    is_safe_memory_name,
+    manifest_with_optional_module_index,
+    resolve_memory_dir,
+    resolve_project_root,
+    today,
+    write_text,
+)
 from .templates import render_area_template, render_profile_template, render_rule_template, render_template
 
 
@@ -68,6 +77,15 @@ def run(args) -> int:
 
     relative_path, text = result
     state = _write_optional(memory_dir / relative_path, text, args.force)
+    manifest_state = None
+    manifest_path = memory_dir / "manifest.md"
+    if is_indexable_optional_path(relative_path) and manifest_path.exists():
+        updated_manifest, changed = manifest_with_optional_module_index(manifest_path.read_text(encoding="utf-8"), relative_path)
+        if changed:
+            write_text(manifest_path, updated_manifest)
+            manifest_state = f"indexed {relative_path}"
     append_changelog(memory_dir, f"Enabled optional memory module {relative_path}.")
     print(f"{relative_path}: {state}")
+    if manifest_state:
+        print(f"manifest.md: {manifest_state}")
     return 0

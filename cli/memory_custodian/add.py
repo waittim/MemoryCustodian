@@ -4,7 +4,17 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .protocol import append_changelog, append_text, is_safe_memory_name, resolve_memory_dir, resolve_project_root, today, write_text
+from .protocol import (
+    append_changelog,
+    append_text,
+    is_indexable_optional_path,
+    is_safe_memory_name,
+    manifest_with_optional_module_index,
+    resolve_memory_dir,
+    resolve_project_root,
+    today,
+    write_text,
+)
 from .templates import render_area_template, render_profile_template, render_rule_template, render_template
 
 TARGETS = {
@@ -83,6 +93,14 @@ def run(args) -> int:
     target_path = memory_dir / target
     _ensure_target(target_path, kind, args.name)
     append_text(target_path, _entry(kind, args.message, args.reason))
+    manifest_path = memory_dir / "manifest.md"
+    indexed = False
+    if is_indexable_optional_path(target) and manifest_path.exists():
+        updated_manifest, indexed = manifest_with_optional_module_index(manifest_path.read_text(encoding="utf-8"), target)
+        if indexed:
+            write_text(manifest_path, updated_manifest)
     append_changelog(memory_dir, f"Added {kind} memory to {target}.")
     print(f"Added {kind} memory to {target_path}")
+    if indexed:
+        print(f"Indexed optional memory in {manifest_path}")
     return 0

@@ -20,15 +20,16 @@ Use it to:
 2. Read `manifest.md` if present.
 3. Read `brief.md` before substantial work.
 4. Identify the task type.
-5. Load only files allowed by the manifest.
-6. Respect `do-not-use.md` and tombstones before proposing plans or implementations.
-7. Never load `archive/` unless the user explicitly asks or the task is archive maintenance.
-8. Do not load `inbox.md` unless compacting, auditing unsorted memory, or asked by the user.
-9. After meaningful decisions, repeated corrections, or rejected approaches, update the appropriate memory file or propose a concise update.
+5. Use the manifest optional module index to discover enabled `rules/`, `profiles/`, and `areas/` files.
+6. Load only files allowed by the manifest and matched by the current task.
+7. Respect `do-not-use.md` and tombstones before proposing plans or implementations.
+8. Never load `archive/` unless the user explicitly asks or the task is archive maintenance.
+9. Do not load `inbox.md` unless compacting, auditing unsorted memory, or asked by the user.
+10. After meaningful decisions, repeated corrections, or rejected approaches, update the appropriate memory file or propose a concise update.
 
 ## Memory Files
 
-- `manifest.md`: loading protocol, file roles, and context budgets.
+- `manifest.md`: loading protocol, optional module index, file roles, and context budgets.
 - `brief.md`: short current project summary; this is the default file.
 - `decisions.md`: confirmed project and architecture decisions.
 - `constraints.md`: hard requirements and limits.
