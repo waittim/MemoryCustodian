@@ -6,6 +6,22 @@ MemoryCustodian is a local-first, pure-text project memory protocol, skill, and 
 
 Memory can grow; context must stay small.
 
+## Why MemoryCustodian?
+
+Agent work often spans many threads, chats, and tools. Without a project-local memory layer, the useful context lives in the developer's head, scattered chat history, or third-party docs that agents may not load at the right time. That makes every new session start with repeated project explanation.
+
+MemoryCustodian keeps that context in the repository, in plain Markdown, with manifest-guided loading so agents can pick up the right background without pulling the whole project history into every task. It narrows the gap between the context advantage developers carry in their heads and the context agents can reliably access, making development and loop engineering smoother.
+
+That gives teams:
+
+- Less repeated context setup across threads and chats
+- A smaller context gap between developers and agents
+- Inspectable memory that humans can read, review, and edit
+- Small task context through manifest-driven, task-specific loading
+- Portable agent workflows across Codex, Claude Code, and generic agents
+- Reviewable memory changes that can be diffed, committed, rolled back, or migrated
+- Offline operation without RAG, embeddings, vector databases, cloud storage, or a background daemon
+
 ## What It Provides
 
 - A project memory file protocol under `docs/memory/`

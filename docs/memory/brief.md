@@ -2,6 +2,8 @@
 
 Purpose:
 MemoryCustodian is a local-first, pure-text project memory skill and CLI for coding agents.
+It reduces repeated project explanation across threads and chats by keeping durable context in repository-local Markdown files.
+It narrows the gap between developers' context advantage and agents' accessible context so development loops and loop engineering stay smoother.
 
 Current direction:
 - Build a reusable skill under `skills/memory-custodian/`.
