@@ -1,9 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="title desc">
   <title id="title">MemoryCustodian</title>
-  <desc id="desc">A blue document stack with a check mark.</desc>
-  <rect width="128" height="128" rx="24" fill="#2563EB"/>
-  <path d="M36 28h44l16 16v56H36z" fill="#EFF6FF"/>
-  <path d="M80 28v16h16z" fill="#BFDBFE"/>
-  <path d="M48 58h32M48 72h24" stroke="#2563EB" stroke-width="8" stroke-linecap="round"/>
-  <path d="M47 94l10 10 24-30" fill="none" stroke="#16A34A" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+  <desc id="desc">Layered square project memory cards on a dark background with a short blue bookmark marker.</desc>
+  <rect width="128" height="128" rx="24" fill="#020617"/>
+  <rect x="22" y="42" width="64" height="64" rx="10" fill="#F8FAFC" opacity=".32"/>
+  <rect x="32" y="34" width="64" height="64" rx="10" fill="#F8FAFC" opacity=".58"/>
+  <rect x="42" y="26" width="64" height="64" rx="10" fill="#F8FAFC"/>
+  <path d="M82 26h16v42l-8-6-8 6z" fill="#2563EB"/>
 </svg>

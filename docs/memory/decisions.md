@@ -49,3 +49,10 @@ Codex plugin support should include a repo-local marketplace entry, plugin metad
 
 Reason:
 Plugin installation should make the reusable workflow and CLI helper available without copying project memory into the plugin or requiring a global console script.
+
+## 2026-07-04 - Use project-memory card branding
+Decision:
+Use a stacked index-card logo with smaller same-size rounded square cards, opacity-based depth, a near-black background, no internal line marks, and a short blue bookmark marker whose top edge is flush with the front card. Avoid generic document checkmarks or key motifs.
+
+Reason:
+The icon should convey local project memory, manifest-driven retrieval, and custodianship without implying CI validation or task completion.
