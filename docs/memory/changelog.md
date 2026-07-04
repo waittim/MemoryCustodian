@@ -3,6 +3,7 @@
 Entries are newest first.
 
 ## 2026-07-04
+- Added Claude Code plugin-root installation docs, installer support, bin wrapper, and packaging tests.
 - Bumped package and plugin version metadata to 0.4.1 for the skill eval release.
 - Added deterministic MemoryCustodian skill eval scenarios and a checker for core behavior-contract drift.
 - Added Codex plugin support files: repo-local marketplace, plugin asset, CLI wrapper, and plugin packaging tests.

@@ -1,5 +1,13 @@
 # Release Notes
 
+## Unreleased
+
+### Claude Code
+
+- Added Claude Code plugin-root installation docs and `./install.sh claude`.
+- Added `bin/memory-custodian` so Claude Code plugin sessions can expose the CLI wrapper on plugin PATH.
+- Added tests for Claude plugin metadata, installer symlink behavior, and the plugin bin wrapper.
+
 ## v0.4.1 - 2026-07-04
 
 ### Skill Evals

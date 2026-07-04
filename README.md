@@ -34,11 +34,14 @@ MemoryCustodian does not provide:
 ```text
 MemoryCustodian/
   .codex-plugin/plugin.json      # Codex plugin manifest
+  .claude-plugin/plugin.json     # Claude plugin metadata
   .agents/plugins/marketplace.json # Repo-local plugin marketplace for testing
   skills/memory-custodian/        # Reusable agent skill
   adapters/                       # Codex, Claude Code, and generic entry snippets
   cli/memory_custodian/           # Python CLI implementation
+  bin/memory-custodian            # Claude plugin PATH wrapper
   scripts/memory-custodian        # Plugin-safe CLI wrapper
+  evals/memory-custodian/         # Skill behavior eval scenarios and contract checks
   templates/minimal/              # Core protocol templates
   templates/extended/             # Optional memory module templates
   docs/memory/                    # Dogfood memory for this repository
@@ -136,11 +139,15 @@ memory-custodian migrate --apply
 
 ## Installing The Plugin
 
-MemoryCustodian is packaged as a Codex plugin. The plugin bundle exposes:
+MemoryCustodian is packaged for Codex and Claude Code with different installation surfaces. Codex uses the repo-local plugin marketplace below. Claude Code can load this checkout as a plugin root because it contains `.claude-plugin/plugin.json`, `skills/`, and `bin/`. Projects still use a short `CLAUDE.md` bootstrap to point agents at their local memory folder.
+
+The plugin bundle exposes:
 
 - the `memory-custodian` skill under `skills/`
 - a plugin-safe CLI wrapper at `scripts/memory-custodian`
+- a Claude plugin PATH wrapper at `bin/memory-custodian`
 - Codex metadata in `.codex-plugin/plugin.json`
+- Claude metadata in `.claude-plugin/plugin.json`
 - a repo-local marketplace entry in `.agents/plugins/marketplace.json`
 
 ### Codex Repo Marketplace
@@ -154,6 +161,36 @@ codex plugin marketplace add .
 Then open `/plugins`, switch to `MemoryCustodian Dev`, and install `memory-custodian`.
 
 The repo marketplace points at this checkout as the plugin source, so local edits are easy to verify in a new Codex thread after reinstalling or refreshing the plugin.
+
+### Claude Code Plugin
+
+For local plugin testing from this checkout, start Claude Code with the plugin directory:
+
+```bash
+claude --plugin-dir .
+```
+
+The skill is namespaced by the plugin name, so direct invocation is:
+
+```text
+/memory-custodian:memory-custodian
+```
+
+To make the plugin available in future Claude Code sessions without passing `--plugin-dir`, install this checkout into Claude Code's personal skills directory:
+
+```bash
+./install.sh claude
+```
+
+This symlinks the repository root into `${CLAUDE_HOME:-$HOME/.claude}/skills/memory-custodian`, where Claude Code can load it as a plugin-in-skills-directory on the next session. When the plugin is enabled, `bin/memory-custodian` exposes the bundled CLI wrapper to Claude Code's Bash tool.
+
+Then add the project bootstrap from `adapters/claude-code/CLAUDE.snippet.md` to each target project's `CLAUDE.md`, or initialize a project with:
+
+```bash
+memory-custodian init --project-root /path/to/project --with-claude
+```
+
+The Codex marketplace commands above are still Codex-specific.
 
 ### Source Checkout
 
@@ -171,7 +208,7 @@ python3 -m pip install -e .
 memory-custodian status
 ```
 
-### Skill Symlink Fallback
+### Codex Skill Symlink Fallback
 
 For older local Codex setups that only scan skill folders, use the installer:
 

@@ -2,6 +2,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import tempfile
 import unittest
 
 
@@ -44,6 +45,20 @@ class PluginPackageTests(unittest.TestCase):
         self.assertEqual(entry["source"], {"source": "url", "url": "./"})
         self.assertTrue((ROOT / ".codex-plugin" / "plugin.json").exists())
 
+    def test_claude_plugin_metadata_points_to_existing_components(self):
+        manifest_path = ROOT / ".claude-plugin" / "plugin.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(manifest["name"], "memory-custodian")
+        self.assertRegex(manifest["version"], r"^\d+\.\d+\.\d+$")
+        self.assertEqual(manifest["repository"], "https://github.com/waittim/MemoryCustodian")
+        self.assertIn("skills", manifest["keywords"])
+        self.assertTrue((ROOT / ".claude-plugin" / "plugin.json").exists())
+        self.assertTrue((ROOT / "skills" / "memory-custodian" / "SKILL.md").exists())
+        self.assertTrue(os.access(ROOT / "bin" / "memory-custodian", os.X_OK))
+        self.assertTrue((ROOT / "adapters" / "claude-code" / "CLAUDE.snippet.md").exists())
+        self.assertTrue((ROOT / "adapters" / "claude-code" / "install.md").exists())
+
     def test_plugin_cli_wrapper_runs_packaged_cli(self):
         wrapper = ROOT / "scripts" / "memory-custodian"
         self.assertTrue(os.access(wrapper, os.X_OK), "scripts/memory-custodian should be executable")
@@ -60,6 +75,43 @@ class PluginPackageTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("memory-custodian 0.4.1", result.stdout)
+
+    def test_claude_plugin_bin_wrapper_runs_packaged_cli(self):
+        wrapper = ROOT / "bin" / "memory-custodian"
+        self.assertTrue(os.access(wrapper, os.X_OK), "bin/memory-custodian should be executable")
+
+        result = subprocess.run(
+            [str(wrapper), "--version"],
+            cwd=ROOT,
+            env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("memory-custodian 0.4.1", result.stdout)
+
+    def test_installer_can_install_claude_plugin_to_custom_home(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = subprocess.run(
+                [str(ROOT / "install.sh"), "claude"],
+                cwd=ROOT,
+                env={**os.environ, "CLAUDE_HOME": str(Path(tmp) / ".claude")},
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            target = Path(tmp) / ".claude" / "skills" / "memory-custodian"
+            self.assertTrue(target.is_symlink(), target)
+            self.assertEqual(target.resolve(), ROOT)
+            self.assertTrue((target / ".claude-plugin" / "plugin.json").exists())
+            self.assertTrue((target / "skills" / "memory-custodian" / "SKILL.md").exists())
+            self.assertIn("Installed Claude Code plugin", result.stdout)
 
 
 if __name__ == "__main__":

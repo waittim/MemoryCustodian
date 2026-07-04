@@ -63,3 +63,10 @@ Before adding live agent eval infrastructure, maintain offline skill eval scenar
 
 Reason:
 The project needs skill-behavior discipline without adding network services, non-stdlib dependencies, or heavyweight harnesses to the MVP.
+
+## 2026-07-04 - Treat Claude as a plugin-root distribution target
+Decision:
+Support Claude Code through the repository plugin-root layout: `.claude-plugin/`, `skills/`, `bin/`, local `--plugin-dir` testing, and `./install.sh claude` symlink installation.
+
+Reason:
+Claude support should be backed by a verifiable install surface, not just metadata or a README claim.
