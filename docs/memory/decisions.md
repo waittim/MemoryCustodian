@@ -2,6 +2,18 @@
 
 Entries are newest first.
 
+## 2026-07-04 - Add lightweight plugin bootstrap and deterministic packaging
+Decision:
+Add a lightweight session-start bootstrap plus deterministic Codex archive packaging as package/plugin features, while keeping the MemoryCustodian memory protocol at 0.4.
+
+Reason:
+Agents need a reliable manifest-first startup nudge and releaseable plugin artifacts, but startup context must remain small and project memory must stay local.
+
+Implications:
+- The bootstrap must not inject full skill text or project memory contents.
+- Codex package artifacts should be rootless and deterministic.
+- Package/plugin version can advance without changing the memory protocol version.
+
 ## 2026-07-04 - Treat Claude as a plugin-root distribution target
 Decision:
 Support Claude Code through the repository plugin-root layout: `.claude-plugin/`, `skills/`, `bin/`, local `--plugin-dir` testing, and `./install.sh claude` symlink installation.

@@ -4,6 +4,7 @@
   "skill": "skills/memory-custodian/SKILL.md",
   "scenarios_dir": "evals/memory-custodian/scenarios",
   "required_scenarios": [
+    "session-bootstrap",
     "startup-loading",
     "memory-update",
     "forgetting",
@@ -21,6 +22,8 @@
     {
       "id": "manifest-first-loading",
       "terms": [
+        "## Hard Gate",
+        "do not start substantial planning, implementation, debugging, or review until startup loading is complete",
         "Read `manifest.md` if present.",
         "Read `brief.md` before substantial work.",
         "Load only files allowed by the manifest"

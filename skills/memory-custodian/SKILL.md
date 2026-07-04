@@ -14,6 +14,18 @@ Use it to:
 - forget or tombstone memory the user no longer wants used
 - keep platform entry files such as `AGENTS.md` and `CLAUDE.md` short
 
+## Hard Gate
+
+In a project that contains MemoryCustodian memory, do not start substantial planning, implementation, debugging, or review until startup loading is complete:
+
+1. Read `manifest.md` if present.
+2. Read `brief.md` before substantial work.
+3. Identify the task type.
+4. Load only files allowed by the manifest and matched by the current task.
+5. Respect `do-not-use.md` and tombstones before proposing plans or implementations.
+
+If no manifest exists, continue normally and offer initialization only when useful.
+
 ## Core Workflow
 
 1. Locate memory at `docs/memory/manifest.md`, or another project-declared memory directory under `docs/`.

@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+## v0.5.0 - 2026-07-04
+
+### Startup Bootstrap
+
+- Added a lightweight session-start bootstrap hook for plugin hosts that nudges agents toward manifest-first loading without injecting full skill or project memory content.
+- Added cross-platform hook dispatch through `hooks/run-hook.cmd`.
+- Added a session-bootstrap eval scenario and hardened the skill's startup loading gate.
+
+### Packaging
+
+- Added deterministic Codex plugin archive packaging with `scripts/package-codex-plugin.py`.
+- Added Claude local marketplace metadata under `.claude-plugin/marketplace.json`.
+- Added package tests for hook output, Claude marketplace metadata, and rootless Codex archives.
+
 ### Memory Ordering
 
 - Keep dated memory entries newest-first where budget trimming should preserve recent context: decisions, tombstones, and inbox candidates.

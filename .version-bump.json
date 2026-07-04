@@ -16,6 +16,10 @@
       {
         "path": ".claude-plugin/plugin.json",
         "json_path": "version"
+      },
+      {
+        "path": ".claude-plugin/marketplace.json",
+        "json_path": "plugins.0.version"
       }
     ],
     "protocol_version": [

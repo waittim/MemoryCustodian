@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# SessionStart hook for the MemoryCustodian plugin.
+
+set -euo pipefail
+
+bootstrap_context='<MEMORY_CUSTODIAN>
+MemoryCustodian is installed. If the current project contains docs/memory/manifest.md, or another declared memory directory under docs/, follow this before substantial work:
+
+1. Read the memory manifest.
+2. Read the memory brief.
+3. Load only the extra files the manifest says are relevant to the current task.
+4. Do not load archive/ or inbox.md unless the user asks for them or the task is memory maintenance.
+5. After meaningful decisions, repeated corrections, or rejected approaches, update the appropriate memory file or propose a concise update.
+
+For memory maintenance, forgetting, compaction, status, or deterministic reads, invoke the memory-custodian skill or use the bundled memory-custodian CLI when available.
+</MEMORY_CUSTODIAN>'
+
+escape_for_json() {
+    local s="$1"
+    s="${s//\\/\\\\}"
+    s="${s//\"/\\\"}"
+    s="${s//$'\n'/\\n}"
+    s="${s//$'\r'/\\r}"
+    s="${s//$'\t'/\\t}"
+    printf '%s' "$s"
+}
+
+escaped_context="$(escape_for_json "$bootstrap_context")"
+
+if [ -n "${CURSOR_PLUGIN_ROOT:-}" ]; then
+    printf '{\n  "additional_context": "%s"\n}\n' "$escaped_context"
+elif [ -n "${CLAUDE_PLUGIN_ROOT:-}" ] && [ -z "${COPILOT_CLI:-}" ]; then
+    printf '{\n  "hookSpecificOutput": {\n    "hookEventName": "SessionStart",\n    "additionalContext": "%s"\n  }\n}\n' "$escaped_context"
+else
+    printf '{\n  "additionalContext": "%s"\n}\n' "$escaped_context"
+fi
+
+exit 0

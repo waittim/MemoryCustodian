@@ -35,12 +35,15 @@ MemoryCustodian does not provide:
 MemoryCustodian/
   .codex-plugin/plugin.json      # Codex plugin manifest
   .claude-plugin/plugin.json     # Claude plugin metadata
+  .claude-plugin/marketplace.json # Claude local development marketplace metadata
   .agents/plugins/marketplace.json # Repo-local plugin marketplace for testing
+  hooks/                         # Lightweight session-start bootstrap for plugin hosts
   skills/memory-custodian/        # Reusable agent skill
   adapters/                       # Codex, Claude Code, and generic entry snippets
   cli/memory_custodian/           # Python CLI implementation
   bin/memory-custodian            # Claude plugin PATH wrapper
   scripts/memory-custodian        # Plugin-safe CLI wrapper
+  scripts/package-codex-plugin.py # Deterministic Codex plugin archive builder
   evals/memory-custodian/         # Skill behavior eval scenarios and contract checks
   templates/minimal/              # Core protocol templates
   templates/extended/             # Optional memory module templates
@@ -146,8 +149,10 @@ The plugin bundle exposes:
 - the `memory-custodian` skill under `skills/`
 - a plugin-safe CLI wrapper at `scripts/memory-custodian`
 - a Claude plugin PATH wrapper at `bin/memory-custodian`
+- a lightweight session-start bootstrap under `hooks/`
 - Codex metadata in `.codex-plugin/plugin.json`
 - Claude metadata in `.claude-plugin/plugin.json`
+- Claude local marketplace metadata in `.claude-plugin/marketplace.json`
 - a repo-local marketplace entry in `.agents/plugins/marketplace.json`
 
 ### Codex Repo Marketplace
@@ -183,6 +188,8 @@ To make the plugin available in future Claude Code sessions without passing `--p
 ```
 
 This symlinks the repository root into `${CLAUDE_HOME:-$HOME/.claude}/skills/memory-custodian`, where Claude Code can load it as a plugin-in-skills-directory on the next session. When the plugin is enabled, `bin/memory-custodian` exposes the bundled CLI wrapper to Claude Code's Bash tool.
+
+The plugin also includes a small session-start hook that reminds agents to perform manifest-first MemoryCustodian loading when a project memory folder exists; it does not inject full skill or project memory contents.
 
 Then add the project bootstrap from `adapters/claude-code/CLAUDE.snippet.md` to each target project's `CLAUDE.md`, or initialize a project with:
 
@@ -257,6 +264,12 @@ Check that the skill's core behavior contract and eval scenario pack have not dr
 
 ```bash
 python3 scripts/check-skill-evals.py
+```
+
+Build a deterministic Codex plugin archive:
+
+```bash
+python3 scripts/package-codex-plugin.py --allow-dirty --output /tmp/memory-custodian.zip
 ```
 
 ## Design Principles

@@ -3,6 +3,7 @@
 Entries are newest first.
 
 ## 2026-07-04
+- Added lightweight session-start bootstrap memory guidance, deterministic Codex archive packaging, Claude local marketplace metadata, and package/plugin version 0.5.0.
 - Changed dated memory entries to newest-first where appropriate: decisions, tombstones, and inbox candidates.
 - Added Claude Code plugin-root installation docs, installer support, bin wrapper, and packaging tests.
 - Bumped package and plugin version metadata to 0.4.1 for the skill eval release.
