@@ -3,6 +3,8 @@
 Entries are newest first.
 
 ## 2026-07-04
+- Bumped package and plugin version metadata to 0.4.1 for the skill eval release.
+- Added deterministic MemoryCustodian skill eval scenarios and a checker for core behavior-contract drift.
 - Added Codex plugin support files: repo-local marketplace, plugin asset, CLI wrapper, and plugin packaging tests.
 - Compressed dogfood memory files and minimal templates to keep high-frequency context short.
 - Added the memory-update reminder to generated agent bootstrap snippets.

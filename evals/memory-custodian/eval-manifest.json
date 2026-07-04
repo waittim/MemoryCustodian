@@ -1,0 +1,52 @@
+{
+  "name": "memory-custodian-skill-evals",
+  "version": 1,
+  "skill": "skills/memory-custodian/SKILL.md",
+  "scenarios_dir": "evals/memory-custodian/scenarios",
+  "required_scenarios": [
+    "startup-loading",
+    "memory-update",
+    "forgetting",
+    "optional-modules"
+  ],
+  "required_sections": [
+    "## Purpose",
+    "## Setup",
+    "## Prompt",
+    "## Required Observations",
+    "## Forbidden Outcomes",
+    "## Passing Criteria"
+  ],
+  "skill_contract": [
+    {
+      "id": "manifest-first-loading",
+      "terms": [
+        "Read `manifest.md` if present.",
+        "Read `brief.md` before substantial work.",
+        "Load only files allowed by the manifest"
+      ]
+    },
+    {
+      "id": "archive-and-inbox-guard",
+      "terms": [
+        "Never load `archive/` unless the user explicitly asks",
+        "Do not load `inbox.md` unless compacting"
+      ]
+    },
+    {
+      "id": "thin-platform-entries",
+      "terms": [
+        "keep platform entry files such as `AGENTS.md` and `CLAUDE.md` short",
+        "Write durable memory only when it is project-level"
+      ]
+    },
+    {
+      "id": "forgetting-contract",
+      "terms": [
+        "Remove or rewrite the matching entry.",
+        "Add a tombstone to `do-not-use.md`",
+        "avoid preserving the removed content in summaries"
+      ]
+    }
+  ]
+}

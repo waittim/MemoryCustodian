@@ -56,3 +56,10 @@ Use a stacked index-card logo with smaller same-size rounded square cards, opaci
 
 Reason:
 The icon should convey local project memory, manifest-driven retrieval, and custodianship without implying CI validation or task completion.
+
+## 2026-07-04 - Add deterministic skill evals first
+Decision:
+Before adding live agent eval infrastructure, maintain offline skill eval scenarios and a checker that guard the MemoryCustodian skill's core behavior contract.
+
+Reason:
+The project needs skill-behavior discipline without adding network services, non-stdlib dependencies, or heavyweight harnesses to the MVP.

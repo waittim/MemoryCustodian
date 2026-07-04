@@ -1,5 +1,17 @@
 # Release Notes
 
+## v0.4.1 - 2026-07-04
+
+### Skill Evals
+
+- Added deterministic MemoryCustodian skill eval scenarios for startup loading, memory updates, forgetting, and optional modules.
+- Added `scripts/check-skill-evals.py` to guard the skill's core behavior contract and scenario structure.
+- Added test coverage for the skill eval checker.
+
+### Documentation
+
+- Documented development checks for unit tests and skill eval drift checks.
+
 ## v0.4.0 - 2026-07-03
 
 ### Versioning

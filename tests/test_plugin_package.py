@@ -59,7 +59,7 @@ class PluginPackageTests(unittest.TestCase):
         )
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("memory-custodian 0.4.0", result.stdout)
+        self.assertIn("memory-custodian 0.4.1", result.stdout)
 
 
 if __name__ == "__main__":

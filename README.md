@@ -12,6 +12,7 @@ Memory can grow; context must stay small.
 - A reusable Codex-compatible skill at `skills/memory-custodian/SKILL.md`
 - Platform entry snippets for Codex, Claude Code, and generic agents
 - A small Python CLI for deterministic memory operations
+- Skill behavior eval scenarios under `evals/memory-custodian/`
 - Minimal and extended templates for project memory files that can be reviewed, diffed, committed, and rolled back
 
 ## Non-Goals
@@ -206,6 +207,20 @@ MemoryCustodian tracks three related versions:
 `memory-custodian check` reports old or missing protocol metadata. `memory-custodian migrate --apply` updates the project manifest without requiring network access.
 
 Memory operations are local-first and offline by default. Skill, plugin, and CLI installation or update flows may use online distribution channels such as GitHub, package managers, or agent plugin marketplaces.
+
+## Development Checks
+
+Run the unit tests:
+
+```bash
+PYTHONPATH=cli python3 -m unittest discover -s tests
+```
+
+Check that the skill's core behavior contract and eval scenario pack have not drifted:
+
+```bash
+python3 scripts/check-skill-evals.py
+```
 
 ## Design Principles
 

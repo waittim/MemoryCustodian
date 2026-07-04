@@ -31,7 +31,7 @@ class InitTests(unittest.TestCase):
             manifest = (memory / "manifest.md").read_text(encoding="utf-8")
             self.assertIn("## MemoryCustodian Protocol", manifest)
             self.assertIn("- protocol_version: 0.4", manifest)
-            self.assertIn("- initialized_with: memory-custodian 0.4.0", manifest)
+            self.assertIn("- initialized_with: memory-custodian 0.4.1", manifest)
 
             brief = memory / "brief.md"
             brief.write_text("# Custom Brief\n", encoding="utf-8")
