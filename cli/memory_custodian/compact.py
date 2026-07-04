@@ -36,10 +36,8 @@ def _format_for(target: str, item: str) -> str:
     if target == "do-not-use.md":
         return (
             f"## Tombstone: {item[:72]}\n"
-            "Status:\nDo not reintroduce unless the user explicitly reverses this.\n"
-            "Reason:\nCompacted from memory inbox.\n"
-            "Mode:\ncompact\n"
-            f"Date:\n{today()}"
+            f"Do not reintroduce unless the user explicitly reverses this. "
+            f"Reason: compacted from memory inbox. Date: {today()}."
         )
     return f"- {item}"
 

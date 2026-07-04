@@ -11,4 +11,4 @@ Always:
 - Do not load `inbox.md` unless compacting or asked.
 - Respect tombstones in `do-not-use.md`.
 - Load `rules/`, `profiles/`, and `areas/` only when the current task matches them.
-- Update memory files only when the user agrees or the task clearly requires it.
+- After meaningful decisions, repeated corrections, or rejected approaches, update the appropriate memory file or propose an update.

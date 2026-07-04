@@ -21,7 +21,9 @@ class AddForgetCompactTests(unittest.TestCase):
 
             self.assertEqual(main(["forget", "SQLite", "--project-root", tmp, "--mode", "soft"]), 0)
             self.assertNotIn("SQLite", (memory / "decisions.md").read_text(encoding="utf-8"))
-            self.assertIn("Tombstone: SQLite", (memory / "do-not-use.md").read_text(encoding="utf-8"))
+            tombstones = (memory / "do-not-use.md").read_text(encoding="utf-8")
+            self.assertIn("Tombstone: SQLite", tombstones)
+            self.assertNotIn("Status:", tombstones)
 
     def test_compact_dry_run_and_apply(self):
         with tempfile.TemporaryDirectory() as tmp:

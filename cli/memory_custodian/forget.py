@@ -42,10 +42,8 @@ def _target_files(memory_dir: Path, mode: str) -> list[Path]:
 def _tombstone(topic: str, mode: str) -> str:
     return (
         f"## Tombstone: {topic}\n"
-        "Status:\nDo not reintroduce unless the user explicitly reverses this.\n"
-        "Reason:\nThe user asked MemoryCustodian to forget this topic.\n"
-        f"Mode:\n{mode}\n"
-        f"Date:\n{today()}"
+        f"Do not reintroduce unless the user explicitly reverses this. "
+        f"Reason: the user asked MemoryCustodian to forget this topic. Mode: {mode}. Date: {today()}."
     )
 
 

@@ -32,14 +32,7 @@ Use only on explicit request.
 
 ```markdown
 ## Tombstone: <topic>
-Status:
-Do not reintroduce unless the user explicitly reverses this.
-Reason:
-The user asked MemoryCustodian to forget this topic.
-Mode:
-soft | hard | purge
-Date:
-YYYY-MM-DD
+Do not reintroduce unless the user explicitly reverses this. Reason: the user asked MemoryCustodian to forget this topic. Mode: soft | hard | purge. Date: YYYY-MM-DD.
 ```
 
 ## Anti-Resurrection Rule

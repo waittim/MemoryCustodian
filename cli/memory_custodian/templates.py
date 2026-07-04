@@ -26,7 +26,7 @@ OPTIONAL_FILES = (
 MEMORY_FILES = {
     "manifest.md": """# Memory Manifest
 
-MemoryCustodian uses this file to decide which local project memory files should be loaded for a task.
+Loading map for local project memory. Load only the files listed for the current task plus explicitly requested optional modules.
 
 ## MemoryCustodian Protocol
 - protocol_version: {protocol_version}
@@ -39,42 +39,36 @@ MemoryCustodian uses this file to decide which local project memory files should
 ## Load by task
 
 ### Planning / architecture / refactoring
-Use when the agent is making structural decisions, comparing approaches, writing a plan, or changing project direction.
 Load:
 - decisions.md
 - constraints.md
 - do-not-use.md
 
-### Implementation / execution
-Use when the agent is writing code, editing files, implementing a plan, debugging, or performing concrete project work.
+### Implementation / execution / debugging
 Load:
 - constraints.md
 - do-not-use.md
 Load if present:
 - preferences.md
 
-### User-facing artifact generation
-Use when the agent produces text that may be copied, published, submitted, committed, sent, or shown to others.
+### User-facing artifact / output
+Load:
+- do-not-use.md
 Load if present:
 - rules/output.md
 - preferences.md
-Also load:
-- do-not-use.md
 
-### User or project preferences
-Use when the task depends on style, workflow, conventions, or recurring user preferences.
+### Preferences
 Load if present:
 - preferences.md
 
-### Change history / project recap
-Use when the user asks what changed, what was decided, or how the project evolved.
+### Change history / recap
 Load:
 - decisions.md
 Load if present:
 - changelog.md
 
 ### Memory maintenance
-Use when adding, compacting, editing, deleting, or auditing memory.
 Load:
 - inbox.md
 - do-not-use.md
@@ -82,7 +76,7 @@ Load if present:
 - changelog.md
 
 ## Optional module index
-Agents use this lightweight index to discover optional memory without loading its contents. Entries here are not default loads; load the referenced file only when the trigger applies.
+Discover optional memory without loading it. Entries here are not default loads.
 
 ### Enabled rules
 - None enabled.
@@ -94,19 +88,15 @@ Agents use this lightweight index to discover optional memory without loading it
 - None enabled.
 
 ## Optional rules
-Task-specific rules are disabled until a `rules/<name>.md` file exists and is listed in the optional module index.
-Load rule files only when the current task clearly matches that rule or the user explicitly requests it.
+`rules/` files load only when listed above and the task clearly matches.
 
 ## Optional profiles
-Workflow profiles are disabled until a `profiles/<name>.md` file exists and is listed in the optional module index.
-Load profile files only when the current task clearly matches that workflow or the user explicitly requests it.
+`profiles/` files load only when listed above and the workflow clearly matches.
 
 ## Area-specific memory
-Area memory is disabled until an `areas/<name>.md` file exists and is listed in the optional module index.
-Load area files only when the current task clearly touches that area.
+`areas/` files load only when listed above and the touched files or task scope match.
 
 ## Explicit only
-Do not load these unless the user explicitly asks or the task is memory maintenance:
 - archive/
 
 ## Context budget
@@ -140,18 +130,14 @@ Default behavior:
 
 ## {date} - Use MemoryCustodian
 Decision:
-Use MemoryCustodian for repo-native project memory.
+Use local Markdown files under `{memory_dir}` for durable project memory. Keep platform entry files short bootstraps.
 
 Reason:
-Project memory should be local, plain-text, inspectable, and reusable across agents.
+Memory should be inspectable, diffable, portable, and reusable across agents.
 
 Implications:
-- Keep platform entry files short.
-- Store durable context in `{memory_dir}`.
+- Load context through `manifest.md`.
 - Avoid RAG or vector DB in MVP.
-
-Status:
-active
 """,
     "constraints.md": """# Constraints
 
@@ -163,23 +149,11 @@ active
     "do-not-use.md": """# Do Not Use / Tombstones
 
 ## Tombstone: Full memory in platform entry files
-Status:
-Do not use.
-Reason:
-AGENTS.md and CLAUDE.md should act as thin bootloaders, not full memory stores.
-Applies to:
-- Platform entry files
-- Agent bootstrapping
+Do not copy full memory into AGENTS.md, CLAUDE.md, or similar files. They should stay thin bootstraps that point to `{memory_dir}`.
 """,
     "inbox.md": """# Memory Inbox
 
-Unprocessed memory candidates go here.
-
-During compaction:
-- Promote stable decisions to `decisions.md`.
-- Promote hard limits to `constraints.md`.
-- Promote rejected approaches to `do-not-use.md`.
-- Update `brief.md` with the shortest useful summary.
+No unprocessed memory candidates.
 """,
     "preferences.md": """# Preferences
 

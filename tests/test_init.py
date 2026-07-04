@@ -61,6 +61,7 @@ class InitTests(unittest.TestCase):
             agents = Path(tmp) / "AGENTS.md"
             self.assertIn("## MemoryCustodian", agents.read_text(encoding="utf-8"))
             self.assertIn("manifest.md", agents.read_text(encoding="utf-8"))
+            self.assertIn("After meaningful decisions", agents.read_text(encoding="utf-8"))
 
     def test_init_extended_creates_optional_files(self):
         with tempfile.TemporaryDirectory() as tmp:

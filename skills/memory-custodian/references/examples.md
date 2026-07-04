@@ -50,12 +50,5 @@ This keeps memory local, inspectable, portable, and easy to version with git.
 
 ```markdown
 ## Tombstone: RAG/vector DB as MVP architecture
-Status:
-Do not reintroduce unless the user explicitly reverses this.
-Reason:
-The project explicitly targets pure-text memory files and lightweight implementation.
-Mode:
-soft
-Date:
-2026-06-30
+Do not reintroduce unless the user explicitly reverses this. Reason: the project targets pure-text memory files and lightweight implementation. Date: 2026-06-30.
 ```

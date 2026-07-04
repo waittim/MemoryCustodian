@@ -2,15 +2,11 @@
 
 ## YYYY-MM-DD - Use MemoryCustodian
 Decision:
-Use MemoryCustodian for repo-native project memory.
+Use local Markdown files under `docs/memory/` for durable project memory. Keep platform entry files short bootstraps.
 
 Reason:
-Project memory should be local, plain-text, inspectable, and reusable across agents.
+Memory should be inspectable, diffable, portable, and reusable across agents.
 
 Implications:
-- Keep platform entry files short.
-- Store durable context in `docs/memory/`.
+- Load context through `manifest.md`.
 - Avoid RAG or vector DB in MVP.
-
-Status:
-active

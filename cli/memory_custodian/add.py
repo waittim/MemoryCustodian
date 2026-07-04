@@ -49,10 +49,7 @@ def _entry(kind: str, message: str, reason: str | None) -> str:
         why = reason or "Added as a rejected or guarded topic."
         return (
             f"## Tombstone: {_title(message)}\n"
-            "Status:\nDo not reintroduce unless the user explicitly reverses this.\n"
-            f"Reason:\n{why}\n"
-            "Mode:\nmanual\n"
-            f"Date:\n{current_date}"
+            f"Do not reintroduce unless the user explicitly reverses this. Reason: {why} Date: {current_date}."
         )
     return f"## {current_date}\n- {message}"
 

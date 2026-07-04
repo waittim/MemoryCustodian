@@ -31,8 +31,8 @@ Do not load these by default:
 Use these task categories unless the project manifest says otherwise:
 
 - Planning / architecture / refactoring: `decisions.md`, `constraints.md`, `do-not-use.md`
-- Implementation / execution: `constraints.md`, `do-not-use.md`, and `preferences.md` if present
-- User-facing artifact generation: `do-not-use.md`, `rules/output.md` if present, and `preferences.md` if present
+- Implementation / execution / debugging: `constraints.md`, `do-not-use.md`, and `preferences.md` if present
+- User-facing artifact / output: `do-not-use.md`, `rules/output.md` if present, and `preferences.md` if present
 - Preferences: `preferences.md` if present
 - Recap / history: `decisions.md` and `changelog.md` if present
 - Memory maintenance: `inbox.md`, `do-not-use.md`, and `changelog.md` if present

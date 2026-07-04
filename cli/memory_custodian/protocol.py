@@ -97,7 +97,7 @@ OPTIONAL_INDEX_SECTIONS = {
     "areas": "### Enabled areas",
 }
 OPTIONAL_INDEX_TEMPLATE = """## Optional module index
-Agents use this lightweight index to discover optional memory without loading its contents. Entries here are not default loads; load the referenced file only when the trigger applies.
+Discover optional memory without loading it. Entries here are not default loads.
 
 ### Enabled rules
 - None enabled.

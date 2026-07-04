@@ -8,5 +8,6 @@ Before substantial work:
 2. Read `docs/memory/brief.md`.
 3. Load additional memory files only when the manifest says they are relevant.
 4. Do not load `docs/memory/archive/` unless explicitly requested or performing memory maintenance.
+5. After meaningful decisions, repeated corrections, or rejected approaches, update the appropriate memory file or propose an update.
 
 Keep this file short. MemoryCustodian is the source of truth for durable project memory.

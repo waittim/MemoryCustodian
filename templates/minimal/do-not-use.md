@@ -1,10 +1,4 @@
 # Do Not Use / Tombstones
 
 ## Tombstone: Full memory in platform entry files
-Status:
-Do not use.
-Reason:
-AGENTS.md and CLAUDE.md should act as thin bootloaders, not full memory stores.
-Applies to:
-- Platform entry files
-- Agent bootstrapping
+Do not copy full memory into AGENTS.md, CLAUDE.md, or similar files. They should stay thin bootstraps that point to `docs/memory/`.

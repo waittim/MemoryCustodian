@@ -19,7 +19,7 @@ Recommended behavior:
 2. Read `docs/memory/brief.md`.
 3. Read task-specific files only when the manifest says they are relevant.
 4. Do not load `inbox.md` or `archive/` unless asked or maintaining memory.
-5. After meaningful decisions, update memory or propose an update.
+5. After meaningful decisions, repeated corrections, or rejected approaches, update the appropriate memory file or propose an update.
 
 Use `adapters/codex/AGENTS.snippet.md`.
 

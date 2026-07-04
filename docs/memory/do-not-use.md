@@ -1,30 +1,10 @@
 # Do Not Use / Tombstones
 
 ## Tombstone: RAG/vector DB as MVP architecture
-Status:
-Do not reintroduce.
-Reason:
-The project explicitly targets pure-text memory files and lightweight implementation.
-Applies to:
-- MVP architecture
-- Default installation
+Do not reintroduce RAG, embeddings, vector databases, or cloud memory for the MVP/default architecture.
 
 ## Tombstone: Full memory in AGENTS.md or CLAUDE.md
-Status:
-Do not use.
-Reason:
-Agent instruction files should remain small entry points and should not carry full project memory.
-Applies to:
-- Codex adapter
-- Claude Code adapter
-- Generic adapter
+Do not copy full project memory into AGENTS.md, CLAUDE.md, or similar files. They should stay thin bootstraps.
 
 ## Tombstone: Git workflow as core protocol
-Status:
-Do not use.
-Reason:
-Git, release, ticket, and similar workflows should be optional profiles, not default core memory.
-Applies to:
-- Default manifest
-- Initializer templates
-- Core protocol documentation
+Do not make Git, release, ticket, or similar workflows part of the default core protocol; keep them optional profiles.

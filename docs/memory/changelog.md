@@ -2,6 +2,10 @@
 
 Entries are newest first.
 
+## 2026-07-04
+- Compressed dogfood memory files and minimal templates to keep high-frequency context short.
+- Added the memory-update reminder to generated agent bootstrap snippets.
+
 ## 2026-07-03
 - Added v0.4 protocol metadata, migration checks, release notes, and plugin manifests.
 - Clarified that offline constraints apply to memory operations, not skill/plugin update distribution.
