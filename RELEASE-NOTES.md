@@ -16,6 +16,10 @@
 - Added Claude local marketplace metadata under `.claude-plugin/marketplace.json`.
 - Added package tests for hook output, Claude marketplace metadata, and rootless Codex archives.
 
+### Documentation
+
+- Added a "Why MemoryCustodian?" README section and refreshed the dogfood brief to clarify repeated context setup and agent/developer context gaps.
+
 ### Memory Ordering
 
 - Keep dated memory entries newest-first where budget trimming should preserve recent context: decisions, tombstones, and inbox candidates.
