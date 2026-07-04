@@ -17,11 +17,17 @@ command="${1:-codex}"
 
 check_files() {
   test -f "$skill_dir/SKILL.md"
+  test -f "$repo_root/.codex-plugin/plugin.json"
+  test -f "$repo_root/.agents/plugins/marketplace.json"
+  test -f "$repo_root/assets/memory-custodian.svg"
+  test -x "$repo_root/scripts/memory-custodian"
   test -f "$skill_dir/references/manifest-policy.md"
   test -f "$repo_root/adapters/codex/AGENTS.snippet.md"
   test -f "$repo_root/adapters/claude-code/CLAUDE.snippet.md"
   test -f "$repo_root/adapters/generic/agent-instructions.md"
   echo "MemoryCustodian files: OK"
+  echo "Codex plugin manifest: $repo_root/.codex-plugin/plugin.json"
+  echo "Repo marketplace: $repo_root/.agents/plugins/marketplace.json"
   echo "Skill source: $skill_dir"
   echo "Codex skill target: ${CODEX_HOME:-$HOME/.codex}/skills/memory-custodian"
 }

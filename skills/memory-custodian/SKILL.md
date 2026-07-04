@@ -106,4 +106,11 @@ memory-custodian check
 memory-custodian migrate --apply
 ```
 
+If the console script is unavailable but this skill came from an installed plugin or source checkout, use the bundled helper from the plugin root:
+
+```bash
+scripts/memory-custodian status
+scripts/memory-custodian read --task planning
+```
+
 If the CLI is unavailable, edit the markdown files directly using the same protocol.

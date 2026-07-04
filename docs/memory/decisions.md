@@ -42,3 +42,10 @@ Updating the CLI or skill does not automatically update memory files already cop
 Implications:
 - Memory protocol version advances when generated memory structure or loading rules change.
 - Project migrations should be deterministic, reviewable, and offline by default.
+
+## 2026-07-04 - Make plugin distribution self-contained
+Decision:
+Codex plugin support should include a repo-local marketplace entry, plugin metadata/assets, and a bundled CLI wrapper. Project memory still lives in `docs/memory/` and is activated by thin project bootstrap files.
+
+Reason:
+Plugin installation should make the reusable workflow and CLI helper available without copying project memory into the plugin or requiring a global console script.

@@ -5,6 +5,7 @@ MemoryCustodian is a local-first, pure-text project memory skill and CLI for cod
 
 Current direction:
 - Build a reusable skill under `skills/memory-custodian/`.
+- Package the skill as a Codex plugin with repo-local marketplace support and a bundled CLI wrapper.
 - Store managed project memory in `docs/memory/` by default.
 - Provide Codex, Claude Code, and generic adapter snippets.
 - Provide a lightweight Python CLI for init, read, add, compact, forget, enable, migrate, check, and status.

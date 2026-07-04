@@ -1,0 +1,20 @@
+{
+  "name": "memory-custodian-dev",
+  "interface": {
+    "displayName": "MemoryCustodian Dev"
+  },
+  "plugins": [
+    {
+      "name": "memory-custodian",
+      "source": {
+        "source": "url",
+        "url": "./"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Developer Tools"
+    }
+  ]
+}

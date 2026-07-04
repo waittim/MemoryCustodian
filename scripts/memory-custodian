@@ -1,0 +1,8 @@
+#!/usr/bin/env sh
+set -eu
+
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+plugin_root=$(CDPATH= cd -- "$script_dir/.." && pwd)
+python_bin=${PYTHON:-python3}
+
+PYTHONPATH="$plugin_root/cli${PYTHONPATH:+:$PYTHONPATH}" exec "$python_bin" -m memory_custodian.main "$@"

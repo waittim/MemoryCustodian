@@ -24,16 +24,21 @@
     "developerName": "MemoryCustodian contributors",
     "category": "Developer Tools",
     "capabilities": [
+      "Interactive",
       "Read",
       "Write"
     ],
     "websiteURL": "https://github.com/waittim/MemoryCustodian",
+    "privacyPolicyURL": "https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement",
+    "termsOfServiceURL": "https://docs.github.com/en/site-policy/github-terms/github-terms-of-service",
     "defaultPrompt": [
       "Initialize MemoryCustodian for this project.",
       "Check this project's memory health.",
       "Read the project memory for planning."
     ],
     "brandColor": "#2563EB",
+    "composerIcon": "./assets/memory-custodian.svg",
+    "logo": "./assets/memory-custodian.svg",
     "screenshots": []
   }
 }

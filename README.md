@@ -32,9 +32,12 @@ MemoryCustodian does not provide:
 
 ```text
 MemoryCustodian/
+  .codex-plugin/plugin.json      # Codex plugin manifest
+  .agents/plugins/marketplace.json # Repo-local plugin marketplace for testing
   skills/memory-custodian/        # Reusable agent skill
   adapters/                       # Codex, Claude Code, and generic entry snippets
   cli/memory_custodian/           # Python CLI implementation
+  scripts/memory-custodian        # Plugin-safe CLI wrapper
   templates/minimal/              # Core protocol templates
   templates/extended/             # Optional memory module templates
   docs/memory/                    # Dogfood memory for this repository
@@ -42,6 +45,13 @@ MemoryCustodian/
 ```
 
 ## Quick Start
+
+From a source checkout or installed plugin bundle, use the bundled wrapper:
+
+```bash
+scripts/memory-custodian --help
+scripts/memory-custodian init --project-root /path/to/project
+```
 
 Run the CLI from a source checkout by setting `PYTHONPATH`:
 
@@ -123,20 +133,59 @@ memory-custodian migrate
 memory-custodian migrate --apply
 ```
 
-## Installing The Skill
+## Installing The Plugin
 
-For Codex, use the installer from this repository:
+MemoryCustodian is packaged as a Codex plugin. The plugin bundle exposes:
+
+- the `memory-custodian` skill under `skills/`
+- a plugin-safe CLI wrapper at `scripts/memory-custodian`
+- Codex metadata in `.codex-plugin/plugin.json`
+- a repo-local marketplace entry in `.agents/plugins/marketplace.json`
+
+### Codex Repo Marketplace
+
+For local plugin testing from this checkout, add this repository as a Codex marketplace source:
+
+```bash
+codex plugin marketplace add .
+```
+
+Then open `/plugins`, switch to `MemoryCustodian Dev`, and install `memory-custodian`.
+
+The repo marketplace points at this checkout as the plugin source, so local edits are easy to verify in a new Codex thread after reinstalling or refreshing the plugin.
+
+### Source Checkout
+
+For direct local development without the plugin browser, use the source checkout:
+
+```bash
+scripts/memory-custodian status
+scripts/memory-custodian read --task planning
+```
+
+Or install editable and use the console script:
+
+```bash
+python3 -m pip install -e .
+memory-custodian status
+```
+
+### Skill Symlink Fallback
+
+For older local Codex setups that only scan skill folders, use the installer:
 
 ```bash
 ./install.sh codex
 ```
 
-Or manually copy or symlink the skill folder into your Codex skills directory:
+Or manually symlink the skill folder:
 
 ```bash
 mkdir -p ~/.codex/skills
 ln -s "$PWD/skills/memory-custodian" ~/.codex/skills/memory-custodian
 ```
+
+## Project Bootstrap
 
 A managed project should also include a short agent entry point. Use one of:
 
