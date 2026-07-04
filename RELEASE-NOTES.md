@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Memory Ordering
+
+- Keep dated memory entries newest-first where budget trimming should preserve recent context: decisions, tombstones, and inbox candidates.
+- Insert new decision, tombstone, and inbox entries before older entries.
+- Preserve current-state files such as manifest, brief, constraints, preferences, rules, profiles, and areas in their semantic order.
+
 ### Claude Code
 
 - Added Claude Code plugin-root installation docs and `./install.sh claude`.

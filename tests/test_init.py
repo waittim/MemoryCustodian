@@ -32,6 +32,9 @@ class InitTests(unittest.TestCase):
             self.assertIn("## MemoryCustodian Protocol", manifest)
             self.assertIn("- protocol_version: 0.4", manifest)
             self.assertIn("- initialized_with: memory-custodian 0.4.1", manifest)
+            self.assertIn("Entries are newest first.", (memory / "decisions.md").read_text(encoding="utf-8"))
+            self.assertIn("Tombstones are newest first.", (memory / "do-not-use.md").read_text(encoding="utf-8"))
+            self.assertIn("Entries are newest first.", (memory / "inbox.md").read_text(encoding="utf-8"))
 
             brief = memory / "brief.md"
             brief.write_text("# Custom Brief\n", encoding="utf-8")

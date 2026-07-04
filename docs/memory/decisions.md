@@ -1,36 +1,34 @@
 # Decisions
 
-## 2026-06-30 - Use local text memory
+Entries are newest first.
+
+## 2026-07-04 - Treat Claude as a plugin-root distribution target
 Decision:
-Store durable project memory as Markdown files under `docs/`, defaulting to `docs/memory/`. Keep `AGENTS.md`, `CLAUDE.md`, and similar files as thin bootstraps.
+Support Claude Code through the repository plugin-root layout: `.claude-plugin/`, `skills/`, `bin/`, local `--plugin-dir` testing, and `./install.sh claude` symlink installation.
 
 Reason:
-Memory should be local, inspectable, portable, diffable, and easy to roll back.
+Claude support should be backed by a verifiable install surface, not just metadata or a README claim.
 
-## 2026-07-02 - Keep the core protocol minimal
+## 2026-07-04 - Add deterministic skill evals first
 Decision:
-Default initialization creates only `manifest.md`, `brief.md`, `decisions.md`, `constraints.md`, `do-not-use.md`, and `inbox.md`.
+Before adding live agent eval infrastructure, maintain offline skill eval scenarios and a checker that guard the MemoryCustodian skill's core behavior contract.
 
 Reason:
-Small projects should not receive optional workflow files until they are useful.
+The project needs skill-behavior discipline without adding network services, non-stdlib dependencies, or heavyweight harnesses to the MVP.
 
-Implications:
-- Optional preferences, changelog, rules, profiles, areas, and archive stay disabled until enabled.
-- `manifest.md` is the loading source of truth and indexes optional modules.
-
-## 2026-07-02 - Keep Skill instructions operational and concise
+## 2026-07-04 - Use project-memory card branding
 Decision:
-Keep `SKILL.md` focused on agent execution. Put detailed policy in references, README, or memory files.
+Use a stacked index-card logo with smaller same-size rounded square cards, opacity-based depth, a near-black background, no internal line marks, and a short blue bookmark marker whose top edge is flush with the front card. Avoid generic document checkmarks or key motifs.
 
 Reason:
-`SKILL.md` is an execution entry point for agents, not a project positioning page.
+The icon should convey local project memory, manifest-driven retrieval, and custodianship without implying CI validation or task completion.
 
-## 2026-07-03 - Separate offline memory from distribution
+## 2026-07-04 - Make plugin distribution self-contained
 Decision:
-Memory operations should work offline by default, but skill, plugin, and CLI installation or update flows may use network distribution.
+Codex plugin support should include a repo-local marketplace entry, plugin metadata/assets, and a bundled CLI wrapper. Project memory still lives in `docs/memory/` and is activated by thin project bootstrap files.
 
 Reason:
-Local-first project memory should not require network access at runtime, while update delivery can use package managers, marketplaces, git, or other online distribution channels.
+Plugin installation should make the reusable workflow and CLI helper available without copying project memory into the plugin or requiring a global console script.
 
 ## 2026-07-03 - Version package and memory protocol separately
 Decision:
@@ -43,30 +41,34 @@ Implications:
 - Memory protocol version advances when generated memory structure or loading rules change.
 - Project migrations should be deterministic, reviewable, and offline by default.
 
-## 2026-07-04 - Make plugin distribution self-contained
+## 2026-07-03 - Separate offline memory from distribution
 Decision:
-Codex plugin support should include a repo-local marketplace entry, plugin metadata/assets, and a bundled CLI wrapper. Project memory still lives in `docs/memory/` and is activated by thin project bootstrap files.
+Memory operations should work offline by default, but skill, plugin, and CLI installation or update flows may use network distribution.
 
 Reason:
-Plugin installation should make the reusable workflow and CLI helper available without copying project memory into the plugin or requiring a global console script.
+Local-first project memory should not require network access at runtime, while update delivery can use package managers, marketplaces, git, or other online distribution channels.
 
-## 2026-07-04 - Use project-memory card branding
+## 2026-07-02 - Keep Skill instructions operational and concise
 Decision:
-Use a stacked index-card logo with smaller same-size rounded square cards, opacity-based depth, a near-black background, no internal line marks, and a short blue bookmark marker whose top edge is flush with the front card. Avoid generic document checkmarks or key motifs.
+Keep `SKILL.md` focused on agent execution. Put detailed policy in references, README, or memory files.
 
 Reason:
-The icon should convey local project memory, manifest-driven retrieval, and custodianship without implying CI validation or task completion.
+`SKILL.md` is an execution entry point for agents, not a project positioning page.
 
-## 2026-07-04 - Add deterministic skill evals first
+## 2026-07-02 - Keep the core protocol minimal
 Decision:
-Before adding live agent eval infrastructure, maintain offline skill eval scenarios and a checker that guard the MemoryCustodian skill's core behavior contract.
+Default initialization creates only `manifest.md`, `brief.md`, `decisions.md`, `constraints.md`, `do-not-use.md`, and `inbox.md`.
 
 Reason:
-The project needs skill-behavior discipline without adding network services, non-stdlib dependencies, or heavyweight harnesses to the MVP.
+Small projects should not receive optional workflow files until they are useful.
 
-## 2026-07-04 - Treat Claude as a plugin-root distribution target
+Implications:
+- Optional preferences, changelog, rules, profiles, areas, and archive stay disabled until enabled.
+- `manifest.md` is the loading source of truth and indexes optional modules.
+
+## 2026-06-30 - Use local text memory
 Decision:
-Support Claude Code through the repository plugin-root layout: `.claude-plugin/`, `skills/`, `bin/`, local `--plugin-dir` testing, and `./install.sh claude` symlink installation.
+Store durable project memory as Markdown files under `docs/`, defaulting to `docs/memory/`. Keep `AGENTS.md`, `CLAUDE.md`, and similar files as thin bootstraps.
 
 Reason:
-Claude support should be backed by a verifiable install surface, not just metadata or a README claim.
+Memory should be local, inspectable, portable, diffable, and easy to roll back.

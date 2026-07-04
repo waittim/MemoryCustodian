@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .protocol import append_changelog, append_text, iter_markdown_files, resolve_memory_dir, resolve_project_root, today, write_text
+from .protocol import append_changelog, iter_markdown_files, prepend_text, resolve_memory_dir, resolve_project_root, today, write_text
 
 
 def _remove_topic(text: str, topic: str) -> tuple[str, int]:
@@ -70,7 +70,7 @@ def run(args) -> int:
             total_removed += removed
             changed_files.append(str(path.relative_to(memory_dir)))
 
-    append_text(memory_dir / "do-not-use.md", _tombstone(args.topic, args.mode))
+    prepend_text(memory_dir / "do-not-use.md", _tombstone(args.topic, args.mode))
     append_changelog(memory_dir, _changelog_message(args.topic, args.mode))
 
     print(f"Forgot topic: {args.topic}")

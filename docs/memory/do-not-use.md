@@ -1,5 +1,7 @@
 # Do Not Use / Tombstones
 
+Tombstones are newest first.
+
 ## Tombstone: RAG/vector DB as MVP architecture
 Do not reintroduce RAG, embeddings, vector databases, or cloud memory for the MVP/default architecture.
 

@@ -128,6 +128,8 @@ Default behavior:
 """,
     "decisions.md": """# Decisions
 
+Entries are newest first.
+
 ## {date} - Use MemoryCustodian
 Decision:
 Use local Markdown files under `{memory_dir}` for durable project memory. Keep platform entry files short bootstraps.
@@ -148,10 +150,14 @@ Implications:
 """,
     "do-not-use.md": """# Do Not Use / Tombstones
 
+Tombstones are newest first.
+
 ## Tombstone: Full memory in platform entry files
 Do not copy full memory into AGENTS.md, CLAUDE.md, or similar files. They should stay thin bootstraps that point to `{memory_dir}`.
 """,
     "inbox.md": """# Memory Inbox
+
+Entries are newest first.
 
 No unprocessed memory candidates.
 """,

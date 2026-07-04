@@ -1,5 +1,7 @@
 # Decisions
 
+Entries are newest first.
+
 ## YYYY-MM-DD - Use MemoryCustodian
 Decision:
 Use local Markdown files under `docs/memory/` for durable project memory. Keep platform entry files short bootstraps.

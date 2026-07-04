@@ -10,6 +10,7 @@ from .protocol import (
     is_indexable_optional_path,
     is_safe_memory_name,
     manifest_with_optional_module_index,
+    prepend_text,
     resolve_memory_dir,
     resolve_project_root,
     today,
@@ -25,6 +26,8 @@ TARGETS = {
     "do-not-use": "do-not-use.md",
     "inbox": "inbox.md",
 }
+
+NEWEST_FIRST_TYPES = {"decision", "tombstone", "do-not-use", "inbox"}
 
 
 def _title(message: str) -> str:
@@ -89,7 +92,12 @@ def run(args) -> int:
         target = TARGETS[kind]
     target_path = memory_dir / target
     _ensure_target(target_path, kind, args.name)
-    append_text(target_path, _entry(kind, args.message, args.reason))
+    entry = _entry(kind, args.message, args.reason)
+    if kind in NEWEST_FIRST_TYPES:
+        remove_lines = ("No unprocessed memory candidates.",) if kind == "inbox" else ()
+        prepend_text(target_path, entry, remove_lines=remove_lines)
+    else:
+        append_text(target_path, entry)
     manifest_path = memory_dir / "manifest.md"
     indexed = False
     if is_indexable_optional_path(target) and manifest_path.exists():

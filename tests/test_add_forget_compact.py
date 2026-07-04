@@ -24,6 +24,29 @@ class AddForgetCompactTests(unittest.TestCase):
             tombstones = (memory / "do-not-use.md").read_text(encoding="utf-8")
             self.assertIn("Tombstone: SQLite", tombstones)
             self.assertNotIn("Status:", tombstones)
+            self.assertLess(tombstones.index("Tombstone: SQLite"), tombstones.index("Tombstone: Full memory"))
+
+    def test_add_time_series_memory_is_newest_first(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            self.assertEqual(main(["add", "First decision marker.", "--type", "decision", "--project-root", tmp]), 0)
+            self.assertEqual(main(["add", "Second decision marker.", "--type", "decision", "--project-root", tmp]), 0)
+            memory = Path(tmp) / "docs" / "memory"
+            decisions = (memory / "decisions.md").read_text(encoding="utf-8")
+            self.assertLess(decisions.index("Second decision marker"), decisions.index("First decision marker"))
+            self.assertLess(decisions.index("First decision marker"), decisions.index("Use MemoryCustodian"))
+
+            self.assertEqual(main(["add", "First rejected marker.", "--type", "tombstone", "--project-root", tmp]), 0)
+            self.assertEqual(main(["add", "Second rejected marker.", "--type", "tombstone", "--project-root", tmp]), 0)
+            tombstones = (memory / "do-not-use.md").read_text(encoding="utf-8")
+            self.assertLess(tombstones.index("Tombstone: Second rejected marker"), tombstones.index("Tombstone: First rejected marker"))
+            self.assertLess(tombstones.index("Tombstone: First rejected marker"), tombstones.index("Tombstone: Full memory"))
+
+            self.assertEqual(main(["add", "First inbox marker.", "--type", "inbox", "--project-root", tmp]), 0)
+            self.assertEqual(main(["add", "Second inbox marker.", "--type", "inbox", "--project-root", tmp]), 0)
+            inbox = (memory / "inbox.md").read_text(encoding="utf-8")
+            self.assertNotIn("No unprocessed memory candidates.", inbox)
+            self.assertLess(inbox.index("Second inbox marker"), inbox.index("First inbox marker"))
 
     def test_compact_dry_run_and_apply(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -44,6 +67,27 @@ class AddForgetCompactTests(unittest.TestCase):
             inbox = (memory / "inbox.md").read_text(encoding="utf-8")
             self.assertIn("Unclear temporary note", inbox)
             self.assertEqual(inbox.count("Must work offline"), 0)
+
+    def test_compact_prepends_dated_targets(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            memory = Path(tmp) / "docs" / "memory"
+            (memory / "inbox.md").write_text(
+                "# Memory Inbox\n\n"
+                "Entries are newest first.\n\n"
+                "## Today\n"
+                "- We decided to keep newest compact marker first.\n"
+                "- We decided to keep older compact marker second.\n"
+                "- Do not use stale memory ordering.\n",
+                encoding="utf-8",
+            )
+
+            self.assertEqual(main(["compact", "--project-root", tmp, "--apply"]), 0)
+            decisions = (memory / "decisions.md").read_text(encoding="utf-8")
+            self.assertLess(decisions.index("newest compact marker"), decisions.index("older compact marker"))
+            self.assertLess(decisions.index("older compact marker"), decisions.index("Use MemoryCustodian"))
+            tombstones = (memory / "do-not-use.md").read_text(encoding="utf-8")
+            self.assertLess(tombstones.index("stale memory ordering"), tombstones.index("Tombstone: Full memory"))
 
     def test_add_rule_creates_optional_rule_file(self):
         with tempfile.TemporaryDirectory() as tmp:

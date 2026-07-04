@@ -198,6 +198,35 @@ def append_text(path: Path, text: str) -> None:
         write_text(path, text.strip() + "\n")
 
 
+def prepend_text(path: Path, text: str, remove_lines: tuple[str, ...] = ()) -> None:
+    existing = path.read_text(encoding="utf-8") if path.exists() else ""
+    if not existing:
+        write_text(path, text.strip() + "\n")
+        return
+
+    lines = [line for line in existing.rstrip().splitlines() if line.strip() not in remove_lines]
+    insert_at = 0
+    if lines and lines[0].startswith("# "):
+        insert_at = 1
+        while insert_at < len(lines):
+            stripped = lines[insert_at].strip()
+            if lines[insert_at].startswith("## ") or stripped.startswith("- "):
+                break
+            insert_at += 1
+
+    before = "\n".join(lines[:insert_at]).rstrip()
+    after = "\n".join(lines[insert_at:]).strip()
+    entry = text.strip()
+    if before and after:
+        write_text(path, f"{before}\n\n{entry}\n\n{after}\n")
+    elif before:
+        write_text(path, f"{before}\n\n{entry}\n")
+    elif after:
+        write_text(path, f"{entry}\n\n{after}\n")
+    else:
+        write_text(path, entry + "\n")
+
+
 def append_changelog(memory_dir: Path, message: str, create: bool = False) -> None:
     path = memory_dir / "changelog.md"
     if not path.exists() and not create:

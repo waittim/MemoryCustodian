@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from .protocol import append_changelog, append_text, resolve_memory_dir, resolve_project_root, today, write_text
+from .protocol import append_changelog, append_text, prepend_text, resolve_memory_dir, resolve_project_root, today, write_text
 from .templates import render_template
 
 
@@ -98,8 +98,13 @@ def run(args) -> int:
 
     for target, values in classified.items():
         _ensure_destination(memory_dir, target)
-        for item in values:
-            append_text(memory_dir / target, _format_for(target, item))
+        prepend_target = target in {"decisions.md", "do-not-use.md"}
+        ordered_values = reversed(values) if prepend_target else values
+        for item in ordered_values:
+            if prepend_target:
+                prepend_text(memory_dir / target, _format_for(target, item))
+            else:
+                append_text(memory_dir / target, _format_for(target, item))
 
     new_inbox = "# Memory Inbox\n\n"
     if remaining:

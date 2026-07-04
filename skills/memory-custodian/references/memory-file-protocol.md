@@ -110,7 +110,7 @@ The only default memory file. Keep it short, current, and focused on the active 
 
 ### decisions.md
 
-Confirmed decisions with date, decision, and reason. Do not store brainstorming as decisions.
+Confirmed decisions with date, decision, and reason. Do not store brainstorming as decisions. Keep entries newest first so the most recent decisions survive budget trimming.
 
 ### constraints.md
 
@@ -122,11 +122,11 @@ Optional soft user or project preferences. These guide choices but can be overri
 
 ### do-not-use.md
 
-Rejected options, known failed paths, and tombstones. Agents should check it before reintroducing approaches.
+Rejected options, known failed paths, and tombstones. Agents should check it before reintroducing approaches. Keep tombstones newest first.
 
 ### inbox.md
 
-Temporary holding area for memory candidates that need review or compaction.
+Temporary holding area for memory candidates that need review or compaction. Keep new candidates newest first.
 
 ### changelog.md
 
