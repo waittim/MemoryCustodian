@@ -69,12 +69,16 @@ def run(args) -> int:
     agent = args.agent
     with_codex = args.with_codex or agent in {"codex", "all"}
     with_claude = args.with_claude or agent in {"claude", "all"}
+    with_gemini = args.with_gemini or agent in {"gemini", "all"}
     if with_codex:
         result = _append_snippet(project_root / "AGENTS.md", _agent_snippet(memory_label), args.force_agent)
         results.append(f"AGENTS.md: {result}")
     if with_claude:
         result = _append_snippet(project_root / "CLAUDE.md", _agent_snippet(memory_label), args.force_agent)
         results.append(f"CLAUDE.md: {result}")
+    if with_gemini:
+        result = _append_snippet(project_root / "GEMINI.md", _agent_snippet(memory_label), args.force_agent)
+        results.append(f"GEMINI.md: {result}")
 
     print(f"Initialized MemoryCustodian at {memory_dir}")
     for item in results:

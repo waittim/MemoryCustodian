@@ -59,6 +59,9 @@ class PluginPackageTests(unittest.TestCase):
         self.assertTrue(os.access(ROOT / "bin" / "memory-custodian", os.X_OK))
         self.assertTrue((ROOT / "adapters" / "claude-code" / "CLAUDE.snippet.md").exists())
         self.assertTrue((ROOT / "adapters" / "claude-code" / "install.md").exists())
+        self.assertTrue((ROOT / "adapters" / "gemini" / "GEMINI.snippet.md").exists())
+        self.assertTrue((ROOT / "adapters" / "gemini" / "install.md").exists())
+        self.assertTrue((ROOT / "GEMINI.md").exists())
         self.assertTrue((ROOT / ".claude-plugin" / "marketplace.json").exists())
         self.assertTrue((ROOT / "hooks" / "hooks.json").exists())
         self.assertTrue(os.access(ROOT / "hooks" / "session-start", os.X_OK))
@@ -149,6 +152,25 @@ class PluginPackageTests(unittest.TestCase):
             self.assertTrue((target / "skills" / "memory-custodian" / "SKILL.md").exists())
             self.assertTrue((target / "hooks" / "session-start").exists())
             self.assertIn("Installed Claude Code plugin", result.stdout)
+
+    def test_installer_can_install_gemini_skill_to_custom_home(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = subprocess.run(
+                [str(ROOT / "install.sh"), "gemini"],
+                cwd=ROOT,
+                env={**os.environ, "GEMINI_HOME": str(Path(tmp) / ".gemini")},
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            target = Path(tmp) / ".gemini" / "skills" / "memory-custodian"
+            self.assertTrue(target.is_symlink(), target)
+            self.assertEqual(target.resolve(), ROOT / "skills" / "memory-custodian")
+            self.assertTrue((target / "SKILL.md").exists())
+            self.assertIn("Installed Gemini skill", result.stdout)
 
     def test_package_codex_plugin_creates_rootless_archive(self):
         with tempfile.TemporaryDirectory() as tmp:

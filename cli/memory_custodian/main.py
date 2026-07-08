@@ -34,7 +34,13 @@ def build_parser() -> argparse.ArgumentParser:
     init_parser.add_argument("--extended", action="store_true", help="Also create optional preferences, changelog, rules, profiles, and archive templates.")
     init_parser.add_argument("--with-codex", action="store_true", help="Add the Codex AGENTS.md entry snippet.")
     init_parser.add_argument("--with-claude", action="store_true", help="Add the Claude Code CLAUDE.md entry snippet.")
-    init_parser.add_argument("--agent", choices=("none", "codex", "claude", "all"), default="none", help="Optionally add platform entry snippets.")
+    init_parser.add_argument("--with-gemini", action="store_true", help="Add the Gemini GEMINI.md entry snippet.")
+    init_parser.add_argument(
+        "--agent",
+        choices=("none", "codex", "claude", "gemini", "all"),
+        default="none",
+        help="Optionally add platform entry snippets.",
+    )
     init_parser.add_argument("--force", action="store_true", help="Overwrite existing memory files.")
     init_parser.add_argument("--force-agent", action="store_true", help="Append agent snippets even if a MemoryCustodian section exists.")
     init_parser.set_defaults(func=init_cmd.run)

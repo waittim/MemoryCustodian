@@ -33,6 +33,8 @@ def _check_agent_entry(path: Path) -> list[str]:
     copied_sections = sum(1 for marker in ("# Decisions", "# Constraints", "# Do Not Use", "# Memory Inbox") if marker in text)
     if copied_sections:
         issues.append(f"{path.name}: appears to copy memory content instead of pointing to docs/memory")
+    if path.name == "GEMINI.md" and any(marker in text for marker in ("@./docs/memory/", "@/docs/memory/", "@docs/memory/")):
+        issues.append("GEMINI.md: should not import docs/memory files; point to the manifest instead")
     return issues
 
 
@@ -131,7 +133,7 @@ def run(args) -> int:
             if relative not in indexed_optional_paths:
                 issues.append(f"manifest.md: {relative} exists but is missing from optional module index")
 
-    for entry_name in ("AGENTS.md", "CLAUDE.md"):
+    for entry_name in ("AGENTS.md", "CLAUDE.md", "GEMINI.md"):
         warnings.extend(_check_agent_entry(project_root / entry_name))
 
     if issues:

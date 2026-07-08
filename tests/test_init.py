@@ -66,6 +66,23 @@ class InitTests(unittest.TestCase):
             self.assertIn("manifest.md", agents.read_text(encoding="utf-8"))
             self.assertIn("After meaningful decisions", agents.read_text(encoding="utf-8"))
 
+    def test_init_can_add_gemini_snippet(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(main(["init", "--project-root", tmp, "--with-gemini"]), 0)
+            gemini = Path(tmp) / "GEMINI.md"
+            text = gemini.read_text(encoding="utf-8")
+            self.assertIn("## MemoryCustodian", text)
+            self.assertIn("docs/memory/manifest.md", text)
+            self.assertIn("After meaningful decisions", text)
+
+    def test_init_agent_all_adds_all_entry_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(main(["init", "--project-root", tmp, "--agent", "all"]), 0)
+            for name in ("AGENTS.md", "CLAUDE.md", "GEMINI.md"):
+                text = (Path(tmp) / name).read_text(encoding="utf-8")
+                self.assertIn("## MemoryCustodian", text, name)
+                self.assertIn("docs/memory/brief.md", text, name)
+
     def test_init_extended_creates_optional_files(self):
         with tempfile.TemporaryDirectory() as tmp:
             self.assertEqual(main(["init", "--project-root", tmp, "--extended"]), 0)

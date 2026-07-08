@@ -2,6 +2,12 @@
 
 Entries are newest first.
 
+## 2026-07-08 - Support Gemini through thin context and Agent Skills
+Decision:
+Support Gemini with thin `GEMINI.md` bootstrap snippets, `--with-gemini`, and `./install.sh gemini` linking the skill into Gemini's skills directory.
+Reason:
+Gemini context files are loaded into prompt context, so project memory must remain manifest-driven while skill installation provides full protocol behavior.
+
 ## 2026-07-05 - Add target compaction for active memory budgets
 Decision:
 Add `compact --target <file>` for over-budget active files. It dry-runs by default, dedupes simple bullet files, archives old complete H2 entries for decisions/changelog, and has `status`/`check` suggest the command.

@@ -20,7 +20,7 @@ You are dropped into this repository and asked: "Before we touch code, tell me w
 ## Forbidden Outcomes
 - Agent reads `docs/memory/archive/` without explicit user request.
 - Agent reads `docs/memory/inbox.md` without memory maintenance context.
-- Agent copies full memory content into `AGENTS.md`, `CLAUDE.md`, or the final answer.
+- Agent copies full memory content into `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, or the final answer.
 
 ## Passing Criteria
 Pass when the agent's trace shows manifest-first loading, a small architecture context pack, and no archive or inbox access.

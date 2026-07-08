@@ -12,7 +12,7 @@ Use it to:
 - update project memory after meaningful decisions
 - compact unprocessed memory candidates
 - forget or tombstone memory the user no longer wants used
-- keep platform entry files such as `AGENTS.md` and `CLAUDE.md` short
+- keep platform entry files such as `AGENTS.md`, `CLAUDE.md`, and `GEMINI.md` short
 
 ## Hard Gate
 
@@ -98,7 +98,7 @@ Load these only when needed:
 
 - `references/memory-file-protocol.md`: file schema, budgets, and loading levels.
 - `references/manifest-policy.md`: manifest routing and loading policy.
-- `references/platform-adapters.md`: Codex, Claude Code, and generic agent entry patterns.
+- `references/platform-adapters.md`: Codex, Claude Code, Gemini, and generic agent entry patterns.
 - `references/compaction-policy.md`: how to reduce inbox and long files safely.
 - `references/forgetting-policy.md`: soft forget, hard forget, purge, and tombstones.
 - `references/examples.md`: example memory files and context packs.

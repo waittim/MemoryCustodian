@@ -36,6 +36,19 @@ Recommended behavior:
 
 Use `adapters/claude-code/CLAUDE.snippet.md` and optional command files under `adapters/claude-code/commands/`.
 
+## Gemini
+
+Gemini-style agents should keep `GEMINI.md` short and point to `docs/memory/`.
+
+Recommended behavior:
+
+- Read `manifest.md` and `brief.md` before substantial work.
+- Load other files only when the manifest says they are relevant.
+- Do not import `docs/memory/` files from `GEMINI.md`; Gemini context imports are loaded into prompt context.
+- Install or link `skills/memory-custodian/` as a Gemini Agent Skill when available.
+
+Use `adapters/gemini/GEMINI.snippet.md`.
+
 ## Generic Agents
 
 Generic agents should follow `docs/memory/manifest.md` if present. If no manifest exists, load `brief.md` first and then only task-relevant files.
@@ -44,4 +57,4 @@ Use `adapters/generic/agent-instructions.md`.
 
 ## Adapter Rule
 
-Adapters should be entry points, not memory stores. Do not copy full project memory into `AGENTS.md`, `CLAUDE.md`, or equivalent instruction files.
+Adapters should be entry points, not memory stores. Do not copy full project memory into `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, or equivalent instruction files.

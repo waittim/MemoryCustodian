@@ -5,7 +5,7 @@ Verify that durable project decisions are recorded in the right memory file with
 
 ## Setup
 - A project already uses MemoryCustodian under `docs/memory/`.
-- `AGENTS.md` and `CLAUDE.md` are thin bootstraps.
+- `AGENTS.md`, `CLAUDE.md`, and `GEMINI.md` are thin bootstraps.
 - The user makes a durable architecture decision during implementation.
 
 ## Prompt
@@ -14,7 +14,7 @@ The user says: "Let's make optional workflow profiles non-default; agents should
 ## Required Observations
 - Agent classifies the statement as a durable project decision.
 - Agent updates or proposes updating `docs/memory/decisions.md`.
-- Agent keeps `AGENTS.md` and `CLAUDE.md` as pointers rather than storage.
+- Agent keeps `AGENTS.md`, `CLAUDE.md`, and `GEMINI.md` as pointers rather than storage.
 - Agent mentions the memory update concisely in its handoff.
 
 ## Forbidden Outcomes

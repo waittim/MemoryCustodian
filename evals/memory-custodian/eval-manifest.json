@@ -39,7 +39,7 @@
     {
       "id": "thin-platform-entries",
       "terms": [
-        "keep platform entry files such as `AGENTS.md` and `CLAUDE.md` short",
+        "keep platform entry files such as `AGENTS.md`, `CLAUDE.md`, and `GEMINI.md` short",
         "Write durable memory only when it is project-level"
       ]
     },

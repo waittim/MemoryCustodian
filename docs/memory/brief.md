@@ -9,7 +9,7 @@ Current direction:
 - Build a reusable skill under `skills/memory-custodian/`.
 - Package the skill as a Codex plugin with repo-local marketplace support and a bundled CLI wrapper.
 - Store managed project memory in `docs/memory/` by default.
-- Provide Codex, Claude Code, and generic adapter snippets.
+- Provide Codex, Claude Code, Gemini, and generic adapter snippets.
 - Provide a lightweight Python CLI for init, read, add, compact, forget, enable, migrate, check, and status.
 - Keep default initialization minimal: manifest, brief, decisions, constraints, do-not-use, and inbox.
 - Keep optional preferences, changelog, rules, profiles, areas, and archive disabled until needed.

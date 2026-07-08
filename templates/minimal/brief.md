@@ -5,7 +5,7 @@ This project uses MemoryCustodian to maintain local, plain-text project memory.
 Current status:
 - Minimal memory protocol is enabled.
 - Durable memory lives in `docs/memory/`.
-- `AGENTS.md` and `CLAUDE.md` should stay short and only point to this memory folder.
+- `AGENTS.md`, `CLAUDE.md`, and `GEMINI.md` should stay short and only point to this memory folder.
 
 Default behavior:
 - Load `manifest.md`.

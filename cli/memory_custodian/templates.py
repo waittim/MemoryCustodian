@@ -119,7 +119,7 @@ This project uses MemoryCustodian to maintain local, plain-text project memory.
 Current status:
 - Minimal memory protocol is enabled.
 - Durable memory lives in `{memory_dir}`.
-- `AGENTS.md` and `CLAUDE.md` should stay short and only point to this memory folder.
+- `AGENTS.md`, `CLAUDE.md`, and `GEMINI.md` should stay short and only point to this memory folder.
 
 Default behavior:
 - Load `manifest.md`.
@@ -143,7 +143,7 @@ Implications:
 """,
     "constraints.md": """# Constraints
 
-- Keep AGENTS.md and CLAUDE.md short.
+- Keep AGENTS.md, CLAUDE.md, and GEMINI.md short.
 - Store durable project memory in `{memory_dir}`.
 - Do not use RAG, embeddings, or vector databases in MVP.
 - Do not load archive files unless explicitly requested.
@@ -153,7 +153,7 @@ Implications:
 Tombstones are newest first.
 
 ## Tombstone: Full memory in platform entry files
-Do not copy full memory into AGENTS.md, CLAUDE.md, or similar files. They should stay thin bootstraps that point to `{memory_dir}`.
+Do not copy full memory into AGENTS.md, CLAUDE.md, GEMINI.md, or similar files. They should stay thin bootstraps that point to `{memory_dir}`.
 """,
     "inbox.md": """# Memory Inbox
 
