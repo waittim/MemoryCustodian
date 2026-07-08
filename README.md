@@ -215,16 +215,14 @@ memory-custodian migrate
 
 Use `compact --apply` or `migrate --apply` only after reviewing the dry run.
 
-## Data Model
+## Design Principles
 
-- Memory files are local Markdown under `docs/memory/`.
-- Platform instruction files stay thin and point agents to the manifest.
-- The CLI uses Python stdlib only and keeps routine memory operations offline.
+- Memory lives as local Markdown under `docs/memory/`, so it can be reviewed, diffed, committed, and rolled back like code.
+- Platform files such as `AGENTS.md`, `CLAUDE.md`, and `GEMINI.md` stay thin; they point agents to the manifest instead of storing durable memory.
+- Routine CLI operations use Python stdlib only and work offline.
 - The default architecture avoids RAG retrieval, embedding indexes, vector databases, cloud-hosted memory, chat-log archiving, automatic full-context loading, and required Git workflows.
 - Install and update flows may use normal plugin marketplace or package distribution channels.
 - Deletion and avoidance are explicit through `do-not-use.md` tombstones.
-
-
 
 ## What's Inside
 
@@ -236,8 +234,6 @@ Use `compact --apply` or `migrate --apply` only after reviewing the dry run.
 - `evals/memory-custodian/`: skill behavior scenarios and contract checks
 - `examples/`: small project layouts for common host environments
 - `templates/`: minimal and optional memory module scaffolding
-
-
 
 ## Contributing
 
