@@ -1,10 +1,12 @@
 # MemoryCustodian
 
-Give coding agents durable project memory without bloating every task's context.
+**Give your coding agents a project memory.**
 
-MemoryCustodian is a local-first, pure-text memory protocol, skill, and CLI. It keeps reviewable Markdown under `docs/memory/`, then uses `manifest.md` to load only the files a task needs.
+MemoryCustodian helps agents remember what matters: decisions, constraints, rejected ideas, and project context — across conversations, agents, platforms, and teams.
 
-Memory can grow; context must stay small.
+It stores memory as plain Markdown in your repo and loads only the pieces needed for the current task.
+
+**Durable memory. Minimal context.**
 
 ## Why MemoryCustodian?
 
