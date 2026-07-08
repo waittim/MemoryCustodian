@@ -28,20 +28,7 @@ Pick the install path that matches your agent:
 - [Gemini Agent Skill](#gemini-agent-skill)
 - [Source checkout / CLI](#source-checkout)
 
-Already in a source checkout? Initialize MemoryCustodian in a project and verify the first context pack:
-
-```bash
-scripts/memory-custodian init --project-root /path/to/project --agent all
-scripts/memory-custodian read --project-root /path/to/project --task planning
-```
-
-Or install the CLI in editable mode and use the console script:
-
-```bash
-python3 -m pip install -e .
-memory-custodian init --project-root /path/to/project --agent all
-memory-custodian status --project-root /path/to/project
-```
+After installation, initialize each target project once with the CLI wrapper for your install path. Use `--with-codex`, `--with-claude`, `--with-gemini`, or `--agent all` to add short platform entries.
 
 The default initializer creates the core protocol:
 
@@ -55,7 +42,7 @@ docs/memory/
   inbox.md
 ```
 
-Use `--with-codex`, `--with-claude`, `--with-gemini`, or `--agent all` to add short platform entries. Those files are bootstraps; durable memory belongs in `docs/memory/`.
+Platform files are bootstraps; durable memory belongs in `docs/memory/`.
 
 ## How It Works
 
@@ -140,6 +127,7 @@ For direct local development without a plugin browser, use the bundled wrapper:
 
 ```bash
 scripts/memory-custodian --help
+scripts/memory-custodian init --project-root /path/to/project --agent all
 scripts/memory-custodian status
 scripts/memory-custodian read --task planning
 ```
@@ -148,6 +136,7 @@ Or install editable and use the console script:
 
 ```bash
 python3 -m pip install -e .
+memory-custodian init --project-root /path/to/project --agent all
 memory-custodian status
 ```
 
