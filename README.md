@@ -1,14 +1,22 @@
 # MemoryCustodian
 
-Repo-native plain-text memory governance for coding agents.
+Give coding agents durable project memory without bloating every task's context.
 
-MemoryCustodian is a local-first project memory protocol, skill, and CLI. It lets coding agents carry durable project context through human-readable Markdown files while keeping each task's loaded context small.
+MemoryCustodian is a local-first, pure-text memory protocol, skill, and CLI. It stores project context in reviewable Markdown under `docs/memory/`, then uses a manifest to load only the files a task needs.
 
 Memory can grow; context must stay small.
 
-## Quick Start
+## Quickstart
 
-From this checkout, initialize MemoryCustodian in another project:
+Pick the path that matches where you work:
+
+- [Codex local marketplace](#codex-local-marketplace)
+- [Claude Code plugin](#claude-code-plugin)
+- [Gemini Agent Skill](#gemini-agent-skill)
+- [Source checkout / CLI](#source-checkout)
+- [Project bootstrap snippets](#project-bootstrap)
+
+Already in a source checkout? Initialize MemoryCustodian in a project:
 
 ```bash
 scripts/memory-custodian init --project-root /path/to/project --agent all
@@ -40,12 +48,14 @@ Add a short agent bootstrap with `--with-codex`, `--with-claude`, `--with-gemini
 
 ## How It Works
 
-1. A project includes a short agent entry file, such as `AGENTS.md`, `CLAUDE.md`, or `GEMINI.md`.
-2. Before substantial work, the agent reads `docs/memory/manifest.md`.
-3. The agent reads `brief.md`, then loads only the task-relevant files named by the manifest.
-4. Optional `rules/`, `profiles/`, and `areas/` files are discoverable from the manifest without being loaded by default.
-5. After meaningful decisions, repeated corrections, or rejected approaches, the agent updates the appropriate memory file or proposes a concise update.
-6. `archive/` and `inbox.md` stay out of default context unless the user asks or the task is memory maintenance.
+MemoryCustodian turns project memory into a small, explicit workflow:
+
+1. **Keep memory in the repo.** Durable context lives in Markdown files under `docs/memory/`, where humans can inspect, diff, review, commit, roll back, and migrate it.
+2. **Keep platform files thin.** `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, and similar files only tell the agent where project memory lives and how to load it.
+3. **Route through the manifest.** The agent reads `manifest.md`, then `brief.md`, then only the task-relevant files named by the manifest.
+4. **Load optional context on purpose.** `rules/`, `profiles/`, and `areas/` are discoverable from the manifest, but not loaded by default.
+5. **Record durable changes deliberately.** After meaningful decisions, repeated corrections, or rejected approaches, the agent updates the right memory file or proposes a concise update.
+6. **Keep old or raw material out of the way.** `archive/` and `inbox.md` stay out of default context unless the user asks or the task is memory maintenance.
 
 The result is project memory that is inspectable, diffable, portable across agents, and small enough to use in normal coding loops.
 
