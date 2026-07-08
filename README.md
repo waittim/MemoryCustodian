@@ -8,13 +8,12 @@ Memory can grow; context must stay small.
 
 ## Quickstart
 
-Pick the path that matches where you work:
+Pick the install path that matches where you work:
 
 - [Codex local marketplace](#codex-local-marketplace)
 - [Claude Code plugin](#claude-code-plugin)
 - [Gemini Agent Skill](#gemini-agent-skill)
 - [Source checkout / CLI](#source-checkout)
-- [Project bootstrap snippets](#project-bootstrap)
 
 Already in a source checkout? Initialize MemoryCustodian in a project:
 
@@ -32,7 +31,7 @@ memory-custodian init --project-root /path/to/project --agent all
 memory-custodian status --project-root /path/to/project
 ```
 
-The default initializer creates the core protocol only:
+The default initializer creates the core protocol:
 
 ```text
 docs/memory/
@@ -44,14 +43,14 @@ docs/memory/
   inbox.md
 ```
 
-Add a short agent bootstrap with `--with-codex`, `--with-claude`, `--with-gemini`, or the snippets in `adapters/`. Keep `AGENTS.md`, `CLAUDE.md`, and `GEMINI.md` as entry points; durable project memory belongs in `docs/memory/`.
+Add a short platform entry with `--with-codex`, `--with-claude`, `--with-gemini`, or `--agent all`. Keep `AGENTS.md`, `CLAUDE.md`, and `GEMINI.md` as thin entry points; durable project memory belongs in `docs/memory/`.
 
 ## How It Works
 
 MemoryCustodian turns project memory into a small, explicit workflow:
 
 1. **Keep memory in the repo.** Durable context lives in Markdown files under `docs/memory/`, where humans can inspect, diff, review, commit, roll back, and migrate it.
-2. **Keep platform files thin.** `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, and similar files only tell the agent where project memory lives and how to load it.
+2. **Keep platform files thin.** `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, and similar files tell the agent how to find MemoryCustodian instead of importing the whole memory set.
 3. **Route through the manifest.** The agent reads `manifest.md`, then `brief.md`, then only the task-relevant files named by the manifest.
 4. **Load optional context on purpose.** `rules/`, `profiles/`, and `areas/` are discoverable from the manifest, but not loaded by default.
 5. **Record durable changes deliberately.** After meaningful decisions, repeated corrections, or rejected approaches, the agent updates the right memory file or proposes a concise update.
@@ -59,35 +58,9 @@ MemoryCustodian turns project memory into a small, explicit workflow:
 
 The result is project memory that is inspectable, diffable, portable across agents, and small enough to use in normal coding loops.
 
-## Why MemoryCustodian?
-
-Agent work often spans many threads, chats, and tools. Without a project-local memory layer, useful context lives in the developer's head, scattered chat history, or third-party docs that agents may not load at the right time. Every new session starts with repeated project explanation.
-
-MemoryCustodian keeps that context in the repository, in plain Markdown, with manifest-guided loading. It narrows the gap between the context advantage developers carry in their heads and the context agents can reliably access.
-
-That gives teams:
-
-- Less repeated context setup across threads and chats
-- A smaller context gap between developers and agents
-- Inspectable memory that humans can read, review, and edit
-- Small task context through manifest-driven loading
-- Portable workflows across Codex, Claude Code, Gemini-style agents, and generic agents
-- Reviewable memory changes that can be diffed, committed, rolled back, or migrated
-- Offline operation without RAG, embeddings, vector databases, cloud storage, or a background daemon
-
-## What It Provides
-
-- A project memory file protocol under `docs/memory/`
-- A reusable agent skill at `skills/memory-custodian/SKILL.md`
-- Platform entry snippets for Codex, Claude Code, Gemini, and generic agents
-- A small Python CLI for deterministic memory operations
-- Skill behavior eval scenarios under `evals/memory-custodian/`
-- Minimal templates for core memory files and optional templates for extra modules
-- Codex and Claude Code plugin metadata plus Gemini Agent Skill install support
-
 ## Installation
 
-MemoryCustodian currently supports local plugin and source-checkout workflows. The plugin bundle exposes the `memory-custodian` skill, the `scripts/memory-custodian` CLI wrapper, a Claude Code PATH wrapper at `bin/memory-custodian`, Gemini Agent Skill installation, and a lightweight session-start hook that reminds agents to perform manifest-first loading when project memory exists.
+MemoryCustodian supports local plugin and source-checkout workflows. The plugin bundle exposes the `memory-custodian` skill, CLI wrappers, platform snippets, and a lightweight session-start hook that reminds agents to load memory through the manifest.
 
 ### Codex Local Marketplace
 
@@ -100,6 +73,12 @@ codex plugin marketplace add .
 Then open `/plugins`, switch to `MemoryCustodian Dev`, and install `memory-custodian`.
 
 The repo marketplace points at this checkout, so local edits can be verified in a new Codex thread after reinstalling or refreshing the plugin.
+
+For older local Codex setups that only scan skill folders:
+
+```bash
+./install.sh codex
+```
 
 ### Claude Code Plugin
 
@@ -164,43 +143,9 @@ python3 -m pip install -e .
 memory-custodian status
 ```
 
-### Codex Skill Symlink Fallback
+## The Basic Workflow
 
-For older local Codex setups that only scan skill folders:
-
-```bash
-./install.sh codex
-```
-
-Or manually symlink the skill folder:
-
-```bash
-mkdir -p ~/.codex/skills
-ln -s "$PWD/skills/memory-custodian" ~/.codex/skills/memory-custodian
-```
-
-## Project Bootstrap
-
-A managed project should include a short agent entry point. Use one of:
-
-- `adapters/codex/AGENTS.snippet.md`
-- `adapters/claude-code/CLAUDE.snippet.md`
-- `adapters/gemini/GEMINI.snippet.md`
-- `adapters/generic/agent-instructions.md`
-
-Or initialize a project with a platform entry:
-
-```bash
-memory-custodian init --project-root /path/to/project --with-codex
-memory-custodian init --project-root /path/to/project --with-claude
-memory-custodian init --project-root /path/to/project --with-gemini
-```
-
-Custom memory directories, if explicitly configured, must still live under `docs/`.
-
-## CLI Usage
-
-Read a small context pack:
+Read a small context pack before substantial work:
 
 ```bash
 memory-custodian read --task planning
@@ -208,15 +153,10 @@ memory-custodian read --task implementation
 memory-custodian read --task artifact
 ```
 
-Add durable memory:
+Record durable memory when a decision, constraint, preference, or rejected approach should survive the current chat:
 
 ```bash
 memory-custodian add "We decided not to use RAG in the MVP." --type decision
-```
-
-Forget memory and add a tombstone:
-
-```bash
 memory-custodian forget "RAG as MVP architecture" --mode soft
 ```
 
@@ -229,64 +169,44 @@ memory-custodian enable profile/git
 memory-custodian enable area/frontend
 ```
 
-Enabling a `rules/`, `profiles/`, or `areas/` file also adds a short entry to `manifest.md`, so agents can discover optional memory without loading its contents.
-
-Create the optional starter files in one step when you want the scaffolding:
-
-```bash
-memory-custodian init --extended
-```
-
-Check memory health:
+Check, compact, or migrate the local memory set:
 
 ```bash
 memory-custodian status
 memory-custodian check
-```
-
-Compact memory:
-
-```bash
 memory-custodian compact
-memory-custodian compact --apply
-memory-custodian compact --target decisions.md
-memory-custodian compact --target decisions.md --apply
-```
-
-Use `compact` without `--target` for inbox cleanup. Use `compact --target <file>` when an active file is over budget; review the dry run before applying changes.
-
-Upgrade an existing memory folder to the current protocol:
-
-```bash
 memory-custodian migrate
-memory-custodian migrate --apply
 ```
 
-## Memory And Agent Layers
+Use `compact --apply` or `migrate --apply` only after reviewing the dry run.
 
-MemoryCustodian is repository-native project memory. It is separate from user-local memories that an agent platform may provide.
+## What's Inside
 
-Use the layers together:
+- `docs/memory/`: the project-local memory protocol and templates
+- `skills/memory-custodian/`: the reusable agent skill
+- `cli/memory_custodian/`: a small stdlib-only Python CLI for deterministic memory operations
+- `adapters/`: thin entry snippets for Codex, Claude Code, Gemini, and generic agents
+- `.codex-plugin/`, `.claude-plugin/`, and `.agents/`: local plugin marketplace metadata
+- `evals/memory-custodian/`: skill behavior scenarios and contract checks
+- `templates/`: minimal and optional memory module scaffolding
 
-- Use `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, or another platform entry file for instructions the agent must follow every time in a repository.
-- Use user-local agent memories, when available, for personal preferences and stable cross-project context.
-- Use MemoryCustodian for project-level decisions, constraints, rejected approaches, and task-routed context that should travel with the repository.
+## Philosophy
 
-## Non-Goals
+MemoryCustodian is designed around a few constraints:
 
-MemoryCustodian does not provide:
+- Keep project memory local, plain text, reviewable, and version-control friendly.
+- Keep agent entry files thin; do not copy full memory into `AGENTS.md`, `CLAUDE.md`, or `GEMINI.md`.
+- Let `manifest.md` decide what is relevant instead of loading every memory file by default.
+- Treat deletion as a first-class operation through tombstones in `do-not-use.md`.
+- Prefer deterministic CLI operations over background daemons or opaque platform memory.
 
-- RAG retrieval
-- embedding-based search
-- vector database storage
-- cloud-hosted memory
-- opaque platform-specific memory stores
-- chat log archiving
-- a background daemon
-- a default Git workflow
-- automatic full-context loading
+It deliberately avoids RAG retrieval, embedding indexes, vector databases, cloud-hosted memory, chat-log archiving, automatic full-context loading, and a required Git workflow.
 
-## Versioning And Updates
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for repository layout, local checks, packaging commands, and development notes.
+
+## Updating MemoryCustodian
 
 MemoryCustodian tracks three related versions:
 
@@ -294,63 +214,7 @@ MemoryCustodian tracks three related versions:
 - Protocol version: the `docs/memory/manifest.md` schema and loading rules.
 - Project memory version: the protocol metadata recorded in each initialized project.
 
-`memory-custodian check` reports old or missing protocol metadata. `memory-custodian migrate --apply` updates the project manifest without requiring network access.
-
-Memory operations are local-first and offline by default. Skill, plugin, and CLI installation or update flows may use online distribution channels such as GitHub, package managers, or agent plugin marketplaces.
-
-## Repository Layout
-
-```text
-MemoryCustodian/
-  .codex-plugin/plugin.json       # Codex plugin manifest
-  .claude-plugin/plugin.json      # Claude plugin metadata
-  .claude-plugin/marketplace.json # Claude local development marketplace metadata
-  GEMINI.md                       # Gemini context entry for this repository
-  .agents/plugins/marketplace.json # Repo-local plugin marketplace for testing
-  hooks/                          # Lightweight session-start bootstrap for plugin hosts
-  skills/memory-custodian/        # Reusable agent skill
-  adapters/                       # Codex, Claude Code, Gemini, and generic entry snippets
-  cli/memory_custodian/           # Python CLI implementation
-  bin/memory-custodian            # Claude plugin PATH wrapper
-  scripts/memory-custodian        # Plugin-safe CLI wrapper
-  scripts/package-codex-plugin.py # Deterministic Codex plugin archive builder
-  evals/memory-custodian/         # Skill behavior eval scenarios and contract checks
-  templates/minimal/              # Core protocol templates
-  templates/extended/             # Optional memory module scaffolding
-  docs/memory/                    # Dogfood memory for this repository
-  tests/                          # Focused stdlib unittest suite
-```
-
-## Development Checks
-
-Run the unit tests:
-
-```bash
-PYTHONPATH=cli python3 -m unittest discover -s tests
-```
-
-Check that the skill's core behavior contract and eval scenario pack have not drifted:
-
-```bash
-python3 scripts/check-skill-evals.py
-```
-
-Build a deterministic Codex plugin archive:
-
-```bash
-python3 scripts/package-codex-plugin.py --allow-dirty --output /tmp/memory-custodian.zip
-```
-
-## Principles
-
-- Read `manifest.md` before substantial project work.
-- Load `brief.md` first and only load other files when relevant.
-- Use the manifest optional module index to discover enabled `rules/`, `profiles/`, and `areas/` without loading their contents.
-- Keep `archive/` and `inbox.md` out of default context.
-- Keep `preferences.md`, `changelog.md`, `rules/`, `profiles/`, `areas/`, and `archive/` optional.
-- Prefer proposed memory updates unless the user explicitly asks to remember or forget something.
-- Treat deletion as a first-class operation through tombstones in `do-not-use.md`.
-- Keep all memory local, plain text, and version-control friendly.
+`memory-custodian check` reports old or missing protocol metadata. `memory-custodian migrate --apply` updates a project manifest without requiring network access.
 
 ## License
 
