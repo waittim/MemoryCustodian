@@ -2,7 +2,7 @@
 
 **Give your coding agents a project memory.**
 
-MemoryCustodian helps agents remember what matters: decisions, constraints, rejected ideas, and project context — across conversations, agents, platforms, and teams.
+MemoryCustodian helps agents remember what matters: decisions, constraints, rejected ideas, and project context — across sessions, agents, and teams
 
 It stores memory as plain Markdown in your repo and loads only the pieces needed for the current task.
 
