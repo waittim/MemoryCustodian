@@ -2,6 +2,9 @@
 
 Entries are newest first.
 
+## 2026-07-08
+- Prepared package and plugin version 0.6.0 for the Gemini adapter and target compaction release.
+
 ## 2026-07-05
 - Added target compaction for over-budget active memory files and semantically compacted decisions memory to stay within budget.
 

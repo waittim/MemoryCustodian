@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+## v0.6.0 - 2026-07-08
+
+### Memory Maintenance
+
+- Added `memory-custodian compact --target <file>` for deterministic review and compaction of over-budget active memory files.
+- Added target compaction guidance to `check`, `status`, Claude commands, and compaction policy docs.
+- Added tests for target compaction plans, archive output, duplicate bullet cleanup, and status/check guidance.
+
+### Gemini
+
+- Added Gemini bootstrap support through `GEMINI.md`, `adapters/gemini/`, `install.sh gemini`, `memory-custodian init --with-gemini`, and `--agent gemini`.
+- Added checks to keep `GEMINI.md` as a thin entry file instead of importing full memory content.
+
+### Documentation
+
+- Refined README initialization guidance, platform entry-file guidance, and contribution documentation.
+- Updated dogfood memory and minimal templates to reflect Gemini as a supported agent entry point.
+
 ## v0.5.0 - 2026-07-04
 
 ### Startup Bootstrap
