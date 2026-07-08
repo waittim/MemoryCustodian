@@ -61,6 +61,8 @@ def run(args) -> int:
         detail = f", {tokens} tokens"
         if budget is not None:
             detail += f"/{budget} max"
+        if state != "OK":
+            detail += f", run compact --target {name}"
         if name == "inbox.md":
             detail += f", {count_inbox_items(text)} items"
             if count_inbox_items(text) > 30:
@@ -82,6 +84,8 @@ def run(args) -> int:
         detail = f", {tokens} tokens"
         if budget is not None:
             detail += f"/{budget} max"
+        if state != "OK":
+            detail += f", run compact --target {name}"
         print(f"{name}: {state}{detail}")
         if state != "OK":
             exit_code = 1

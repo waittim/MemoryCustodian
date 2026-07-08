@@ -2,6 +2,9 @@
 
 Entries are newest first.
 
+## 2026-07-05
+- Added target compaction for over-budget active memory files and semantically compacted decisions memory to stay within budget.
+
 ## 2026-07-04
 - Added lightweight session-start bootstrap memory guidance, deterministic Codex archive packaging, Claude local marketplace metadata, and package/plugin version 0.5.0.
 - Changed dated memory entries to newest-first where appropriate: decisions, tombstones, and inbox candidates.

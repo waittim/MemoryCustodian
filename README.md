@@ -22,6 +22,18 @@ That gives teams:
 - Reviewable memory changes that can be diffed, committed, rolled back, or migrated
 - Offline operation without RAG, embeddings, vector databases, cloud storage, or a background daemon
 
+## How This Fits With Codex Memories
+
+Codex Memories are a user-local recall layer for carrying useful context from prior Codex threads into future work. They are useful for personal preferences, recurring workflows, and stable context learned from past sessions.
+
+MemoryCustodian targets a different scope: repository-native project memory. It stores durable project context in checked-in Markdown under `docs/memory/`, so teams and different coding agents can inspect, review, diff, commit, roll back, and migrate memory deliberately.
+
+Use these layers together:
+
+- Use `AGENTS.md` for instructions Codex must follow every time in a repository.
+- Use Codex Memories for personal or user-local recall across Codex threads.
+- Use MemoryCustodian for project-level decisions, constraints, rejected approaches, and task-routed context that should travel with the repository.
+
 ## What It Provides
 
 - A project memory file protocol under `docs/memory/`
@@ -148,6 +160,17 @@ Check memory health:
 memory-custodian status
 memory-custodian check
 ```
+
+Compact memory:
+
+```bash
+memory-custodian compact
+memory-custodian compact --apply
+memory-custodian compact --target decisions.md
+memory-custodian compact --target decisions.md --apply
+```
+
+Use `compact` without `--target` for inbox cleanup. Use `compact --target <file>` when an active file is over budget; review the dry run before applying changes.
 
 Upgrade an existing memory folder to the current protocol:
 

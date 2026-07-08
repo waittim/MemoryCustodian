@@ -85,6 +85,19 @@ class ReadStatusTests(unittest.TestCase):
             self.assertEqual(code, 0)
             self.assertIn("MemoryCustodian check: OK", out.getvalue())
 
+    def test_check_suggests_target_compaction_for_over_budget_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            memory = Path(tmp) / "docs" / "memory"
+            repeated = "\n".join("- Must keep duplicate constraint." for _ in range(120))
+            (memory / "constraints.md").write_text("# Constraints\n\n" + repeated + "\n", encoding="utf-8")
+
+            out = StringIO()
+            with redirect_stdout(out):
+                code = main(["check", "--project-root", tmp])
+            self.assertEqual(code, 1)
+            self.assertIn("memory-custodian compact --target constraints.md", out.getvalue())
+
     def test_check_reports_unindexed_optional_memory(self):
         with tempfile.TemporaryDirectory() as tmp:
             self.assertEqual(main(["init", "--project-root", tmp]), 0)

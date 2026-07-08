@@ -113,6 +113,7 @@ memory-custodian read --task planning
 memory-custodian add "..." --type decision
 memory-custodian enable rules/output
 memory-custodian compact --apply
+memory-custodian compact --target decisions.md
 memory-custodian forget "topic" --mode soft
 memory-custodian check
 memory-custodian migrate --apply

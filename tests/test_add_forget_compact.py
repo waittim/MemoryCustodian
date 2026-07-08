@@ -89,6 +89,74 @@ class AddForgetCompactTests(unittest.TestCase):
             tombstones = (memory / "do-not-use.md").read_text(encoding="utf-8")
             self.assertLess(tombstones.index("stale memory ordering"), tombstones.index("Tombstone: Full memory"))
 
+    def test_compact_target_archives_old_h2_entries(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            memory = Path(tmp) / "docs" / "memory"
+            entries = []
+            for index in range(12):
+                words = " ".join(f"word{index}_{number}" for number in range(80))
+                entries.append(
+                    f"## 2026-01-{index + 1:02d} - Decision marker {index}\n"
+                    f"Decision:\nKeep decision marker {index}. {words}\n"
+                    f"Reason:\nReason marker {index}."
+                )
+            (memory / "decisions.md").write_text("# Decisions\n\nEntries are newest first.\n\n" + "\n\n".join(entries) + "\n", encoding="utf-8")
+
+            out = StringIO()
+            with redirect_stdout(out):
+                self.assertEqual(main(["compact", "--project-root", tmp, "--target", "decisions.md"]), 0)
+            text = out.getvalue()
+            self.assertIn("Target: decisions.md", text)
+            self.assertIn("Archive entries:", text)
+            self.assertFalse((memory / "archive").exists())
+
+            self.assertEqual(main(["compact", "--project-root", tmp, "--target", "decisions.md", "--apply"]), 0)
+            active = (memory / "decisions.md").read_text(encoding="utf-8")
+            archive_files = sorted((memory / "archive").glob("decisions-*.md"))
+            self.assertEqual(len(archive_files), 1)
+            archived = archive_files[0].read_text(encoding="utf-8")
+            self.assertIn("Decision marker 11", archived)
+            self.assertNotIn("Decision marker 11", active)
+
+            out = StringIO()
+            with redirect_stdout(out):
+                self.assertEqual(main(["check", "--project-root", tmp]), 0)
+
+    def test_compact_target_dedupes_constraints(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            memory = Path(tmp) / "docs" / "memory"
+            repeated = "\n".join("- Must keep duplicate constraint." for _ in range(120))
+            (memory / "constraints.md").write_text("# Constraints\n\n" + repeated + "\n", encoding="utf-8")
+
+            out = StringIO()
+            with redirect_stdout(out):
+                self.assertEqual(main(["compact", "--project-root", tmp, "--target", "constraints.md"]), 0)
+            self.assertIn("remove 119 exact duplicate bullet(s)", out.getvalue())
+
+            self.assertEqual(main(["compact", "--project-root", tmp, "--target", "constraints.md", "--apply"]), 0)
+            constraints = (memory / "constraints.md").read_text(encoding="utf-8")
+            self.assertEqual(constraints.count("Must keep duplicate constraint"), 1)
+
+    def test_compact_target_changelog_does_not_reinflate_itself(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            self.assertEqual(main(["enable", "changelog", "--project-root", tmp]), 0)
+            memory = Path(tmp) / "docs" / "memory"
+            entries = []
+            for index in range(12):
+                words = " ".join(f"change{index}_{number}" for number in range(80))
+                entries.append(f"## 2026-01-{index + 1:02d}\n- Changelog marker {index}. {words}")
+            (memory / "changelog.md").write_text("# Memory Changelog\n\nEntries are newest first.\n\n" + "\n\n".join(entries) + "\n", encoding="utf-8")
+
+            self.assertEqual(main(["compact", "--project-root", tmp, "--target", "changelog.md", "--apply"]), 0)
+            out = StringIO()
+            with redirect_stdout(out):
+                self.assertEqual(main(["check", "--project-root", tmp]), 0)
+            active = (memory / "changelog.md").read_text(encoding="utf-8")
+            self.assertNotIn("Compacted changelog.md", active)
+
     def test_add_rule_creates_optional_rule_file(self):
         with tempfile.TemporaryDirectory() as tmp:
             self.assertEqual(main(["init", "--project-root", tmp]), 0)

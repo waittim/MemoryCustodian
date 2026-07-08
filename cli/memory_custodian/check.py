@@ -105,7 +105,7 @@ def run(args) -> int:
             continue
         tokens = estimate_tokens(_read(path))
         if tokens > budget:
-            issues.append(f"{relative}: over budget ({tokens}/{budget} tokens)")
+            issues.append(f"{relative}: over budget ({tokens}/{budget} tokens); run `memory-custodian compact --target {relative}`")
 
     inbox = memory_dir / "inbox.md"
     if inbox.exists():
