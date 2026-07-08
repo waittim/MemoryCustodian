@@ -21,14 +21,26 @@ This is project memory, not chat history.
 
 ## Quickstart
 
-Pick the install path that matches your agent:
+Just ask your coding agent:
+
+```text
+Install the MemoryCustodian skill from https://github.com/waittim/MemoryCustodian, then initialize it.
+```
+
+Or pick the install path that matches your agent:
 
 - [Codex local marketplace](#codex-local-marketplace)
 - [Claude Code plugin](#claude-code-plugin)
 - [Gemini Agent Skill](#gemini-agent-skill)
 - [Source checkout / CLI](#source-checkout)
 
-After installation, initialize each target project once with the CLI wrapper for your install path. Use `--with-codex`, `--with-claude`, `--with-gemini`, or `--agent all` to add short platform entries.
+After installation, run `init` once for each target project:
+
+```bash
+memory-custodian init --project-root /path/to/project --agent all
+```
+
+Use `--agent codex`, `--agent claude`, `--agent gemini`, or `--agent all` to create the small bootstrap file(s) your agent reads.
 
 The default initializer creates the core protocol:
 
@@ -60,12 +72,16 @@ The result is project memory that is inspectable, diffable, portable across agen
 
 MemoryCustodian currently supports local plugin and source-checkout workflows. The plugin bundle exposes the `memory-custodian` skill, CLI wrappers, platform snippets, and a lightweight session-start hook that reminds agents to load memory through the manifest.
 
-| Host | Best path |
-| --- | --- |
-| Codex App or CLI | Repo-local marketplace from this checkout |
-| Claude Code | Plugin directory for local testing, or personal skill install |
-| Gemini-style agents | Agent Skill installed into the personal skills directory |
-| Any shell | Source checkout wrapper or editable Python install |
+
+| Host                | Best path                                                     |
+| ------------------- | ------------------------------------------------------------- |
+| Codex App or CLI    | Repo-local marketplace from this checkout                     |
+| Claude Code         | Plugin directory for local testing, or personal skill install |
+| Gemini-style agents | Agent Skill installed into the personal skills directory      |
+| Any shell           | Source checkout wrapper or editable Python install            |
+
+
+
 
 ### Codex Local Marketplace
 
@@ -82,6 +98,8 @@ The repo marketplace points at this checkout, so local edits can be verified in 
 Older local Codex setups that only scan skill folders can run `./install.sh codex`.
 
 ### Claude Code Plugin
+
+Requires the Claude Code CLI to be installed and available on `PATH`.
 
 For local Claude Code plugin testing from this checkout:
 
@@ -104,6 +122,8 @@ To make the plugin available in future Claude Code sessions without passing `--p
 This symlinks the repository root into `${CLAUDE_HOME:-$HOME/.claude}/skills/memory-custodian`. When the plugin is enabled, `bin/memory-custodian` exposes the bundled CLI wrapper to Claude Code's Bash tool.
 
 ### Gemini Agent Skill
+
+Requires Gemini CLI or a compatible Gemini-style skill manager to be installed and available on `PATH`.
 
 For Gemini CLI or compatible Gemini-style agents that discover Agent Skills, install the skill into the personal skills directory:
 
@@ -128,17 +148,20 @@ For direct local development without a plugin browser, use the bundled wrapper:
 ```bash
 scripts/memory-custodian --help
 scripts/memory-custodian init --project-root /path/to/project --agent all
-scripts/memory-custodian status
-scripts/memory-custodian read --task planning
+scripts/memory-custodian status --project-root /path/to/project
+scripts/memory-custodian read --project-root /path/to/project --task planning
 ```
 
-Or install editable and use the console script:
+Or install editable with Python 3.10+ and use the console script:
 
 ```bash
 python3 -m pip install -e .
 memory-custodian init --project-root /path/to/project --agent all
-memory-custodian status
+memory-custodian status --project-root /path/to/project
+memory-custodian read --project-root /path/to/project --task planning
 ```
+
+
 
 ## What Runs Automatically
 
@@ -199,6 +222,8 @@ Use `compact --apply` or `migrate --apply` only after reviewing the dry run.
 - Install and update flows may use normal plugin marketplace or package distribution channels.
 - Deletion and avoidance are explicit through `do-not-use.md` tombstones.
 
+
+
 ## What's Inside
 
 - `docs/memory/`: this repository's dogfood memory set
@@ -209,6 +234,8 @@ Use `compact --apply` or `migrate --apply` only after reviewing the dry run.
 - `evals/memory-custodian/`: skill behavior scenarios and contract checks
 - `examples/`: small project layouts for common host environments
 - `templates/`: minimal and optional memory module scaffolding
+
+
 
 ## Contributing
 
