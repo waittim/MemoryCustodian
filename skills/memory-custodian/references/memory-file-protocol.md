@@ -88,6 +88,7 @@ Recommended maximums:
 
 - `brief.md`: 500 tokens
 - `decisions.md`: 800 tokens
+- each decision entry: 120 tokens recommended maximum, including title, decision, and reason
 - `constraints.md`: 400 tokens
 - `preferences.md`: 300 tokens
 - `do-not-use.md`: 400 tokens
@@ -106,11 +107,11 @@ Defines how agents should load memory, which files are default, and which files 
 
 ### brief.md
 
-The only default memory file. Keep it short, current, and focused on the active project direction.
+The only default memory file. Keep it short, current, and focused on project purpose, system shape, and active direction. A generated TODO or protocol description is not a valid project brief.
 
 ### decisions.md
 
-Confirmed decisions with date, decision, and reason. Do not store brainstorming as decisions. Keep entries newest first so the most recent decisions survive budget trimming.
+Cross-cutting confirmed decisions with date, decision, and reason. Keep each entry within 120 tokens: one or two sentences for the choice and one sentence for the reason. Move supporting implementation detail elsewhere. Do not store brainstorming or subsystem-only choices here. Update or supersede older entries when the decision changes.
 
 ### constraints.md
 
@@ -118,7 +119,7 @@ Hard requirements. These should be treated as stronger than preferences.
 
 ### preferences.md
 
-Optional soft user or project preferences. These guide choices but can be overridden by explicit user requests.
+Optional soft user or project preferences. These guide choices but can be overridden by explicit user requests. Do not place machine-specific paths in shared memory without confirmation.
 
 ### do-not-use.md
 
@@ -142,7 +143,7 @@ Optional workflow-specific rules. Keep Git, release, ticket, docs, and research 
 
 ### areas/
 
-Optional area-specific memory for monorepos or large projects. List enabled area files in the manifest optional module index, then load area files only when the task touches that area.
+Optional area-specific memory for subsystems, monorepos, or large projects. Prefer an area over root decisions when a choice or invariant applies only to that subsystem. List enabled area files in the manifest optional module index, then load area files only when the task touches that area.
 
 ### archive/
 

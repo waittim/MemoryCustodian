@@ -2,6 +2,11 @@
 
 Entries are newest first.
 
+## 2026-07-12
+- Prepared package 0.7.0 and protocol 0.5 with curated-brief checks, scope-first area memory, per-decision length guards, budget warnings, and semantic compaction safeguards.
+- Corrected Codex marketplace local-source metadata and aligned README installation, plugin contents, task loading, and refresh guidance with the packaged behavior.
+- Migrated the dogfood manifest, recorded the production-memory decision, and archived one older decision already preserved by active brief and constraints.
+
 ## 2026-07-08
 - Prepared package and plugin version 0.6.0 for the Gemini adapter and target compaction release.
 

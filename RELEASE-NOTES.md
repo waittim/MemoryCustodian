@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+## v0.7.0 - 2026-07-12
+
+### Memory Quality
+
+- Replaced protocol-centric initialization content with a project brief scaffold and empty project-memory files.
+- Added status/check detection for uncurated briefs and warnings for machine-specific paths in shared preferences.
+- Added post-write budget reporting and 80% warnings.
+- Added a 120-token per-decision write gate, long-entry health checks, and explicit `--allow-long` exceptions.
+
+### Routing And Compaction
+
+- Added area-scoped decision writes with `add --type decision --area <name>` and documented scope-first memory routing.
+- Load root decisions for implementation, execution, and debugging under protocol 0.5.
+- Added a semantic safety gate requiring `--archive-oldest` before age-based decision archival.
+
+### Skill Evals
+
+- Added initialization-quality, scoped-update, and semantic-compaction scenarios based on production memory findings.
+
 ## v0.6.0 - 2026-07-08
 
 ### Memory Maintenance

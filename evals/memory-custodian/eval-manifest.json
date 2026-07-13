@@ -7,6 +7,10 @@
     "session-bootstrap",
     "startup-loading",
     "memory-update",
+    "concise-decision",
+    "project-initialization",
+    "scoped-memory-update",
+    "semantic-compaction",
     "forgetting",
     "optional-modules"
   ],
@@ -41,6 +45,36 @@
       "terms": [
         "keep platform entry files such as `AGENTS.md`, `CLAUDE.md`, and `GEMINI.md` short",
         "Write durable memory only when it is project-level"
+      ]
+    },
+    {
+      "id": "project-brief-quality",
+      "terms": [
+        "curate it from authoritative project files",
+        "Keep `brief.md` about the project, not MemoryCustodian."
+      ]
+    },
+    {
+      "id": "scope-first-routing",
+      "terms": [
+        "Classify scope before content type.",
+        "reserve root `decisions.md` for cross-cutting choices",
+        "matched `areas/*.md`"
+      ]
+    },
+    {
+      "id": "semantic-compaction",
+      "terms": [
+        "Treat decision compaction as semantic maintenance, not chronological trimming.",
+        "Retain every active invariant"
+      ]
+    },
+    {
+      "id": "concise-decision-entry",
+      "terms": [
+        "Keep each decision entry at or below 120 tokens",
+        "Never truncate mechanically; rewrite semantically.",
+        "Use `--allow-long` only when splitting would lose essential decision semantics."
       ]
     },
     {

@@ -37,7 +37,8 @@ If no manifest exists, continue normally and offer initialization only when usef
 7. Respect `do-not-use.md` and tombstones before proposing plans or implementations.
 8. Never load `archive/` unless the user explicitly asks or the task is archive maintenance.
 9. Do not load `inbox.md` unless compacting, auditing unsorted memory, or asked by the user.
-10. After meaningful decisions, repeated corrections, or rejected approaches, update the appropriate memory file or propose a concise update.
+10. If `brief.md` is still a generated scaffold, curate it from authoritative project files before relying on it.
+11. After meaningful decisions, repeated corrections, or rejected approaches, update the appropriate memory file or propose a concise update.
 
 ## Memory Files
 
@@ -60,7 +61,7 @@ Use the smallest set that can answer the task:
 
 - General continuation: `brief.md`
 - Architecture or planning: `brief.md`, `decisions.md`, `constraints.md`, `do-not-use.md`
-- Implementation or debugging: `brief.md`, `constraints.md`, `do-not-use.md`, and `preferences.md` if present
+- Implementation or debugging: `brief.md`, `decisions.md`, `constraints.md`, `do-not-use.md`, matched `areas/*.md`, and `preferences.md` if present
 - User-facing artifacts: `brief.md`, `do-not-use.md`, `rules/output.md` if present, and `preferences.md` if present
 - Preferences: `brief.md`, `preferences.md` if present
 - Memory status or history: `brief.md`, `decisions.md`, and `changelog.md` if present
@@ -71,7 +72,10 @@ Use the smallest set that can answer the task:
 
 Write durable memory only when it is project-level and likely to matter later.
 
-- Confirmed choices go to `decisions.md`.
+- Classify scope before content type. Put subsystem-specific choices and invariants in the matched `areas/<name>.md`; reserve root `decisions.md` for cross-cutting choices.
+- Update, merge, or mark an existing entry superseded when a new choice changes it; do not append a contradictory duplicate.
+- Keep active invariants reachable from normal task loading. Promote them to `brief.md`, `constraints.md`, or a matched area before archiving history.
+- Confirmed cross-cutting choices go to `decisions.md`.
 - Hard limits go to `constraints.md`.
 - Style or workflow preferences go to `preferences.md`.
 - Rejected options and deletion guards go to `do-not-use.md`.
@@ -80,7 +84,23 @@ Write durable memory only when it is project-level and likely to matter later.
 - Area-specific context goes to `areas/`.
 - Unsorted or uncertain notes go to `inbox.md`.
 
-For sensitive, personal, credential-like, or private information, ask before writing. When unsure whether a note is durable, propose the update instead of writing it.
+Keep each decision entry at or below 120 tokens, including its title, `Decision`, and `Reason`. Use one or two sentences for the decision and one sentence for the reason. Move implementation detail, examples, and long implications into constraints, matched area context, or source documentation. Never truncate mechanically; rewrite semantically. Use `--allow-long` only when splitting would lose essential decision semantics.
+
+Keep `brief.md` about the project, not MemoryCustodian. Refresh it after initialization and when the project purpose, system shape, or current direction materially changes.
+
+For sensitive, personal, credential-like, private, or machine-specific information, ask before writing. Do not commit workstation paths as shared project preferences without confirmation. When unsure whether a note is durable, propose the update instead of writing it.
+
+After writing, check the target budget. At 80% or above, consolidate or split by area before adding more entries.
+
+## Compaction Safety
+
+Treat decision compaction as semantic maintenance, not chronological trimming. Before applying age-based archival:
+
+1. Shorten decision entries over 120 tokens without losing the choice or reason.
+2. Merge duplicates and mark superseded decisions.
+3. Move scoped knowledge to matched areas.
+4. Retain every active invariant in `brief.md`, `constraints.md`, root decisions, or a matched area.
+5. Review the CLI dry run, then use explicit archival confirmation only if the remaining archive candidates are historical.
 
 ## Forgetting
 
@@ -100,6 +120,7 @@ Load these only when needed:
 - `references/manifest-policy.md`: manifest routing and loading policy.
 - `references/platform-adapters.md`: Codex, Claude Code, Gemini, and generic agent entry patterns.
 - `references/compaction-policy.md`: how to reduce inbox and long files safely.
+- `references/quality-audit.md`: how to audit usefulness, routing, scope, freshness, and portability.
 - `references/forgetting-policy.md`: soft forget, hard forget, purge, and tombstones.
 - `references/examples.md`: example memory files and context packs.
 
@@ -111,9 +132,12 @@ If the project has the CLI installed, prefer deterministic commands for routine 
 memory-custodian status
 memory-custodian read --task planning
 memory-custodian add "..." --type decision
+memory-custodian add "..." --type decision --area sync --reason "..."
+memory-custodian add "..." --type decision --allow-long
 memory-custodian enable rules/output
 memory-custodian compact --apply
 memory-custodian compact --target decisions.md
+memory-custodian compact --target decisions.md --apply --archive-oldest
 memory-custodian forget "topic" --mode soft
 memory-custodian check
 memory-custodian migrate --apply

@@ -18,10 +18,10 @@ For an over-budget active file, run a target dry run:
 memory-custodian compact --target decisions.md
 ```
 
-Apply only after reviewing the plan:
+First shorten decisions over 120 tokens, merge superseded entries, move subsystem knowledge into matched areas, and retain active invariants in normal loading paths. Then apply only after reviewing the plan:
 
 ```bash
-memory-custodian compact --target decisions.md --apply
+memory-custodian compact --target decisions.md --apply --archive-oldest
 ```
 
 For semantic compaction, read `skills/memory-custodian/references/compaction-policy.md` and update memory files directly.

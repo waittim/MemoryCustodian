@@ -14,3 +14,4 @@ Current direction:
 - Keep default initialization minimal: manifest, brief, decisions, constraints, do-not-use, and inbox.
 - Keep optional preferences, changelog, rules, profiles, areas, and archive disabled until needed.
 - Keep context packs small and manifest-driven; default to `brief.md` only.
+- Keep memory useful through real project briefs, concise scope-first decisions, and semantic review before decision archival.

@@ -5,6 +5,7 @@ from __future__ import annotations
 from .protocol import (
     append_changelog,
     manifest_with_current_protocol_metadata,
+    manifest_with_current_task_routing,
     manifest_with_optional_index,
     resolve_memory_dir,
     resolve_project_root,
@@ -25,10 +26,13 @@ def run(args) -> int:
 
     original = manifest_path.read_text(encoding="utf-8")
     updated, metadata_changed = manifest_with_current_protocol_metadata(original)
+    updated, routing_changed = manifest_with_current_task_routing(updated)
     updated, index_changed = manifest_with_optional_index(updated)
     changes: list[str] = []
     if metadata_changed:
         changes.append("manifest.md: add/update MemoryCustodian Protocol metadata")
+    if routing_changed:
+        changes.append("manifest.md: load decisions.md for implementation, execution, and debugging")
     if index_changed:
         changes.append("manifest.md: add/update optional module index")
 

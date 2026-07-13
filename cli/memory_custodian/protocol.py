@@ -23,15 +23,35 @@ BUDGETS = {
     "changelog.md": 800,
 }
 
+DECISION_ENTRY_BUDGET = 120
+
 TASK_FILE_MAP = {
     "default": [("brief.md", True)],
     "general": [("brief.md", True)],
     "planning": [("brief.md", True), ("decisions.md", True), ("constraints.md", True), ("do-not-use.md", True)],
     "architecture": [("brief.md", True), ("decisions.md", True), ("constraints.md", True), ("do-not-use.md", True)],
     "refactoring": [("brief.md", True), ("decisions.md", True), ("constraints.md", True), ("do-not-use.md", True)],
-    "implementation": [("brief.md", True), ("constraints.md", True), ("do-not-use.md", True), ("preferences.md", False)],
-    "execution": [("brief.md", True), ("constraints.md", True), ("do-not-use.md", True), ("preferences.md", False)],
-    "debugging": [("brief.md", True), ("constraints.md", True), ("do-not-use.md", True), ("preferences.md", False)],
+    "implementation": [
+        ("brief.md", True),
+        ("decisions.md", True),
+        ("constraints.md", True),
+        ("do-not-use.md", True),
+        ("preferences.md", False),
+    ],
+    "execution": [
+        ("brief.md", True),
+        ("decisions.md", True),
+        ("constraints.md", True),
+        ("do-not-use.md", True),
+        ("preferences.md", False),
+    ],
+    "debugging": [
+        ("brief.md", True),
+        ("decisions.md", True),
+        ("constraints.md", True),
+        ("do-not-use.md", True),
+        ("preferences.md", False),
+    ],
     "artifact": [("brief.md", True), ("rules/output.md", False), ("preferences.md", False), ("do-not-use.md", True)],
     "output": [("brief.md", True), ("rules/output.md", False), ("preferences.md", False), ("do-not-use.md", True)],
     "preferences": [("brief.md", True), ("preferences.md", False)],
@@ -109,6 +129,23 @@ Discover optional memory without loading it. Entries here are not default loads.
 - None enabled.
 """
 OPTIONAL_INDEX_PATH_RE = re.compile(r"`((?:rules|profiles|areas)/[^`]+\.md)`")
+
+LEGACY_IMPLEMENTATION_SECTION = """### Implementation / execution / debugging
+Load:
+- constraints.md
+- do-not-use.md
+Load if present:
+- preferences.md
+"""
+
+CURRENT_IMPLEMENTATION_SECTION = """### Implementation / execution / debugging
+Load:
+- decisions.md
+- constraints.md
+- do-not-use.md
+Load if present:
+- preferences.md
+"""
 
 DEFAULT_OPTIONAL_TRIGGERS = {
     "rules/output.md": "Load for user-facing artifacts, publishable text, or copied output.",
@@ -311,6 +348,17 @@ def manifest_with_current_protocol_metadata(manifest: str) -> tuple[str, bool]:
     return manifest_with_protocol_metadata(manifest, CURRENT_PACKAGE_LABEL)
 
 
+def manifest_with_current_task_routing(manifest: str) -> tuple[str, bool]:
+    """Upgrade the generated 0.4 implementation route without overriding custom manifests."""
+
+    if CURRENT_IMPLEMENTATION_SECTION in manifest:
+        return manifest, False
+    if LEGACY_IMPLEMENTATION_SECTION not in manifest:
+        return manifest, False
+    updated = manifest.replace(LEGACY_IMPLEMENTATION_SECTION, CURRENT_IMPLEMENTATION_SECTION, 1)
+    return ensure_newline(updated), True
+
+
 def existing_memory_files(memory_dir: Path) -> list[Path]:
     return [memory_dir / name for name in ALL_TEMPLATE_FILES if (memory_dir / name).exists()]
 
@@ -339,6 +387,26 @@ def count_inbox_items(text: str) -> int:
 
 def count_h2_entries(text: str) -> int:
     return sum(1 for line in text.splitlines() if line.startswith("## "))
+
+
+def decision_entry_sizes(text: str) -> list[tuple[str, int]]:
+    """Return titles and token sizes for H2 sections that contain a Decision field."""
+
+    lines = text.rstrip().splitlines()
+    starts = [index for index, line in enumerate(lines) if line.startswith("## ")]
+    entries: list[tuple[str, int]] = []
+    for position, start in enumerate(starts):
+        end = starts[position + 1] if position + 1 < len(starts) else len(lines)
+        section = lines[start:end]
+        if not any(line.strip() == "Decision:" for line in section[1:]):
+            continue
+        title = section[0][3:].strip()
+        entries.append((title, estimate_tokens("\n".join(section))))
+    return entries
+
+
+def long_decision_entries(text: str, budget: int = DECISION_ENTRY_BUDGET) -> list[tuple[str, int]]:
+    return [(title, tokens) for title, tokens in decision_entry_sizes(text) if tokens > budget]
 
 
 def budget_for(name: str) -> int | None:

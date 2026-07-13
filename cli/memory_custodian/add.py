@@ -5,8 +5,11 @@ from __future__ import annotations
 from pathlib import Path
 
 from .protocol import (
+    DECISION_ENTRY_BUDGET,
     append_changelog,
     append_text,
+    budget_for,
+    estimate_tokens,
     is_indexable_optional_path,
     is_safe_memory_name,
     manifest_with_optional_module_index,
@@ -28,6 +31,7 @@ TARGETS = {
 }
 
 NEWEST_FIRST_TYPES = {"decision", "tombstone", "do-not-use", "inbox"}
+AREA_SCOPED_TYPES = {"decision", "constraint", "preference", "tombstone", "do-not-use"}
 
 
 def _title(message: str) -> str:
@@ -57,11 +61,13 @@ def _entry(kind: str, message: str, reason: str | None) -> str:
     return f"## {current_date}\n- {message}"
 
 
-def _ensure_target(path: Path, kind: str, name: str | None) -> None:
+def _ensure_target(path: Path, kind: str, name: str | None, area: str | None = None) -> None:
     if path.exists():
         return
     current_date = today()
-    if kind == "preference":
+    if area:
+        write_text(path, render_area_template(area, current_date))
+    elif kind == "preference":
         write_text(path, render_template("preferences.md", current_date))
     elif kind == "rule" and name:
         write_text(path, render_rule_template(name, current_date))
@@ -69,6 +75,39 @@ def _ensure_target(path: Path, kind: str, name: str | None) -> None:
         write_text(path, render_profile_template(name, current_date))
     elif kind == "area" and name:
         write_text(path, render_area_template(name, current_date))
+
+
+def _report_budget(path: Path, target: str) -> None:
+    budget = budget_for(target)
+    if budget is None:
+        return
+    tokens = estimate_tokens(path.read_text(encoding="utf-8"))
+    print(f"Budget: {target} {tokens}/{budget} tokens")
+    if tokens > budget:
+        print(f"Warning: {target} is over its context budget.")
+        if target == "decisions.md":
+            print("Next: consolidate or relocate scoped decisions before considering age-based archival.")
+        else:
+            print(f"Next: review `memory-custodian compact --target {target}`.")
+    elif tokens * 5 >= budget * 4:
+        print(f"Warning: {target} has reached at least 80% of its context budget.")
+
+
+def _check_decision_entry_budget(entry: str, allow_long: bool) -> bool:
+    tokens = estimate_tokens(entry)
+    print(f"Decision entry budget: {tokens}/{DECISION_ENTRY_BUDGET} tokens")
+    if tokens > DECISION_ENTRY_BUDGET and not allow_long:
+        print(
+            "Not added: shorten Decision to one or two sentences and Reason to one sentence; "
+            "move supporting detail to constraints, matched area context, or source documentation."
+        )
+        print("Use --allow-long only when splitting would lose essential decision semantics.")
+        return False
+    if tokens > DECISION_ENTRY_BUDGET:
+        print("Warning: adding an explicitly allowed long decision entry.")
+    elif tokens * 5 >= DECISION_ENTRY_BUDGET * 4:
+        print("Warning: decision entry has reached at least 80% of its recommended budget.")
+    return True
 
 
 def run(args) -> int:
@@ -79,7 +118,22 @@ def run(args) -> int:
         return 1
 
     kind = args.type
-    if kind in {"rule", "profile", "area"}:
+    if args.allow_long and kind != "decision":
+        print("--allow-long can only be used when --type is decision")
+        return 1
+    scoped_area = args.area
+    if scoped_area:
+        if args.name:
+            print("--area and --name cannot be used together")
+            return 1
+        if kind not in AREA_SCOPED_TYPES:
+            print(f"--area cannot be used when --type is {kind}")
+            return 1
+        if not is_safe_memory_name(scoped_area):
+            print(f"Invalid area name: {scoped_area}")
+            return 1
+        target = f"areas/{scoped_area}.md"
+    elif kind in {"rule", "profile", "area"}:
         if not args.name:
             print(f"--name is required when --type is {kind}")
             return 1
@@ -90,9 +144,11 @@ def run(args) -> int:
         target = f"{folder}/{args.name}.md"
     else:
         target = TARGETS[kind]
-    target_path = memory_dir / target
-    _ensure_target(target_path, kind, args.name)
     entry = _entry(kind, args.message, args.reason)
+    if kind == "decision" and not _check_decision_entry_budget(entry, args.allow_long):
+        return 1
+    target_path = memory_dir / target
+    _ensure_target(target_path, kind, args.name, scoped_area)
     if kind in NEWEST_FIRST_TYPES:
         remove_lines = ("No unprocessed memory candidates.",) if kind == "inbox" else ()
         prepend_text(target_path, entry, remove_lines=remove_lines)
@@ -108,4 +164,5 @@ def run(args) -> int:
     print(f"Added {kind} memory to {target_path}")
     if indexed:
         print(f"Indexed optional memory in {manifest_path}")
+    _report_budget(target_path, target)
     return 0

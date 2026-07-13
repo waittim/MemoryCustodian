@@ -5,10 +5,12 @@ from __future__ import annotations
 from pathlib import Path, PurePosixPath
 
 from .protocol import (
+    DECISION_ENTRY_BUDGET,
     append_changelog,
     append_text,
     budget_for,
     estimate_tokens,
+    long_decision_entries,
     prepend_text,
     resolve_memory_dir,
     resolve_project_root,
@@ -176,6 +178,16 @@ def _write_archive_entries(memory_dir: Path, target: str, archived_sections: lis
         write_text(archive_path, f"# Archived Memory: {target}\n\n{body}\n")
 
 
+def _print_long_decision_entries(entries: list[tuple[str, int]]) -> None:
+    if not entries:
+        return
+    print(f"Long decision entries: {len(entries)} over {DECISION_ENTRY_BUDGET} tokens")
+    for title, tokens in entries[:10]:
+        print(f"- {title}: {tokens} tokens")
+    if len(entries) > 10:
+        print(f"- ... and {len(entries) - 10} more")
+
+
 def _run_target_compaction(args, memory_dir: Path) -> int:
     target, path = _target_path(memory_dir, args.target)
     if not path.exists():
@@ -185,12 +197,20 @@ def _run_target_compaction(args, memory_dir: Path) -> int:
     budget = budget_for(target)
     original = path.read_text(encoding="utf-8")
     tokens = estimate_tokens(original)
+    long_entries = long_decision_entries(original)
 
     print("# Target Compaction Plan")
     print(f"Target: {target}")
     print(f"Current tokens: {tokens}/{budget} max")
+    _print_long_decision_entries(long_entries)
     if tokens <= budget:
-        print("Status: OK")
+        if long_entries:
+            print(
+                "Manual review required: shorten long decisions semantically; "
+                "move supporting detail to constraints, matched area context, or source documentation."
+            )
+        else:
+            print("Status: OK")
         return 0
 
     working = original
@@ -231,9 +251,33 @@ def _run_target_compaction(args, memory_dir: Path) -> int:
             print(f"Archive entries: {len(plan['archived'])}")
             print(f"Archive path: {archive_path}")
             print(f"Projected tokens: {plan['projected']}/{budget} max")
+            kept_long_entries: list[tuple[str, int]] = []
+            if target == "decisions.md":
+                kept_long_entries = long_decision_entries(plan["compacted"])
+                if kept_long_entries:
+                    print(
+                        f"Kept long entries: {len(kept_long_entries)} still exceed "
+                        f"{DECISION_ENTRY_BUDGET} tokens and require semantic shortening."
+                    )
+                print(
+                    "Semantic review required: merge superseded entries and retain active invariants "
+                    "in brief.md, constraints.md, or matched areas before archival."
+                )
             if not args.apply:
-                print("Dry run only. Re-run with --apply after reviewing the plan.")
+                if target == "decisions.md":
+                    print("Dry run only. After semantic review, re-run with --apply --archive-oldest.")
+                else:
+                    print("Dry run only. Re-run with --apply after reviewing the plan.")
                 return 0
+            if target == "decisions.md" and kept_long_entries:
+                print("Not applied: shorten the kept long decisions before age-based archival.")
+                return 1
+            if target == "decisions.md" and not args.archive_oldest:
+                print(
+                    "Not applied: re-run with --archive-oldest only after confirming the oldest entries "
+                    "contain no active invariant that would become unreachable."
+                )
+                return 1
 
             write_text(path, plan["compacted"])
             _write_archive_entries(memory_dir, target, plan["archived"])

@@ -3,19 +3,25 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 
 from .protocol import (
     CURRENT_PROTOCOL_VERSION,
+    DECISION_ENTRY_BUDGET,
     budget_for,
     compare_versions,
     count_inbox_items,
     estimate_tokens,
+    long_decision_entries,
     optional_index_paths,
     protocol_metadata,
     resolve_memory_dir,
     resolve_project_root,
 )
-from .templates import CORE_FILES
+from .templates import CORE_FILES, brief_needs_curation
+
+
+LOCAL_PATH_RE = re.compile(r"(?:/Users/|/home/|/Volumes/|[A-Za-z]:[\\/])")
 
 
 def _read(path: Path) -> str:
@@ -98,6 +104,10 @@ def run(args) -> int:
     if manifest:
         issues.extend(_manifest_mentions_required_policy(manifest))
 
+    brief = _read(memory_dir / "brief.md")
+    if brief and brief_needs_curation(brief):
+        issues.append("brief.md: generated scaffold still needs real project purpose, direction, and system context")
+
     for path in sorted(memory_dir.rglob("*.md")):
         relative = path.relative_to(memory_dir).as_posix()
         if relative.startswith("archive/"):
@@ -108,6 +118,11 @@ def run(args) -> int:
         tokens = estimate_tokens(_read(path))
         if tokens > budget:
             issues.append(f"{relative}: over budget ({tokens}/{budget} tokens); run `memory-custodian compact --target {relative}`")
+        for title, entry_tokens in long_decision_entries(_read(path)):
+            issues.append(
+                f"{relative}: decision {title!r} is too long ({entry_tokens}/{DECISION_ENTRY_BUDGET} tokens); "
+                "shorten it semantically and move supporting detail outside the decision entry"
+            )
 
     inbox = memory_dir / "inbox.md"
     if inbox.exists():
@@ -115,9 +130,11 @@ def run(args) -> int:
         if inbox_items > 30:
             warnings.append(f"inbox.md: {inbox_items} items, compaction recommended")
 
-    do_not_use = memory_dir / "do-not-use.md"
-    if do_not_use.exists() and "Tombstone:" not in _read(do_not_use):
-        warnings.append("do-not-use.md: no tombstones recorded")
+    preferences = memory_dir / "preferences.md"
+    if preferences.exists() and LOCAL_PATH_RE.search(_read(preferences)):
+        warnings.append(
+            "preferences.md: contains a machine-specific absolute path; confirm it belongs in shared project memory"
+        )
 
     indexed_optional_paths = optional_index_paths(manifest)
     for folder in ("rules", "profiles", "areas"):

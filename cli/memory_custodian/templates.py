@@ -46,6 +46,7 @@ Load:
 
 ### Implementation / execution / debugging
 Load:
+- decisions.md
 - constraints.md
 - do-not-use.md
 Load if present:
@@ -114,46 +115,24 @@ Discover optional memory without loading it. Entries here are not default loads.
 """,
     "brief.md": """# Project Brief
 
-This project uses MemoryCustodian to maintain local, plain-text project memory.
+Purpose:
+- TODO: Describe what this project does and who it serves.
 
-Current status:
-- Minimal memory protocol is enabled.
-- Durable memory lives in `{memory_dir}`.
-- `AGENTS.md`, `CLAUDE.md`, and `GEMINI.md` should stay short and only point to this memory folder.
+Current direction:
+- TODO: Describe the current product or engineering priorities.
 
-Default behavior:
-- Load `manifest.md`.
-- Load `brief.md`.
-- Load additional memory files only when relevant.
+System shape:
+- TODO: Name the runtime, architecture, and external boundaries that matter across tasks.
 """,
     "decisions.md": """# Decisions
 
 Entries are newest first.
-
-## {date} - Use MemoryCustodian
-Decision:
-Use local Markdown files under `{memory_dir}` for durable project memory. Keep platform entry files short bootstraps.
-
-Reason:
-Memory should be inspectable, diffable, portable, and reusable across agents.
-
-Implications:
-- Load context through `manifest.md`.
-- Avoid RAG or vector DB in MVP.
 """,
     "constraints.md": """# Constraints
-
-- Keep AGENTS.md, CLAUDE.md, and GEMINI.md short.
-- Store durable project memory in `{memory_dir}`.
-- Do not use RAG, embeddings, or vector databases in MVP.
-- Do not load archive files unless explicitly requested.
 """,
     "do-not-use.md": """# Do Not Use / Tombstones
 
 Tombstones are newest first.
-
-## Tombstone: Full memory in platform entry files
-Do not copy full memory into AGENTS.md, CLAUDE.md, GEMINI.md, or similar files. They should stay thin bootstraps that point to `{memory_dir}`.
 """,
     "inbox.md": """# Memory Inbox
 
@@ -218,9 +197,7 @@ def render_rule_template(name: str, date: str) -> str:
     title = name.replace("-", " ").replace("_", " ").title()
     return (
         f"# Rule: {title}\n\n"
-        "Use this file for task-specific rules. Keep it short and operational.\n\n"
-        "## Rules\n"
-        "- Add rules that should apply only when this task type is relevant.\n"
+        "Rules here apply only when this task type is relevant. Keep them short and operational.\n"
     )
 
 
@@ -228,9 +205,7 @@ def render_profile_template(name: str, date: str) -> str:
     title = name.replace("-", " ").replace("_", " ").title()
     return (
         f"# Profile: {title}\n\n"
-        "Use this file for workflow-specific memory. Keep workflow rules separate from core project memory.\n\n"
-        "## Rules\n"
-        "- Add workflow rules that should apply only when this profile is relevant.\n"
+        "Rules here apply only when this workflow profile is relevant.\n"
     )
 
 
@@ -238,7 +213,17 @@ def render_area_template(name: str, date: str) -> str:
     title = name.replace("-", " ").replace("_", " ").title()
     return (
         f"# Area: {title}\n\n"
-        "Use this file for area-specific memory in a large repo or monorepo.\n\n"
-        "## Context\n"
-        "- Add durable context that should load only when this area is touched.\n"
+        "Memory here applies only when touched files or task scope match this area.\n"
     )
+
+
+def brief_needs_curation(text: str) -> bool:
+    """Return whether a brief is a generated scaffold rather than project memory."""
+
+    markers = (
+        "TODO: Describe what this project does and who it serves.",
+        "TODO: Describe the current product or engineering priorities.",
+        "TODO: Name the runtime, architecture, and external boundaries that matter across tasks.",
+        "This project uses MemoryCustodian to maintain local, plain-text project memory.",
+    )
+    return any(marker in text for marker in markers)
