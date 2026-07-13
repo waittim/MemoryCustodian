@@ -2,6 +2,12 @@
 
 Entries are newest first.
 
+## 2026-07-12 - Prioritize useful and reachable memory over chronological accumulation.
+Decision:
+Prioritize useful and reachable memory over chronological accumulation; keep each decision concise and scope-specific.
+Reason:
+Production use showed that a generic brief, root-only subsystem decisions, and age-only archival can pass structural checks while failing to provide relevant context.
+
 ## 2026-07-08 - Support Gemini through thin context and Agent Skills
 Decision:
 Support Gemini with thin `GEMINI.md` bootstrap snippets, `--with-gemini`, and `./install.sh gemini` linking the skill into Gemini's skills directory.
@@ -67,9 +73,3 @@ Decision:
 Default initialization creates only `manifest.md`, `brief.md`, `decisions.md`, `constraints.md`, `do-not-use.md`, and `inbox.md`.
 Reason:
 Small projects should not receive optional memory until needed.
-
-## 2026-06-30 - Use local text memory
-Decision:
-Store durable project memory as Markdown under `docs/`, defaulting to `docs/memory/`; keep agent entry files thin.
-Reason:
-Memory should be local, inspectable, portable, diffable, and easy to roll back.

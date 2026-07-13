@@ -83,4 +83,6 @@ def run(args) -> int:
     print(f"Initialized MemoryCustodian at {memory_dir}")
     for item in results:
         print(f"- {item}")
+    if "brief.md: written" in results:
+        print("Next: replace the brief.md TODOs with real project purpose, direction, and system context.")
     return 0

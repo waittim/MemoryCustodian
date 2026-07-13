@@ -33,6 +33,7 @@ class ReadStatusTests(unittest.TestCase):
                 self.assertEqual(main(["read", "--project-root", tmp, "--task", "implementation", "--names-only"]), 0)
             text = out.getvalue()
             self.assertIn("- brief.md", text)
+            self.assertIn("- decisions.md", text)
             self.assertIn("- constraints.md", text)
             self.assertIn("- do-not-use.md", text)
             self.assertIn("Skipped optional:", text)
@@ -68,22 +69,35 @@ class ReadStatusTests(unittest.TestCase):
             out = StringIO()
             with redirect_stdout(out):
                 code = main(["status", "--project-root", tmp])
-            self.assertEqual(code, 0)
+            self.assertEqual(code, 1)
             text = out.getvalue()
-            self.assertIn("CLI version: 0.6.0", text)
-            self.assertIn("Protocol version: 0.4 (current)", text)
-            self.assertIn("brief.md: OK", text)
+            self.assertIn("CLI version: 0.7.0", text)
+            self.assertIn("Protocol version: 0.5 (current)", text)
+            self.assertIn("brief.md: NEEDS CURATION", text)
             self.assertIn("inbox.md: OK", text)
             self.assertIn("preferences.md: not enabled", text)
 
     def test_check_reports_initialized_memory_ok(self):
         with tempfile.TemporaryDirectory() as tmp:
             self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            (Path(tmp) / "docs" / "memory" / "brief.md").write_text(
+                "# Project Brief\n\nPurpose:\nA real test project.\n\nCurrent direction:\nValidate memory.\n",
+                encoding="utf-8",
+            )
             out = StringIO()
             with redirect_stdout(out):
                 code = main(["check", "--project-root", tmp])
             self.assertEqual(code, 0)
             self.assertIn("MemoryCustodian check: OK", out.getvalue())
+
+    def test_check_rejects_uncurated_brief(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            out = StringIO()
+            with redirect_stdout(out):
+                code = main(["check", "--project-root", tmp])
+            self.assertEqual(code, 1)
+            self.assertIn("generated scaffold still needs real project", out.getvalue())
 
     def test_check_suggests_target_compaction_for_over_budget_files(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -172,14 +186,75 @@ class ReadStatusTests(unittest.TestCase):
                 self.assertEqual(main(["migrate", "--project-root", tmp, "--apply"]), 0)
             migrated = manifest.read_text(encoding="utf-8")
             self.assertIn("## MemoryCustodian Protocol", migrated)
-            self.assertIn("- protocol_version: 0.4", migrated)
+            self.assertIn("- protocol_version: 0.5", migrated)
             self.assertIn("- initialized_with: unknown", migrated)
             self.assertIn("## Optional module index", migrated)
 
+            (Path(tmp) / "docs" / "memory" / "brief.md").write_text(
+                "# Project Brief\n\nPurpose:\nMigration test project.\n",
+                encoding="utf-8",
+            )
             out = StringIO()
             with redirect_stdout(out):
                 code = main(["check", "--project-root", tmp])
             self.assertEqual(code, 0)
+
+    def test_migrate_updates_generated_implementation_route(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            manifest = Path(tmp) / "docs" / "memory" / "manifest.md"
+            legacy = manifest.read_text(encoding="utf-8").replace(
+                "### Implementation / execution / debugging\nLoad:\n- decisions.md\n- constraints.md",
+                "### Implementation / execution / debugging\nLoad:\n- constraints.md",
+            ).replace("- protocol_version: 0.5", "- protocol_version: 0.4")
+            manifest.write_text(legacy, encoding="utf-8")
+
+            out = StringIO()
+            with redirect_stdout(out):
+                self.assertEqual(main(["migrate", "--project-root", tmp, "--apply"]), 0)
+            migrated = manifest.read_text(encoding="utf-8")
+            implementation = migrated.split("### Implementation / execution / debugging", 1)[1].split("###", 1)[0]
+            self.assertIn("- decisions.md", implementation)
+            self.assertIn("load decisions.md for implementation", out.getvalue())
+
+    def test_check_warns_about_machine_specific_preference(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            memory = Path(tmp) / "docs" / "memory"
+            (memory / "brief.md").write_text("# Project Brief\n\nPurpose:\nPortable project.\n", encoding="utf-8")
+            (memory / "preferences.md").write_text(
+                "# Preferences\n\n- Use /Volumes/Local/Xcode.app for builds.\n",
+                encoding="utf-8",
+            )
+            out = StringIO()
+            with redirect_stdout(out):
+                code = main(["check", "--project-root", tmp])
+            self.assertEqual(code, 0)
+            self.assertIn("machine-specific absolute path", out.getvalue())
+
+    def test_status_and_check_report_long_decision_entry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            memory = Path(tmp) / "docs" / "memory"
+            (memory / "brief.md").write_text("# Project Brief\n\nPurpose:\nDecision quality test.\n", encoding="utf-8")
+            message = " ".join(f"detail{index}" for index in range(140))
+            self.assertEqual(
+                main(["add", message, "--type", "decision", "--allow-long", "--project-root", tmp]),
+                0,
+            )
+
+            status_out = StringIO()
+            with redirect_stdout(status_out):
+                status_code = main(["status", "--project-root", tmp])
+            self.assertEqual(status_code, 1)
+            self.assertIn("decisions.md: LONG ENTRIES", status_out.getvalue())
+
+            check_out = StringIO()
+            with redirect_stdout(check_out):
+                check_code = main(["check", "--project-root", tmp])
+            self.assertEqual(check_code, 1)
+            self.assertIn("decision", check_out.getvalue())
+            self.assertIn("is too long", check_out.getvalue())
 
 
 if __name__ == "__main__":

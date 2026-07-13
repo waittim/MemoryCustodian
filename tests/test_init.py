@@ -30,11 +30,16 @@ class InitTests(unittest.TestCase):
             self.assertFalse((memory / "archive").exists())
             manifest = (memory / "manifest.md").read_text(encoding="utf-8")
             self.assertIn("## MemoryCustodian Protocol", manifest)
-            self.assertIn("- protocol_version: 0.4", manifest)
-            self.assertIn("- initialized_with: memory-custodian 0.6.0", manifest)
-            self.assertIn("Entries are newest first.", (memory / "decisions.md").read_text(encoding="utf-8"))
+            self.assertIn("- protocol_version: 0.5", manifest)
+            self.assertIn("- initialized_with: memory-custodian 0.7.0", manifest)
+            decisions = (memory / "decisions.md").read_text(encoding="utf-8")
+            constraints = (memory / "constraints.md").read_text(encoding="utf-8")
+            self.assertIn("Entries are newest first.", decisions)
+            self.assertNotIn("Use MemoryCustodian", decisions)
+            self.assertNotIn("RAG", constraints)
             self.assertIn("Tombstones are newest first.", (memory / "do-not-use.md").read_text(encoding="utf-8"))
             self.assertIn("Entries are newest first.", (memory / "inbox.md").read_text(encoding="utf-8"))
+            self.assertIn("TODO: Describe what this project does", (memory / "brief.md").read_text(encoding="utf-8"))
 
             brief = memory / "brief.md"
             brief.write_text("# Custom Brief\n", encoding="utf-8")
@@ -46,7 +51,7 @@ class InitTests(unittest.TestCase):
             self.assertEqual(main(["init", "--project-root", tmp, "--memory-dir", "docs/team-memory", "--agent", "codex"]), 0)
             memory = Path(tmp) / "docs" / "team-memory"
             self.assertTrue((memory / "manifest.md").exists())
-            self.assertIn("docs/team-memory", (memory / "brief.md").read_text(encoding="utf-8"))
+            self.assertIn("docs/team-memory", (Path(tmp) / "AGENTS.md").read_text(encoding="utf-8"))
             self.assertIn("docs/team-memory/manifest.md", (Path(tmp) / "AGENTS.md").read_text(encoding="utf-8"))
 
     def test_init_rejects_memory_dir_outside_docs(self):

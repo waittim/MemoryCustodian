@@ -1,6 +1,6 @@
 {
   "name": "memory-custodian",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Local-first plain-text project memory governance for coding agents.",
   "author": {
     "name": "MemoryCustodian contributors",

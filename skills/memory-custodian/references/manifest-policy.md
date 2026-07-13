@@ -31,7 +31,7 @@ Do not load these by default:
 Use these task categories unless the project manifest says otherwise:
 
 - Planning / architecture / refactoring: `decisions.md`, `constraints.md`, `do-not-use.md`
-- Implementation / execution / debugging: `constraints.md`, `do-not-use.md`, and `preferences.md` if present
+- Implementation / execution / debugging: `decisions.md`, `constraints.md`, `do-not-use.md`, matched `areas/*.md`, and `preferences.md` if present
 - User-facing artifact / output: `do-not-use.md`, `rules/output.md` if present, and `preferences.md` if present
 - Preferences: `preferences.md` if present
 - Recap / history: `decisions.md` and `changelog.md` if present
@@ -50,6 +50,8 @@ Optional modules are enabled by creating files and listing task-scoped modules i
 The optional module index should list enabled `rules/`, `profiles/`, and `areas/` files with a short trigger condition. This lets agents discover available optional memory by reading `manifest.md` while keeping the optional file contents out of startup context.
 
 Do not add optional files to default loading just because they exist. Load them only when the task matches the index trigger or the user explicitly requests them.
+
+Area matching takes precedence over loading every root decision. Use the manifest hint plus touched files or task scope to select only relevant areas.
 
 ## Conflict Rules
 

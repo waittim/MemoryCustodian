@@ -46,6 +46,8 @@ Reason:
 This keeps memory local, inspectable, portable, and easy to version with git.
 ```
 
+Keep the complete entry within 120 tokens. Put detailed consequences in constraints, matched area context, or source documentation rather than adding a long `Implications` narrative.
+
 ## Tombstone Entry
 
 ```markdown

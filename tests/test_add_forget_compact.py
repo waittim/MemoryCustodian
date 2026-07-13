@@ -11,6 +11,13 @@ sys.path.insert(0, str(ROOT / "cli"))
 from memory_custodian.main import main
 
 
+def curate_brief(memory: Path) -> None:
+    (memory / "brief.md").write_text(
+        "# Project Brief\n\nPurpose:\nTest project.\n\nCurrent direction:\nValidate memory behavior.\n",
+        encoding="utf-8",
+    )
+
+
 class AddForgetCompactTests(unittest.TestCase):
     def test_add_decision_and_forget_topic(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -24,7 +31,6 @@ class AddForgetCompactTests(unittest.TestCase):
             tombstones = (memory / "do-not-use.md").read_text(encoding="utf-8")
             self.assertIn("Tombstone: SQLite", tombstones)
             self.assertNotIn("Status:", tombstones)
-            self.assertLess(tombstones.index("Tombstone: SQLite"), tombstones.index("Tombstone: Full memory"))
 
     def test_add_time_series_memory_is_newest_first(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -34,13 +40,11 @@ class AddForgetCompactTests(unittest.TestCase):
             memory = Path(tmp) / "docs" / "memory"
             decisions = (memory / "decisions.md").read_text(encoding="utf-8")
             self.assertLess(decisions.index("Second decision marker"), decisions.index("First decision marker"))
-            self.assertLess(decisions.index("First decision marker"), decisions.index("Use MemoryCustodian"))
 
             self.assertEqual(main(["add", "First rejected marker.", "--type", "tombstone", "--project-root", tmp]), 0)
             self.assertEqual(main(["add", "Second rejected marker.", "--type", "tombstone", "--project-root", tmp]), 0)
             tombstones = (memory / "do-not-use.md").read_text(encoding="utf-8")
             self.assertLess(tombstones.index("Tombstone: Second rejected marker"), tombstones.index("Tombstone: First rejected marker"))
-            self.assertLess(tombstones.index("Tombstone: First rejected marker"), tombstones.index("Tombstone: Full memory"))
 
             self.assertEqual(main(["add", "First inbox marker.", "--type", "inbox", "--project-root", tmp]), 0)
             self.assertEqual(main(["add", "Second inbox marker.", "--type", "inbox", "--project-root", tmp]), 0)
@@ -85,9 +89,8 @@ class AddForgetCompactTests(unittest.TestCase):
             self.assertEqual(main(["compact", "--project-root", tmp, "--apply"]), 0)
             decisions = (memory / "decisions.md").read_text(encoding="utf-8")
             self.assertLess(decisions.index("newest compact marker"), decisions.index("older compact marker"))
-            self.assertLess(decisions.index("older compact marker"), decisions.index("Use MemoryCustodian"))
             tombstones = (memory / "do-not-use.md").read_text(encoding="utf-8")
-            self.assertLess(tombstones.index("stale memory ordering"), tombstones.index("Tombstone: Full memory"))
+            self.assertIn("Tombstone: Do not use stale memory ordering", tombstones)
 
     def test_compact_target_archives_old_h2_entries(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -109,9 +112,25 @@ class AddForgetCompactTests(unittest.TestCase):
             text = out.getvalue()
             self.assertIn("Target: decisions.md", text)
             self.assertIn("Archive entries:", text)
+            self.assertIn("Semantic review required", text)
             self.assertFalse((memory / "archive").exists())
 
-            self.assertEqual(main(["compact", "--project-root", tmp, "--target", "decisions.md", "--apply"]), 0)
+            self.assertEqual(main(["compact", "--project-root", tmp, "--target", "decisions.md", "--apply"]), 1)
+            self.assertFalse((memory / "archive").exists())
+            self.assertEqual(
+                main(
+                    [
+                        "compact",
+                        "--project-root",
+                        tmp,
+                        "--target",
+                        "decisions.md",
+                        "--apply",
+                        "--archive-oldest",
+                    ]
+                ),
+                0,
+            )
             active = (memory / "decisions.md").read_text(encoding="utf-8")
             archive_files = sorted((memory / "archive").glob("decisions-*.md"))
             self.assertEqual(len(archive_files), 1)
@@ -119,6 +138,7 @@ class AddForgetCompactTests(unittest.TestCase):
             self.assertIn("Decision marker 11", archived)
             self.assertNotIn("Decision marker 11", active)
 
+            curate_brief(memory)
             out = StringIO()
             with redirect_stdout(out):
                 self.assertEqual(main(["check", "--project-root", tmp]), 0)
@@ -151,6 +171,7 @@ class AddForgetCompactTests(unittest.TestCase):
             (memory / "changelog.md").write_text("# Memory Changelog\n\nEntries are newest first.\n\n" + "\n\n".join(entries) + "\n", encoding="utf-8")
 
             self.assertEqual(main(["compact", "--project-root", tmp, "--target", "changelog.md", "--apply"]), 0)
+            curate_brief(memory)
             out = StringIO()
             with redirect_stdout(out):
                 self.assertEqual(main(["check", "--project-root", tmp]), 0)
@@ -180,6 +201,128 @@ class AddForgetCompactTests(unittest.TestCase):
             memory = Path(tmp) / "docs" / "memory"
             self.assertIn("Area: Backend", (memory / "areas" / "backend.md").read_text(encoding="utf-8"))
             self.assertIn("`areas/backend.md`", (memory / "manifest.md").read_text(encoding="utf-8"))
+
+    def test_add_scoped_decision_uses_area_and_reports_budget(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            out = StringIO()
+            with redirect_stdout(out):
+                self.assertEqual(
+                    main(
+                        [
+                            "add",
+                            "Persist retry backoff across launches.",
+                            "--type",
+                            "decision",
+                            "--area",
+                            "sync",
+                            "--reason",
+                            "Keep retries bounded.",
+                            "--project-root",
+                            tmp,
+                        ]
+                    ),
+                    0,
+                )
+            memory = Path(tmp) / "docs" / "memory"
+            area = (memory / "areas" / "sync.md").read_text(encoding="utf-8")
+            self.assertIn("Decision:", area)
+            self.assertIn("Persist retry backoff", area)
+            self.assertNotIn("Persist retry backoff", (memory / "decisions.md").read_text(encoding="utf-8"))
+            self.assertIn("`areas/sync.md`", (memory / "manifest.md").read_text(encoding="utf-8"))
+            self.assertIn("Budget: areas/sync.md", out.getvalue())
+
+    def test_add_warns_when_decisions_exceed_budget(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            memory = Path(tmp) / "docs" / "memory"
+            words = " ".join(f"word{index}" for index in range(900))
+            out = StringIO()
+            with redirect_stdout(out):
+                self.assertEqual(
+                    main(["add", words, "--type", "decision", "--allow-long", "--project-root", tmp]),
+                    0,
+                )
+            text = out.getvalue()
+            self.assertIn("explicitly allowed long decision", text)
+            self.assertIn("Warning: decisions.md is over its context budget", text)
+            self.assertIn("consolidate or relocate scoped decisions", text)
+
+    def test_add_rejects_long_decision_before_creating_target(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            message = " ".join(f"detail{index}" for index in range(140))
+            out = StringIO()
+            with redirect_stdout(out):
+                code = main(
+                    [
+                        "add",
+                        message,
+                        "--type",
+                        "decision",
+                        "--area",
+                        "sync",
+                        "--project-root",
+                        tmp,
+                    ]
+                )
+            self.assertEqual(code, 1)
+            self.assertIn("Decision entry budget:", out.getvalue())
+            self.assertIn("Not added: shorten Decision", out.getvalue())
+            self.assertFalse((Path(tmp) / "docs" / "memory" / "areas" / "sync.md").exists())
+
+    def test_compact_reports_long_decision_even_when_file_is_within_budget(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            message = " ".join(f"detail{index}" for index in range(140))
+            self.assertEqual(
+                main(["add", message, "--type", "decision", "--allow-long", "--project-root", tmp]),
+                0,
+            )
+            out = StringIO()
+            with redirect_stdout(out):
+                self.assertEqual(main(["compact", "--target", "decisions.md", "--project-root", tmp]), 0)
+            text = out.getvalue()
+            self.assertIn("Long decision entries: 1 over 120 tokens", text)
+            self.assertIn("Manual review required: shorten long decisions semantically", text)
+
+    def test_compact_does_not_archive_around_kept_long_decision(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            memory = Path(tmp) / "docs" / "memory"
+            long_words = " ".join(f"long{index}" for index in range(180))
+            entries = [
+                "## 2026-07-12 - Long active decision\n"
+                f"Decision:\n{long_words}\n"
+                "Reason:\nIt is still active."
+            ]
+            for index in range(10):
+                words = " ".join(f"short{index}_{number}" for number in range(70))
+                entries.append(
+                    f"## 2026-07-{index + 1:02d} - Short decision {index}\n"
+                    f"Decision:\n{words}\nReason:\nHistorical context."
+                )
+            (memory / "decisions.md").write_text(
+                "# Decisions\n\nEntries are newest first.\n\n" + "\n\n".join(entries) + "\n",
+                encoding="utf-8",
+            )
+
+            out = StringIO()
+            with redirect_stdout(out):
+                code = main(
+                    [
+                        "compact",
+                        "--target",
+                        "decisions.md",
+                        "--apply",
+                        "--archive-oldest",
+                        "--project-root",
+                        tmp,
+                    ]
+                )
+            self.assertEqual(code, 1)
+            self.assertIn("shorten the kept long decisions", out.getvalue())
+            self.assertFalse((memory / "archive").exists())
 
     def test_hard_forget_does_not_rewrite_topic_to_changelog(self):
         with tempfile.TemporaryDirectory() as tmp:

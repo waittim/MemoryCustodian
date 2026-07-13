@@ -2,7 +2,7 @@
 
 **Give your coding agents a project memory.**
 
-MemoryCustodian helps agents remember what matters: decisions, constraints, rejected ideas, and project context — across sessions, agents, and teams
+MemoryCustodian helps agents remember what matters: decisions, constraints, rejected ideas, and project context — across sessions, agents, and teams.
 
 It stores memory as plain Markdown in your repo and loads only the pieces needed for the current task.
 
@@ -15,7 +15,7 @@ New agent sessions often start by relearning decisions your repository already m
 MemoryCustodian moves durable project context into the repository. Humans can review it like code, and agents can load a small context pack before work:
 
 - `brief.md` for the current project shape
-- `decisions.md` and `constraints.md` when planning
+- `decisions.md` and `constraints.md` when planning, implementing, or debugging
 - `do-not-use.md` when avoiding rejected paths
 - optional `rules/`, `profiles/`, and `areas/` only when the manifest says they apply
 
@@ -44,6 +44,8 @@ memory-custodian init --project-root /path/to/project --agent all
 
 Use `--agent codex`, `--agent claude`, `--agent gemini`, or `--agent all` to create the small bootstrap file(s) your agent reads.
 
+Initialization creates a `brief.md` scaffold. Curate its TODOs from authoritative project files before treating memory as ready; `status` and `check` report an uncurated brief.
+
 The default initializer creates the core protocol:
 
 ```text
@@ -65,15 +67,14 @@ MemoryCustodian turns project memory into a small, explicit workflow:
 1. **Bootstrap stays thin.** `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, and similar files tell the agent where project memory lives.
 2. **The manifest routes context.** The agent reads `manifest.md`, then `brief.md`, then only the task-relevant files named by the manifest.
 3. **Optional memory stays opt-in.** `rules/`, `profiles/`, `areas/`, and `archive/` remain out of the default context until they are explicitly relevant.
-4. **Updates are deliberate.** After meaningful decisions, repeated corrections, or rejected approaches, the agent updates the right memory file or proposes a concise update.
-5. **Maintenance is deterministic.** The CLI checks, compacts, forgets, and migrates memory without a background service or opaque platform store.
+4. **Updates are scoped.** Cross-cutting decisions stay at root; subsystem knowledge lives in matched `areas/` files and loads only for relevant work.
+5. **Maintenance is guarded.** The CLI checks budgets and structure deterministically, while semantic review preserves active invariants before decision history is archived.
 
 The result is project memory that is inspectable, diffable, portable across agents, and small enough to use in normal coding loops.
 
 ## Installation
 
-MemoryCustodian currently supports local plugin and source-checkout workflows. The plugin bundle exposes the `memory-custodian` skill, CLI wrappers, platform snippets, and a lightweight session-start hook that reminds agents to load memory through the manifest.
-
+MemoryCustodian currently supports local plugin and source-checkout workflows. The Codex plugin bundle exposes the `memory-custodian` skill, CLI wrappers, and platform snippets. The Claude Code plugin also includes a lightweight session-start hook that reminds agents to load memory through the manifest.
 
 | Host                | Best path                                                     |
 | ------------------- | ------------------------------------------------------------- |
@@ -82,20 +83,18 @@ MemoryCustodian currently supports local plugin and source-checkout workflows. T
 | Gemini-style agents | Agent Skill installed into the personal skills directory      |
 | Any shell           | Source checkout wrapper or editable Python install            |
 
-
-
-
 ### Codex Local Marketplace
 
 For local Codex plugin testing from this checkout, add this repository as a marketplace source:
 
 ```bash
 codex plugin marketplace add .
+codex plugin add memory-custodian@memory-custodian-dev
 ```
 
-Then open `/plugins`, switch to `MemoryCustodian Dev`, and install `memory-custodian`.
+Alternatively, open the Plugins page in the Codex desktop app, select `MemoryCustodian Dev`, and install `memory-custodian`.
 
-The repo marketplace points at this checkout, so local edits can be verified in a new Codex thread after refreshing the plugin.
+The repo marketplace uses a local source that points at this checkout. Codex caches installed plugins, so after local edits, run the `codex plugin add` command again (or reinstall from the Plugins page), then start a new task to verify the update.
 
 Older local Codex setups that only scan skill folders can run `./install.sh codex`.
 
@@ -163,16 +162,15 @@ memory-custodian status --project-root /path/to/project
 memory-custodian read --project-root /path/to/project --task planning
 ```
 
-
-
 ## What Runs Automatically
 
 After installation and project initialization, MemoryCustodian is meant to be agent-operated. A capable agent with the skill or platform bootstrap should do this before substantial work:
 
 1. Read `docs/memory/manifest.md`.
 2. Read `docs/memory/brief.md`.
-3. Load only the task-relevant files named by the manifest.
-4. Propose or write durable memory updates after meaningful decisions, repeated corrections, or rejected approaches.
+3. If `brief.md` is still a generated scaffold, curate it from authoritative project files before relying on it.
+4. Load only the task-relevant files named by the manifest.
+5. Propose or write durable memory updates after meaningful decisions, repeated corrections, or rejected approaches.
 
 Humans do not need to run `memory-custodian read` before every task. The CLI commands below are for setup checks, manual inspection, maintenance, or deterministic operations you ask an agent to run.
 
@@ -192,8 +190,11 @@ Record durable memory when a decision, constraint, preference, or rejected appro
 
 ```bash
 memory-custodian add "We chose manifest-first loading." --type decision
+memory-custodian add "Persist sync retry backoff." --type decision --area sync --reason "Keep retries bounded across launches."
 memory-custodian forget "old deployment note" --mode soft
 ```
+
+Decision entries have a 120-token guide. Overlong writes are rejected before mutation; first shorten the choice to one or two sentences and the reason to one sentence. Use `--allow-long` only after confirming that splitting the supporting detail would lose essential semantics.
 
 Enable optional memory only when it becomes useful:
 
@@ -214,6 +215,7 @@ memory-custodian migrate
 ```
 
 Use `compact --apply` or `migrate --apply` only after reviewing the dry run.
+Decision archival additionally requires semantic review and explicit confirmation with `compact --target decisions.md --apply --archive-oldest`.
 
 ## Design Principles
 

@@ -4,17 +4,19 @@ from __future__ import annotations
 
 from .protocol import (
     CURRENT_PROTOCOL_VERSION,
+    DECISION_ENTRY_BUDGET,
     budget_for,
     compare_versions,
     count_h2_entries,
     count_inbox_items,
     estimate_tokens,
+    long_decision_entries,
     protocol_metadata,
     resolve_memory_dir,
     resolve_project_root,
 )
 from . import __version__
-from .templates import CORE_FILES
+from .templates import CORE_FILES, brief_needs_curation
 
 
 def run(args) -> int:
@@ -57,18 +59,32 @@ def run(args) -> int:
         text = path.read_text(encoding="utf-8")
         tokens = estimate_tokens(text)
         budget = budget_for(name)
-        state = "OK" if budget is None or tokens <= budget else "OVER BUDGET"
+        long_entries = long_decision_entries(text) if name == "decisions.md" else []
+        if name == "brief.md" and brief_needs_curation(text):
+            state = "NEEDS CURATION"
+        elif budget is not None and tokens > budget:
+            state = "OVER BUDGET"
+        elif long_entries:
+            state = "LONG ENTRIES"
+        else:
+            state = "OK"
         detail = f", {tokens} tokens"
         if budget is not None:
             detail += f"/{budget} max"
-        if state != "OK":
+        if state == "OVER BUDGET":
             detail += f", run compact --target {name}"
+        elif state == "NEEDS CURATION":
+            detail += ", replace generated placeholders with real project context"
+        elif state == "LONG ENTRIES":
+            detail += f", shorten {len(long_entries)} decision(s) over {DECISION_ENTRY_BUDGET} tokens"
         if name == "inbox.md":
             detail += f", {count_inbox_items(text)} items"
             if count_inbox_items(text) > 30:
                 detail += ", compaction recommended"
         if name in {"decisions.md", "do-not-use.md"}:
             detail += f", {count_h2_entries(text)} entries"
+        if name == "decisions.md" and long_entries and state != "LONG ENTRIES":
+            detail += f", {len(long_entries)} decision(s) over {DECISION_ENTRY_BUDGET}-token entry guide"
         print(f"{name}: {state}{detail}")
         if state != "OK":
             exit_code = 1

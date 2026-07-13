@@ -39,9 +39,12 @@ Do not read `archive/` unless the user asks.
 - Do not erase uncertain information silently.
 - Do not resurrect topics listed in `do-not-use.md`.
 - Preserve the decision, not the full conversation.
+- Shorten entries over 120 tokens semantically before archiving other decisions; never truncate mechanically.
 - Prefer short bullets over narrative history.
 - Keep tombstones active; do not archive `do-not-use.md` entries merely to meet a budget.
-- Archive only complete old entries, and only when the active file remains coherent without them.
+- Before archiving decisions, merge superseded entries and move subsystem-specific knowledge to matched `areas/*.md`.
+- Preserve every active invariant in normal task-loading paths; archive only historical rationale or inactive entries.
+- Archive only complete old entries, and only when the active file remains coherent and sufficient without them.
 - Record a short maintenance note in `changelog.md` if it is enabled.
 
 ## CLI Behavior
@@ -50,4 +53,6 @@ The CLI can deduplicate and classify obvious inbox bullets, but semantic compact
 
 Use `memory-custodian compact` for an inbox dry run and `memory-custodian compact --apply` for deterministic inbox changes.
 
-For an over-budget active file, use `memory-custodian compact --target decisions.md` first. With `--target`, the CLI reports the current budget state and applies only conservative deterministic changes: exact duplicate bullet removal for simple bullet files, or older complete H2 entry archival for supported history-like files such as `decisions.md` and `changelog.md`. Use `--apply` only after reviewing the plan.
+For an over-budget active file, use `memory-custodian compact --target decisions.md` first. With `--target`, the CLI reports the current budget state and applies only conservative deterministic changes: exact duplicate bullet removal for simple bullet files, or older complete H2 entry archival for supported history-like files such as `decisions.md` and `changelog.md`.
+
+Decision archival has an explicit semantic gate. First shorten long entries, consolidate, supersede, and relocate scoped knowledge; then review the dry run. The CLI blocks age-based archival while kept decisions remain over the per-entry guide. Use `--apply --archive-oldest` only when the proposed oldest entries contain no active invariant that would become unreachable. Changelog archival does not require this extra confirmation.

@@ -67,13 +67,27 @@ def build_parser() -> argparse.ArgumentParser:
         help="Memory type.",
     )
     add_parser.add_argument("--name", help="Name for rule, profile, or area memory.")
+    add_parser.add_argument(
+        "--area",
+        help="Store a scoped decision, constraint, preference, or tombstone in areas/<name>.md.",
+    )
     add_parser.add_argument("--reason", help="Optional reason for decisions or tombstones.")
+    add_parser.add_argument(
+        "--allow-long",
+        action="store_true",
+        help="Allow a decision over the recommended per-entry budget after semantic review.",
+    )
     add_parser.set_defaults(func=add_cmd.run)
 
     compact_parser = sub.add_parser("compact", help="Compact inbox entries or review an over-budget memory file.")
     _add_common(compact_parser)
     compact_parser.add_argument("--target", help="Memory file to compact or review, such as decisions.md. Defaults to inbox.md.")
     compact_parser.add_argument("--apply", action="store_true", help="Write deterministic compaction changes. Default is dry run.")
+    compact_parser.add_argument(
+        "--archive-oldest",
+        action="store_true",
+        help="Explicitly allow age-based decision archival after semantic review.",
+    )
     compact_parser.set_defaults(func=compact_cmd.run)
 
     forget_parser = sub.add_parser("forget", help="Forget a memory topic and add a tombstone.")
