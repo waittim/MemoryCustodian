@@ -13,7 +13,7 @@ It stores memory as plain Markdown in your repo and loads only the pieces needed
 [![Platform](https://img.shields.io/badge/platform-agnostic-blue.svg)](#)
 [![Design: Offline-first](https://img.shields.io/badge/design-offline--first-blue.svg)](#)
 [![Architecture: Zero-RAG](https://img.shields.io/badge/architecture-zero--RAG-blue.svg)](#)
-[![Blog](https://img.shields.io/badge/blog-MemoryCustodian-orange.svg)](https://www.zekun.blog/2026/07/12/memory-custodian/)
+[![Blog](https://img.shields.io/badge/blog-MemoryCustodian-orange.svg)](https://www.zekun.blog/2026/07/01/memory-custodian/)
 
 ## Why MemoryCustodian?
 
