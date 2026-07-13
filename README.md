@@ -8,6 +8,13 @@ It stores memory as plain Markdown in your repo and loads only the pieces needed
 
 **Durable memory. Minimal context.**
 
+[![Version](https://img.shields.io/badge/version-0.7.0-blue.svg)](#)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Platform](https://img.shields.io/badge/platform-agnostic-blue.svg)](#)
+[![Design: Offline-first](https://img.shields.io/badge/design-offline--first-blue.svg)](#)
+[![Architecture: Zero-RAG](https://img.shields.io/badge/architecture-zero--RAG-blue.svg)](#)
+[![Blog](https://img.shields.io/badge/blog-MemoryCustodian-orange.svg)](https://www.zekun.blog/2026/07/12/memory-custodian/)
+
 ## Why MemoryCustodian?
 
 New agent sessions often start by relearning decisions your repository already made: architecture constraints, preferred workflows, rejected approaches, and the current project shape. The usual workaround is to paste more into prompts or platform instruction files, which makes every task heavier.
