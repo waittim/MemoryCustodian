@@ -17,7 +17,7 @@ def _optional_requested(kind: str, names: list[str]) -> list[tuple[str, bool]]:
     files: list[tuple[str, bool]] = []
     for name in names:
         if not is_safe_memory_name(name):
-            continue
+            raise ValueError(f"Invalid {kind[:-1]} name: {name}")
         files.append((f"{kind}/{name}.md", False))
     return files
 

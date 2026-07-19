@@ -1,4 +1,4 @@
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
 import sys
@@ -12,6 +12,19 @@ from memory_custodian.main import main
 
 
 class ReadStatusTests(unittest.TestCase):
+    def test_read_rejects_invalid_explicit_profile_and_area_names(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            for option, noun in (("--profile", "profile"), ("--area", "area")):
+                with self.subTest(option=option):
+                    out = StringIO()
+                    err = StringIO()
+                    with redirect_stdout(out), redirect_stderr(err):
+                        code = main(["read", "--project-root", tmp, option, "../backend"])
+                    self.assertEqual(code, 2)
+                    self.assertEqual(out.getvalue(), "")
+                    self.assertIn(f"Error: Invalid {noun} name: ../backend", err.getvalue())
+
     def test_read_architecture_loads_task_specific_files(self):
         with tempfile.TemporaryDirectory() as tmp:
             self.assertEqual(main(["init", "--project-root", tmp]), 0)

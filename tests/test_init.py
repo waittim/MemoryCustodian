@@ -1,4 +1,4 @@
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
 import sys
@@ -56,12 +56,87 @@ class InitTests(unittest.TestCase):
 
     def test_init_rejects_memory_dir_outside_docs(self):
         with tempfile.TemporaryDirectory() as tmp:
+            err = StringIO()
+            with redirect_stderr(err):
+                code = main(["init", "--project-root", tmp, "--memory-dir", ".memory"])
+            self.assertEqual(code, 2)
+            self.assertIn("Error: Memory directory must live under docs/", err.getvalue())
+            self.assertFalse((Path(tmp) / ".memory").exists())
+
+    def test_init_force_is_rejected_without_overwriting_curated_memory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            brief = Path(tmp) / "docs" / "memory" / "brief.md"
+            brief.write_text("# Curated Brief\n\nKeep this project knowledge.\n", encoding="utf-8")
+
+            err = StringIO()
+            with redirect_stderr(err):
+                code = main(["init", "--project-root", tmp, "--force"])
+
+            self.assertEqual(code, 2)
+            self.assertIn("init --force was removed", err.getvalue())
+            self.assertEqual(brief.read_text(encoding="utf-8"), "# Curated Brief\n\nKeep this project knowledge.\n")
+
+    def test_init_repair_preserves_curated_files_and_repairs_manifest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            memory = Path(tmp) / "docs" / "memory"
+            brief = memory / "brief.md"
+            brief.write_text("# Curated Brief\n\nDo not replace this.\n", encoding="utf-8")
+            manifest = memory / "manifest.md"
+            damaged = manifest.read_text(encoding="utf-8").replace(
+                "- protocol_version: 0.5", "- protocol_version: 0.4"
+            )
+            manifest.write_text(damaged, encoding="utf-8")
+            (memory / "constraints.md").unlink()
+
+            self.assertEqual(main(["init", "--project-root", tmp, "--repair"]), 0)
+
+            self.assertEqual(brief.read_text(encoding="utf-8"), "# Curated Brief\n\nDo not replace this.\n")
+            self.assertIn("- protocol_version: 0.5", manifest.read_text(encoding="utf-8"))
+            self.assertTrue((memory / "constraints.md").exists())
+
+    def test_init_repair_preserves_unknown_protocol_metadata_and_comments(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            manifest = Path(tmp) / "docs" / "memory" / "manifest.md"
+            damaged = manifest.read_text(encoding="utf-8").replace(
+                "- protocol_version: 0.5",
+                "- protocol_version: 0.4\n"
+                "- custom_owner: team-memory\n"
+                "<!-- Preserve this project-specific protocol note. -->",
+            )
+            manifest.write_text(damaged, encoding="utf-8")
+
+            self.assertEqual(main(["init", "--project-root", tmp, "--repair"]), 0)
+
+            repaired = manifest.read_text(encoding="utf-8")
+            self.assertIn("- protocol_version: 0.5", repaired)
+            self.assertIn("- custom_owner: team-memory", repaired)
+            self.assertIn("<!-- Preserve this project-specific protocol note. -->", repaired)
+
+    def test_init_replace_existing_previews_then_requires_apply(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            brief = Path(tmp) / "docs" / "memory" / "brief.md"
+            curated = "# Curated Brief\n\nImportant project context.\n"
+            brief.write_text(curated, encoding="utf-8")
+
             out = StringIO()
             with redirect_stdout(out):
-                code = main(["init", "--project-root", tmp, "--memory-dir", ".memory"])
-            self.assertEqual(code, 1)
-            self.assertIn("Memory directory must live under docs/", out.getvalue())
-            self.assertFalse((Path(tmp) / ".memory").exists())
+                self.assertEqual(main(["init", "--project-root", tmp, "--replace-existing"]), 0)
+            preview = out.getvalue()
+            self.assertIn("MemoryCustodian replacement plan", preview)
+            self.assertIn("brief.md: replace planned", preview)
+            self.assertIn("contain non-template content", preview)
+            self.assertIn("Dry run only", preview)
+            self.assertEqual(brief.read_text(encoding="utf-8"), curated)
+
+            self.assertEqual(
+                main(["init", "--project-root", tmp, "--replace-existing", "--apply"]),
+                0,
+            )
+            self.assertIn("TODO: Describe what this project does", brief.read_text(encoding="utf-8"))
 
     def test_init_can_add_codex_snippet(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -105,6 +180,22 @@ class InitTests(unittest.TestCase):
             memory = Path(tmp) / "docs" / "memory"
             self.assertTrue((memory / "rules" / "output.md").exists())
             self.assertIn("`rules/output.md`", (memory / "manifest.md").read_text(encoding="utf-8"))
+
+    def test_enable_force_is_rejected_without_overwriting_existing_module(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            self.assertEqual(main(["enable", "preferences", "--project-root", tmp]), 0)
+            preferences = Path(tmp) / "docs" / "memory" / "preferences.md"
+            curated = "# Preferences\n\n- Preserve this curated preference.\n"
+            preferences.write_text(curated, encoding="utf-8")
+
+            err = StringIO()
+            with redirect_stderr(err):
+                code = main(["enable", "preferences", "--project-root", tmp, "--force"])
+
+            self.assertEqual(code, 2)
+            self.assertIn("enable --force was removed", err.getvalue())
+            self.assertEqual(preferences.read_text(encoding="utf-8"), curated)
 
     def test_enable_indexes_optional_profiles_and_areas(self):
         with tempfile.TemporaryDirectory() as tmp:

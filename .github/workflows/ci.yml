@@ -21,3 +21,21 @@ jobs:
       - run: PYTHONPATH=cli python scripts/check-skill-evals.py
       - run: PYTHONPATH=cli python -m memory_custodian.main check
       - run: git diff --check
+
+  windows-smoke:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: python -m pip install -e .
+      - run: python -m unittest discover -s tests -p test_windows_smoke.py
+        env:
+          PYTHONPATH: cli
+      - run: python scripts/check-skill-evals.py
+        env:
+          PYTHONPATH: cli
+      - run: python -m memory_custodian.main check
+        env:
+          PYTHONPATH: cli

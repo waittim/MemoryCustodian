@@ -18,18 +18,18 @@ Use it to:
 
 In a project that contains MemoryCustodian memory, do not start substantial planning, implementation, debugging, or review until startup loading is complete:
 
-1. Read `manifest.md` if present.
+1. Read `manifest.md` if present. If the memory directory exists but the file does not, stop as described below.
 2. Read `brief.md` before substantial work.
 3. Identify the task type.
 4. Load only files allowed by the manifest and matched by the current task.
 5. Respect `do-not-use.md` and tombstones before proposing plans or implementations.
 
-If no manifest exists, continue normally and offer initialization only when useful.
+If no memory directory exists, continue normally and offer initialization only when useful. If the memory directory exists but `manifest.md` is missing, stop memory loading and report an incomplete or corrupted setup. Do not infer routes; restore the manifest, migrate, or carefully reinitialize the project first.
 
 ## Core Workflow
 
 1. Locate memory at `docs/memory/manifest.md`, or another project-declared memory directory under `docs/`.
-2. Read `manifest.md` if present.
+2. Read `manifest.md`; it is the sole authority for runtime task-to-file routing.
 3. Read `brief.md` before substantial work.
 4. Identify the task type.
 5. Use the manifest optional module index to discover enabled `rules/`, `profiles/`, and `areas/` files.
@@ -57,22 +57,13 @@ If no manifest exists, continue normally and offer initialization only when usef
 
 ## Task Loading
 
-Use the smallest set that can answer the task:
-
-- General continuation: `brief.md`
-- Architecture or planning: `brief.md`, `decisions.md`, `constraints.md`, `do-not-use.md`
-- Implementation or debugging: `brief.md`, `decisions.md`, `constraints.md`, `do-not-use.md`, matched `areas/*.md`, and `preferences.md` if present
-- User-facing artifacts: `brief.md`, `do-not-use.md`, `rules/output.md` if present, and `preferences.md` if present
-- Preferences: `brief.md`, `preferences.md` if present
-- Memory status or history: `brief.md`, `decisions.md`, and `changelog.md` if present
-- Compaction: `brief.md`, `inbox.md`, `do-not-use.md`, and files that may receive merged content
-- Forgetting: search relevant memory files, then update `do-not-use.md`
+Classify the task as general continuation, planning, implementation, artifact work, preferences, history, maintenance, or another category defined by the project manifest. Then follow the current manifest exactly and use the smallest routed set that can answer the task. Any routes in generated templates or examples are defaults only; they never override a customized project manifest.
 
 ## Writing Memory
 
 Write durable memory only when it is project-level and likely to matter later.
 
-- Classify scope before content type. Put subsystem-specific choices and invariants in the matched `areas/<name>.md`; reserve root `decisions.md` for cross-cutting choices.
+- Classify scope before content type. When the manifest routes matched `areas/*.md`, put subsystem-specific choices and invariants there; reserve root `decisions.md` for cross-cutting choices.
 - Update, merge, or mark an existing entry superseded when a new choice changes it; do not append a contradictory duplicate.
 - Keep active invariants reachable from normal task loading. Promote them to `brief.md`, `constraints.md`, or a matched area before archiving history.
 - Confirmed cross-cutting choices go to `decisions.md`.
@@ -93,6 +84,8 @@ For sensitive, personal, credential-like, private, or machine-specific informati
 After writing, check the target budget. At 80% or above, consolidate or split by area before adding more entries.
 
 ## Compaction Safety
+
+Inbox compaction is a two-stage workflow. The CLI reports candidates and may remove only exact duplicates or exact tombstone matches; it never promotes an entry to a semantic destination. The Agent reviews each remaining candidate's scope, type, confidence, and overlap, then edits the appropriate Markdown or calls `add`. Run `check` afterward.
 
 Treat decision compaction as semantic maintenance, not chronological trimming. Before applying age-based archival:
 
@@ -136,7 +129,8 @@ memory-custodian add "..." --type decision
 memory-custodian add "..." --type decision --area sync --reason "..."
 memory-custodian add "..." --type decision --allow-long
 memory-custodian enable rules/output
-memory-custodian compact --apply
+memory-custodian compact
+memory-custodian compact --apply  # exact mechanical inbox cleanup only
 memory-custodian compact --target decisions.md
 memory-custodian compact --target decisions.md --apply --archive-oldest
 memory-custodian forget "topic" --mode soft

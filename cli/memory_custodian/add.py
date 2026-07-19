@@ -6,19 +6,19 @@ from pathlib import Path
 
 from .protocol import (
     DECISION_ENTRY_BUDGET,
-    append_changelog,
-    append_text,
+    appended_text,
     budget_for,
+    changelog_text,
     estimate_tokens,
     is_indexable_optional_path,
     is_safe_memory_name,
     manifest_with_optional_module_index,
-    prepend_text,
+    prepended_text,
     resolve_memory_dir,
     resolve_project_root,
     today,
-    write_text,
 )
+from .mutations import TextMutation, apply_mutations
 from .templates import render_area_template, render_profile_template, render_rule_template, render_template
 
 TARGETS = {
@@ -61,20 +61,22 @@ def _entry(kind: str, message: str, reason: str | None) -> str:
     return f"## {current_date}\n- {message}"
 
 
-def _ensure_target(path: Path, kind: str, name: str | None, area: str | None = None) -> None:
+def _initial_target_text(path: Path, kind: str, name: str | None, area: str | None = None) -> str:
     if path.exists():
-        return
+        return path.read_text(encoding="utf-8")
     current_date = today()
     if area:
-        write_text(path, render_area_template(area, current_date))
-    elif kind == "preference":
-        write_text(path, render_template("preferences.md", current_date))
-    elif kind == "rule" and name:
-        write_text(path, render_rule_template(name, current_date))
-    elif kind == "profile" and name:
-        write_text(path, render_profile_template(name, current_date))
-    elif kind == "area" and name:
-        write_text(path, render_area_template(name, current_date))
+        return render_area_template(area, current_date)
+    if kind == "rule" and name:
+        return render_rule_template(name, current_date)
+    if kind == "profile" and name:
+        return render_profile_template(name, current_date)
+    if kind == "area" and name:
+        return render_area_template(name, current_date)
+    target = TARGETS.get(kind)
+    if target:
+        return render_template(target, current_date)
+    raise ValueError(f"Cannot create target for memory type: {kind}")
 
 
 def _report_budget(path: Path, target: str) -> None:
@@ -114,32 +116,28 @@ def run(args) -> int:
     project_root = resolve_project_root(args.project_root)
     memory_dir = resolve_memory_dir(project_root, args.memory_dir)
     if not memory_dir.exists():
-        print(f"Memory directory not found: {memory_dir}")
-        return 1
+        raise FileNotFoundError(f"Memory directory not found: {memory_dir}")
+    manifest_path = memory_dir / "manifest.md"
+    if not manifest_path.exists():
+        raise ValueError("manifest.md is missing; the MemoryCustodian setup is incomplete or corrupted")
 
     kind = args.type
     if args.allow_long and kind != "decision":
-        print("--allow-long can only be used when --type is decision")
-        return 1
+        raise ValueError("--allow-long can only be used when --type is decision")
     scoped_area = args.area
     if scoped_area:
         if args.name:
-            print("--area and --name cannot be used together")
-            return 1
+            raise ValueError("--area and --name cannot be used together")
         if kind not in AREA_SCOPED_TYPES:
-            print(f"--area cannot be used when --type is {kind}")
-            return 1
+            raise ValueError(f"--area cannot be used when --type is {kind}")
         if not is_safe_memory_name(scoped_area):
-            print(f"Invalid area name: {scoped_area}")
-            return 1
+            raise ValueError(f"Invalid area name: {scoped_area}")
         target = f"areas/{scoped_area}.md"
     elif kind in {"rule", "profile", "area"}:
         if not args.name:
-            print(f"--name is required when --type is {kind}")
-            return 1
+            raise ValueError(f"--name is required when --type is {kind}")
         if not is_safe_memory_name(args.name):
-            print(f"Invalid {kind} name: {args.name}")
-            return 1
+            raise ValueError(f"Invalid {kind} name: {args.name}")
         folder = "rules" if kind == "rule" else f"{kind}s"
         target = f"{folder}/{args.name}.md"
     else:
@@ -148,19 +146,28 @@ def run(args) -> int:
     if kind == "decision" and not _check_decision_entry_budget(entry, args.allow_long):
         return 1
     target_path = memory_dir / target
-    _ensure_target(target_path, kind, args.name, scoped_area)
+    target_original = _initial_target_text(target_path, kind, args.name, scoped_area)
     if kind in NEWEST_FIRST_TYPES:
         remove_lines = ("No unprocessed memory candidates.",) if kind == "inbox" else ()
-        prepend_text(target_path, entry, remove_lines=remove_lines)
+        target_updated = prepended_text(target_original, entry, remove_lines=remove_lines)
     else:
-        append_text(target_path, entry)
-    manifest_path = memory_dir / "manifest.md"
+        target_updated = appended_text(target_original, entry)
+
+    mutations = [TextMutation(target_path, target_updated)]
     indexed = False
     if is_indexable_optional_path(target) and manifest_path.exists():
         updated_manifest, indexed = manifest_with_optional_module_index(manifest_path.read_text(encoding="utf-8"), target)
         if indexed:
-            write_text(manifest_path, updated_manifest)
-    append_changelog(memory_dir, f"Added {kind} memory to {target}.")
+            mutations.append(TextMutation(manifest_path, updated_manifest))
+    changelog = memory_dir / "changelog.md"
+    if changelog.exists():
+        mutations.append(
+            TextMutation(
+                changelog,
+                changelog_text(changelog.read_text(encoding="utf-8"), f"Added {kind} memory to {target}."),
+            )
+        )
+    apply_mutations(mutations)
     print(f"Added {kind} memory to {target_path}")
     if indexed:
         print(f"Indexed optional memory in {manifest_path}")

@@ -200,17 +200,23 @@ def write_text(path: Path, text: str) -> None:
 
 def append_text(path: Path, text: str) -> None:
     existing = path.read_text(encoding="utf-8") if path.exists() else ""
+    write_text(path, appended_text(existing, text))
+
+
+def appended_text(existing: str, text: str) -> str:
     if existing:
-        write_text(path, existing.rstrip() + "\n\n" + text.strip() + "\n")
-    else:
-        write_text(path, text.strip() + "\n")
+        return existing.rstrip() + "\n\n" + text.strip() + "\n"
+    return text.strip() + "\n"
 
 
 def prepend_text(path: Path, text: str, remove_lines: tuple[str, ...] = ()) -> None:
     existing = path.read_text(encoding="utf-8") if path.exists() else ""
+    write_text(path, prepended_text(existing, text, remove_lines))
+
+
+def prepended_text(existing: str, text: str, remove_lines: tuple[str, ...] = ()) -> str:
     if not existing:
-        write_text(path, text.strip() + "\n")
-        return
+        return text.strip() + "\n"
 
     lines = [line for line in existing.rstrip().splitlines() if line.strip() not in remove_lines]
     insert_at = 0
@@ -226,27 +232,27 @@ def prepend_text(path: Path, text: str, remove_lines: tuple[str, ...] = ()) -> N
     after = "\n".join(lines[insert_at:]).strip()
     entry = text.strip()
     if before and after:
-        write_text(path, f"{before}\n\n{entry}\n\n{after}\n")
+        return f"{before}\n\n{entry}\n\n{after}\n"
     elif before:
-        write_text(path, f"{before}\n\n{entry}\n")
+        return f"{before}\n\n{entry}\n"
     elif after:
-        write_text(path, f"{entry}\n\n{after}\n")
-    else:
-        write_text(path, entry + "\n")
+        return f"{entry}\n\n{after}\n"
+    return entry + "\n"
 
 
 def append_changelog(memory_dir: Path, message: str, create: bool = False) -> None:
     path = memory_dir / "changelog.md"
     if not path.exists() and not create:
         return
+    existing = path.read_text(encoding="utf-8") if path.exists() else ""
+    write_text(path, changelog_text(existing, message))
+
+
+def changelog_text(existing: str, message: str) -> str:
     entry = f"## {today()}\n- {message}"
-    if not path.exists():
-        write_text(path, "# Memory Changelog\n\n" + entry + "\n")
-        return
-    existing = path.read_text(encoding="utf-8").rstrip()
+    existing = existing.rstrip()
     if not existing:
-        write_text(path, "# Memory Changelog\n\n" + entry + "\n")
-        return
+        return "# Memory Changelog\n\n" + entry + "\n"
 
     lines = existing.splitlines()
     insert_at = 0
@@ -260,13 +266,12 @@ def append_changelog(memory_dir: Path, message: str, create: bool = False) -> No
     before = "\n".join(lines[:insert_at]).rstrip()
     after = "\n".join(lines[insert_at:]).strip()
     if before and after:
-        write_text(path, f"{before}\n\n{entry}\n\n{after}\n")
+        return f"{before}\n\n{entry}\n\n{after}\n"
     elif before:
-        write_text(path, f"{before}\n\n{entry}\n")
+        return f"{before}\n\n{entry}\n"
     elif after:
-        write_text(path, f"{entry}\n\n{after}\n")
-    else:
-        write_text(path, entry + "\n")
+        return f"{entry}\n\n{after}\n"
+    return entry + "\n"
 
 
 def protocol_metadata(manifest: str) -> dict[str, str]:
@@ -301,7 +306,24 @@ def manifest_with_protocol_metadata(manifest: str, last_migrated_with: str = CUR
                 if lines[next_index].startswith("## "):
                     end = next_index
                     break
-            updated = lines[:index] + replacement + lines[end:]
+            desired = {
+                "protocol_version": f"- protocol_version: {CURRENT_PROTOCOL_VERSION}",
+                "initialized_with": f"- initialized_with: {initialized_with}",
+                "last_migrated_with": f"- last_migrated_with: {last_migrated_with}",
+            }
+            body: list[str] = []
+            seen: set[str] = set()
+            for existing_line in lines[index + 1 : end]:
+                match = PROTOCOL_FIELD_RE.match(existing_line.strip())
+                key = match.group(1) if match else None
+                if key in desired:
+                    if key not in seen:
+                        body.append(desired[key])
+                        seen.add(key)
+                    continue
+                body.append(existing_line)
+            missing = [desired[key] for key in ("protocol_version", "initialized_with", "last_migrated_with") if key not in seen]
+            updated = lines[: index + 1] + missing + body + lines[end:]
             text = ensure_newline("\n".join(updated))
             return text, text != ensure_newline(manifest)
 

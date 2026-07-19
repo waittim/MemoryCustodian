@@ -51,7 +51,7 @@ Use `adapters/gemini/GEMINI.snippet.md`.
 
 ## Generic Agents
 
-Generic agents should follow `docs/memory/manifest.md` if present. If no manifest exists, load `brief.md` first and then only task-relevant files.
+Generic agents should follow `docs/memory/manifest.md` when the memory directory exists. If no memory directory exists, continue normally. If the directory exists but `manifest.md` is missing, report an incomplete or corrupted setup and do not infer routes from the remaining files.
 
 Use `adapters/generic/agent-instructions.md`.
 

@@ -53,6 +53,8 @@ Use `--agent codex`, `--agent claude`, `--agent gemini`, or `--agent all` to cre
 
 Initialization creates a `brief.md` scaffold. Curate its TODOs from authoritative project files before treating memory as ready; `status` and `check` report an uncurated brief.
 
+To repair an existing setup, use `memory-custodian init --repair`. Repair creates missing files and updates known generated metadata or managed bootstrap blocks without overwriting curated memory. Full replacement is deliberately separate and preview-first: inspect `memory-custodian init --replace-existing`, then add `--apply` only when the listed files should be replaced. The legacy memory-file `--force` behavior is not supported; `--force-agent` remains available for recognized managed bootstrap blocks.
+
 The default initializer creates the core protocol:
 
 ```text
@@ -228,6 +230,8 @@ memory-custodian enable profile/git
 memory-custodian enable area/frontend
 ```
 
+Enabling an optional module never overwrites an existing module file.
+
 Check, compact, or migrate the local memory set:
 
 ```bash
@@ -239,6 +243,8 @@ memory-custodian migrate
 
 `forget`, `compact`, and `migrate` are preview-first. Add `--apply` only after reviewing the complete plan. Short topics and plans matching multiple semantic units additionally require `forget --allow-broad-match`.
 
+Inbox compaction does not infer decisions, constraints, preferences, or rejected approaches from keywords. The CLI reports candidates and can apply only exact duplicate removal and exact tombstone filtering. An Agent reviews each remaining candidate's scope, type, confidence, and existing overlap, then edits Markdown or calls `add`; `check` validates the result.
+
 Hard forget replaces matching topic-bearing soft tombstones with a generic redacted guard; purge removes them. Matches inside a plain body or preamble are never deleted wholesale: preview reports `Manual rewrite required`, and apply refuses until the text is semantically rewritten.
 Decision archival additionally requires semantic review and explicit confirmation with `compact --target decisions.md --apply --archive-oldest`.
 
@@ -247,6 +253,8 @@ Decision archival additionally requires semantic review and explicit confirmatio
 - Memory lives as local Markdown under `docs/memory/`, so it can be reviewed, diffed, committed, and rolled back like code.
 - Platform files such as `AGENTS.md`, `CLAUDE.md`, and `GEMINI.md` stay thin; they point agents to the manifest instead of storing durable memory.
 - Routine CLI operations use Python stdlib only and work offline.
+- Expected input and filesystem errors are reported on stderr; unexpected programming failures retain their traceback for debugging.
+- CI exercises the Python CLI on Ubuntu and includes a Windows smoke job for platform-sensitive behavior.
 - The default architecture avoids RAG retrieval, embedding indexes, vector databases, cloud-hosted memory, chat-log archiving, automatic full-context loading, and required Git workflows.
 - Install and update flows may use normal plugin marketplace or package distribution channels.
 - Deletion and avoidance are explicit through `do-not-use.md` tombstones.

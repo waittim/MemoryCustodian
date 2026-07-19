@@ -1,6 +1,6 @@
 # Manifest Policy
 
-`manifest.md` is the routing layer for MemoryCustodian. It tells an agent which memory files may enter context for a task.
+`manifest.md` is the sole runtime routing authority for MemoryCustodian. It tells an agent which memory files may enter context for a task.
 
 ## Responsibilities
 
@@ -12,30 +12,15 @@
 
 The manifest should not contain full project memory, decision history, or long rules. Put durable content in the relevant memory file and keep the manifest short. Optional module entries should be short discovery hints, not summaries of the optional file contents.
 
-## Default Loading
+## Generated Defaults
 
-Always load:
-
-- `brief.md`
-
-Do not load these by default:
-
-- `inbox.md`
-- `archive/`
-- unrelated `rules/*.md`
-- unrelated `profiles/*.md`
-- unrelated `areas/*.md`
+The generated manifest normally loads `brief.md` and keeps inbox, archive, and unrelated optional modules out of default context. These are template defaults, not a second routing definition. Always follow the current project's manifest when it differs.
 
 ## Task Routing
 
-Use these task categories unless the project manifest says otherwise:
+Identify the requested category, such as planning, implementation, artifact work, preferences, history, or maintenance, and resolve its files from the project manifest. Never supplement a valid custom route from a built-in table, example, adapter, or remembered default.
 
-- Planning / architecture / refactoring: `decisions.md`, `constraints.md`, `do-not-use.md`
-- Implementation / execution / debugging: `decisions.md`, `constraints.md`, `do-not-use.md`, matched `areas/*.md`, and `preferences.md` if present
-- User-facing artifact / output: `do-not-use.md`, `rules/output.md` if present, and `preferences.md` if present
-- Preferences: `preferences.md` if present
-- Recap / history: `decisions.md` and `changelog.md` if present
-- Memory maintenance: `inbox.md`, `do-not-use.md`, and `changelog.md` if present
+If no memory directory exists, normal project work may continue without memory. If the directory exists but `manifest.md` is missing, stop memory loading and report the setup as incomplete or corrupted. Do not guess routes from filenames.
 
 ## Optional Modules
 

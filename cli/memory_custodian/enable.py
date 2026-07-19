@@ -5,15 +5,15 @@ from __future__ import annotations
 from pathlib import Path
 
 from .protocol import (
-    append_changelog,
+    changelog_text,
     is_indexable_optional_path,
     is_safe_memory_name,
     manifest_with_optional_module_index,
     resolve_memory_dir,
     resolve_project_root,
     today,
-    write_text,
 )
+from .mutations import TextMutation, apply_mutations
 from .templates import render_area_template, render_profile_template, render_rule_template, render_template
 
 
@@ -56,35 +56,40 @@ def _feature_path_and_text(feature: str, current_date: str) -> tuple[str, str] |
     return None
 
 
-def _write_optional(path: Path, text: str, force: bool) -> str:
-    if path.exists() and not force:
-        return "kept"
-    write_text(path, text)
-    return "written"
-
-
 def run(args) -> int:
     project_root = resolve_project_root(args.project_root)
     memory_dir = resolve_memory_dir(project_root, args.memory_dir)
     if not memory_dir.exists():
-        print(f"Memory directory not found: {memory_dir}")
-        return 1
+        raise FileNotFoundError(f"Memory directory not found: {memory_dir}")
+    manifest_path = memory_dir / "manifest.md"
+    if not manifest_path.exists():
+        raise ValueError("manifest.md is missing; the MemoryCustodian setup is incomplete or corrupted")
+    if args.force:
+        raise ValueError("enable --force was removed because it could overwrite curated memory; existing modules are always preserved")
 
     result = _feature_path_and_text(args.feature, today())
     if result is None:
-        print(f"Unknown or invalid optional feature: {args.feature}")
-        return 1
+        raise ValueError(f"Unknown or invalid optional feature: {args.feature}")
 
     relative_path, text = result
-    state = _write_optional(memory_dir / relative_path, text, args.force)
+    path = memory_dir / relative_path
+    state = "kept" if path.exists() else "written"
+    target_text = path.read_text(encoding="utf-8") if path.exists() else text
+    planned: dict[Path, str] = {} if path.exists() else {path: target_text}
     manifest_state = None
-    manifest_path = memory_dir / "manifest.md"
-    if is_indexable_optional_path(relative_path) and manifest_path.exists():
+    if is_indexable_optional_path(relative_path):
         updated_manifest, changed = manifest_with_optional_module_index(manifest_path.read_text(encoding="utf-8"), relative_path)
         if changed:
-            write_text(manifest_path, updated_manifest)
+            planned[manifest_path] = updated_manifest
             manifest_state = f"indexed {relative_path}"
-    append_changelog(memory_dir, f"Enabled optional memory module {relative_path}.")
+    changelog = memory_dir / "changelog.md"
+    if relative_path == "changelog.md":
+        planned[changelog] = changelog_text(target_text, f"Enabled optional memory module {relative_path}.")
+    elif changelog.exists():
+        planned[changelog] = changelog_text(
+            changelog.read_text(encoding="utf-8"), f"Enabled optional memory module {relative_path}."
+        )
+    apply_mutations([TextMutation(target, content) for target, content in planned.items()])
     print(f"{relative_path}: {state}")
     if manifest_state:
         print(f"manifest.md: {manifest_state}")

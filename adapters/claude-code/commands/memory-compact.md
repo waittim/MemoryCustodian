@@ -6,11 +6,15 @@ Run a dry run first:
 memory-custodian compact
 ```
 
-If the proposed deterministic changes are appropriate, run:
+The report lists exact duplicates, exact tombstone matches, and candidates requiring Agent review. For each candidate, determine scope, type, confidence, and whether equivalent memory already exists. Then edit the appropriate Markdown directly or use `memory-custodian add`.
+
+If the exact mechanical cleanup is appropriate, run:
 
 ```bash
 memory-custodian compact --apply
 ```
+
+This command does not classify or promote candidates. It only removes the exact duplicate and tombstone matches shown in the preview; reviewed candidates remain in the inbox until handled explicitly. Run `memory-custodian check` after semantic updates.
 
 For an over-budget active file, run a target dry run:
 

@@ -57,27 +57,70 @@ class AddForgetCompactTests(unittest.TestCase):
             self.assertNotIn("No unprocessed memory candidates.", inbox)
             self.assertLess(inbox.index("Second inbox marker"), inbox.index("First inbox marker"))
 
-    def test_compact_dry_run_and_apply(self):
+    def test_compact_reports_candidates_and_applies_only_exact_cleanup(self):
         with tempfile.TemporaryDirectory() as tmp:
             self.assertEqual(main(["init", "--project-root", tmp]), 0)
             memory = Path(tmp) / "docs" / "memory"
+            original_decisions = (memory / "decisions.md").read_text(encoding="utf-8")
+            original_constraints = (memory / "constraints.md").read_text(encoding="utf-8")
+            (memory / "do-not-use.md").write_text(
+                "# Do Not Use / Tombstones\n\n- Exact forbidden note.\n",
+                encoding="utf-8",
+            )
             (memory / "inbox.md").write_text(
-                "# Memory Inbox\n\n## Today\n- User prefers short context packs.\n- Must work offline.\n- Must work offline.\n- Unclear temporary note.\n",
+                "# Memory Inbox\n\n"
+                "## Today\n"
+                "- User prefers short context packs.\n"
+                "- Must investigate whether SQLite is appropriate.\n"
+                "- Must investigate whether SQLite is appropriate.\n"
+                "- We decided to evaluate a remote cache.\n"
+                "- Exact forbidden note.\n",
                 encoding="utf-8",
             )
             out = StringIO()
             with redirect_stdout(out):
                 self.assertEqual(main(["compact", "--project-root", tmp]), 0)
-            self.assertIn("Dry run only", out.getvalue())
+            preview = out.getvalue()
+            self.assertIn("Exact duplicates removable: 1", preview)
+            self.assertIn("Exact tombstone matches removable: 1", preview)
+            self.assertIn("Candidates requiring Agent review: 3", preview)
+            self.assertIn("Must investigate whether SQLite is appropriate", preview)
+            self.assertIn("No semantic destinations are inferred", preview)
 
             self.assertEqual(main(["compact", "--project-root", tmp, "--apply"]), 0)
-            self.assertIn("short context packs", (memory / "preferences.md").read_text(encoding="utf-8"))
-            self.assertIn("work offline", (memory / "constraints.md").read_text(encoding="utf-8"))
             inbox = (memory / "inbox.md").read_text(encoding="utf-8")
-            self.assertIn("Unclear temporary note", inbox)
-            self.assertEqual(inbox.count("Must work offline"), 0)
+            self.assertIn("User prefers short context packs", inbox)
+            self.assertIn("We decided to evaluate a remote cache", inbox)
+            self.assertEqual(inbox.count("Must investigate whether SQLite is appropriate"), 1)
+            self.assertNotIn("Exact forbidden note", inbox)
+            self.assertFalse((memory / "preferences.md").exists())
+            self.assertEqual((memory / "decisions.md").read_text(encoding="utf-8"), original_decisions)
+            self.assertEqual((memory / "constraints.md").read_text(encoding="utf-8"), original_constraints)
 
-    def test_compact_prepends_dated_targets(self):
+    def test_compact_removes_exact_inbox_match_for_h2_tombstone(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            self.assertEqual(
+                main(["add", "Avoid remote cache.", "--type", "tombstone", "--project-root", tmp]),
+                0,
+            )
+            self.assertEqual(
+                main(["add", "Avoid remote cache.", "--type", "inbox", "--project-root", tmp]),
+                0,
+            )
+            memory = Path(tmp) / "docs" / "memory"
+            tombstones = (memory / "do-not-use.md").read_text(encoding="utf-8")
+
+            out = StringIO()
+            with redirect_stdout(out):
+                self.assertEqual(main(["compact", "--project-root", tmp]), 0)
+            self.assertIn("Exact tombstone matches removable: 1", out.getvalue())
+
+            self.assertEqual(main(["compact", "--project-root", tmp, "--apply"]), 0)
+            self.assertNotIn("Avoid remote cache.", (memory / "inbox.md").read_text(encoding="utf-8"))
+            self.assertEqual((memory / "do-not-use.md").read_text(encoding="utf-8"), tombstones)
+
+    def test_compact_apply_does_not_promote_keyword_candidates(self):
         with tempfile.TemporaryDirectory() as tmp:
             self.assertEqual(main(["init", "--project-root", tmp]), 0)
             memory = Path(tmp) / "docs" / "memory"
@@ -90,12 +133,17 @@ class AddForgetCompactTests(unittest.TestCase):
                 "- Do not use stale memory ordering.\n",
                 encoding="utf-8",
             )
+            original_inbox = (memory / "inbox.md").read_text(encoding="utf-8")
+            original_decisions = (memory / "decisions.md").read_text(encoding="utf-8")
+            original_tombstones = (memory / "do-not-use.md").read_text(encoding="utf-8")
 
-            self.assertEqual(main(["compact", "--project-root", tmp, "--apply"]), 0)
-            decisions = (memory / "decisions.md").read_text(encoding="utf-8")
-            self.assertLess(decisions.index("newest compact marker"), decisions.index("older compact marker"))
-            tombstones = (memory / "do-not-use.md").read_text(encoding="utf-8")
-            self.assertIn("Tombstone: Do not use stale memory ordering", tombstones)
+            out = StringIO()
+            with redirect_stdout(out):
+                self.assertEqual(main(["compact", "--project-root", tmp, "--apply"]), 0)
+            self.assertIn("No deterministic inbox changes to apply", out.getvalue())
+            self.assertEqual((memory / "inbox.md").read_text(encoding="utf-8"), original_inbox)
+            self.assertEqual((memory / "decisions.md").read_text(encoding="utf-8"), original_decisions)
+            self.assertEqual((memory / "do-not-use.md").read_text(encoding="utf-8"), original_tombstones)
 
     def test_compact_target_archives_old_h2_entries(self):
         with tempfile.TemporaryDirectory() as tmp:

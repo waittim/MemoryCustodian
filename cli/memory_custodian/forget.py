@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from .mutations import TextMutation, apply_mutations
 from .protocol import (
     MarkdownUnit,
     ensure_newline,
@@ -16,7 +17,6 @@ from .protocol import (
     resolve_memory_dir,
     resolve_project_root,
     today,
-    write_text,
 )
 
 
@@ -137,8 +137,7 @@ def run(args) -> int:
     project_root = resolve_project_root(args.project_root)
     memory_dir = resolve_memory_dir(project_root, args.memory_dir)
     if not memory_dir.exists():
-        print(f"Memory directory not found: {memory_dir}")
-        return 1
+        raise FileNotFoundError(f"Memory directory not found: {memory_dir}")
     if not (memory_dir / "manifest.md").exists():
         raise ValueError("manifest.md is missing; forgetting cannot safely resolve active memory")
     if not (memory_dir / "do-not-use.md").exists():
@@ -232,18 +231,8 @@ def run(args) -> int:
         writes.append((tombstone_path, tombstone_updated))
     if changelog_updated is not None:
         writes.append((changelog_path, changelog_updated))
-    completed: list[str] = []
-    try:
-        for path, updated in writes:
-            write_text(path, ensure_newline(updated))
-            completed.append(path.relative_to(memory_dir).as_posix())
-    except OSError as exc:
-        print(f"Forget apply failed after writing {len(completed)} file(s): {exc}")
-        if completed:
-            print("Successfully written:")
-            for name in completed:
-                print(f"- {name}")
-        return 1
+    completed_paths = apply_mutations([TextMutation(path, ensure_newline(updated)) for path, updated in writes])
+    completed = [path.relative_to(memory_dir).as_posix() for path in completed_paths]
 
     print(f"Applied forgetting plan. Written files: {len(completed)}")
     for name in completed:

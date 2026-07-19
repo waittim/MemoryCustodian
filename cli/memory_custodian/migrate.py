@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
+from .mutations import TextMutation, apply_mutations
 from .protocol import (
-    append_changelog,
+    changelog_text,
     manifest_with_current_protocol_metadata,
     manifest_with_current_task_routing,
     manifest_with_optional_index,
     resolve_memory_dir,
     resolve_project_root,
-    write_text,
 )
 
 
@@ -18,11 +18,9 @@ def run(args) -> int:
     memory_dir = resolve_memory_dir(project_root, args.memory_dir)
     manifest_path = memory_dir / "manifest.md"
     if not memory_dir.exists():
-        print(f"Memory directory missing: {memory_dir}")
-        return 1
+        raise FileNotFoundError(f"Memory directory missing: {memory_dir}")
     if not manifest_path.exists():
-        print(f"manifest.md missing: {manifest_path}")
-        return 1
+        raise ValueError(f"manifest.md missing: {manifest_path}")
 
     original = manifest_path.read_text(encoding="utf-8")
     updated, metadata_changed = manifest_with_current_protocol_metadata(original)
@@ -48,7 +46,18 @@ def run(args) -> int:
         print("Dry run only. Re-run with --apply to write migration changes.")
         return 0
 
-    write_text(manifest_path, updated)
-    append_changelog(memory_dir, "Migrated memory manifest to the current MemoryCustodian protocol.")
+    mutations = [TextMutation(manifest_path, updated)]
+    changelog = memory_dir / "changelog.md"
+    if changelog.exists():
+        mutations.append(
+            TextMutation(
+                changelog,
+                changelog_text(
+                    changelog.read_text(encoding="utf-8"),
+                    "Migrated memory manifest to the current MemoryCustodian protocol.",
+                ),
+            )
+        )
+    apply_mutations(mutations)
     print("Applied migration.")
     return 0

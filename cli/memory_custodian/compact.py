@@ -6,17 +6,17 @@ from pathlib import Path, PurePosixPath
 
 from .protocol import (
     DECISION_ENTRY_BUDGET,
-    append_changelog,
-    append_text,
+    appended_text,
     budget_for,
+    changelog_text,
     estimate_tokens,
     long_decision_entries,
-    prepend_text,
+    parse_markdown_units,
     resolve_memory_dir,
     resolve_project_root,
     today,
-    write_text,
 )
+from .mutations import TextMutation, apply_mutations
 from .templates import render_template
 
 ARCHIVABLE_H2_TARGETS = {"decisions.md", "changelog.md"}
@@ -38,39 +38,47 @@ def _extract_items(text: str) -> list[str]:
     return items
 
 
-def _classify(item: str) -> str | None:
-    lower = item.lower()
-    if any(token in lower for token in ("do not", "don't", "not use", "rejected", "avoid")):
-        return "do-not-use.md"
-    if any(token in lower for token in ("decided", "decision", "chose", "chosen")):
-        return "decisions.md"
-    if any(token in lower for token in ("must", "constraint", "required", "requirement")):
-        return "constraints.md"
-    if any(token in lower for token in ("prefer", "preference", "wants", "style")):
-        return "preferences.md"
-    return None
+def _clean_inbox(text: str, tombstones: str) -> tuple[str, list[str], int, int]:
+    """Remove only exact duplicate bullets and exact bullets already in tombstones."""
 
-
-def _format_for(target: str, item: str) -> str:
-    if target == "decisions.md":
-        return f"## {today()} - {item[:72]}\nDecision:\n{item}\nReason:\nCompacted from memory inbox."
-    if target == "do-not-use.md":
-        return (
-            f"## Tombstone: {item[:72]}\n"
-            f"Do not reintroduce unless the user explicitly reverses this. "
-            f"Reason: compacted from memory inbox. Date: {today()}."
-        )
-    return f"- {item}"
-
-
-def _ensure_destination(memory_dir, target: str) -> None:
-    path = memory_dir / target
-    if path.exists():
-        return
-    if target == "preferences.md":
-        write_text(path, render_template("preferences.md", today()))
-    elif target == "changelog.md":
-        write_text(path, render_template("changelog.md", today()))
+    tombstone_keys = {
+        line.strip()[2:].strip().casefold()
+        for line in tombstones.splitlines()
+        if line.strip().startswith("- ") and line.strip()[2:].strip()
+    }
+    tombstone_keys.update(
+        unit.heading.split(":", 1)[1].strip().casefold()
+        for unit in parse_markdown_units(tombstones).units
+        if unit.kind == "h2"
+        and unit.heading is not None
+        and unit.heading.casefold().startswith("tombstone:")
+        and unit.heading.split(":", 1)[1].strip()
+    )
+    seen: set[str] = set()
+    candidates: list[str] = []
+    kept_lines: list[str] = []
+    duplicates = 0
+    tombstone_matches = 0
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("- "):
+            kept_lines.append(line)
+            continue
+        item = stripped[2:].strip()
+        if not item:
+            kept_lines.append(line)
+            continue
+        key = item.casefold()
+        if key in seen:
+            duplicates += 1
+            continue
+        seen.add(key)
+        if key in tombstone_keys:
+            tombstone_matches += 1
+            continue
+        candidates.append(item)
+        kept_lines.append(line)
+    return "\n".join(kept_lines).rstrip() + "\n", candidates, duplicates, tombstone_matches
 
 
 def _normalize_target(target: str) -> str:
@@ -160,10 +168,11 @@ def _archive_target_path(memory_dir: Path, target: str) -> Path:
     return memory_dir / "archive" / f"{stem}-{today()}.md"
 
 
-def _write_archive_entries(memory_dir: Path, target: str, archived_sections: list[list[str]]) -> None:
+def _archive_mutations(memory_dir: Path, target: str, archived_sections: list[list[str]]) -> list[TextMutation]:
+    mutations: list[TextMutation] = []
     readme = memory_dir / "archive" / "README.md"
     if not readme.exists():
-        write_text(readme, render_template("archive/README.md", today()))
+        mutations.append(TextMutation(readme, render_template("archive/README.md", today())))
 
     archive_path = _archive_target_path(memory_dir, target)
     body = (
@@ -173,9 +182,11 @@ def _write_archive_entries(memory_dir: Path, target: str, archived_sections: lis
         + "\n\n".join("\n".join(section).strip() for section in archived_sections)
     )
     if archive_path.exists():
-        append_text(archive_path, body)
+        archive_text = appended_text(archive_path.read_text(encoding="utf-8"), body)
     else:
-        write_text(archive_path, f"# Archived Memory: {target}\n\n{body}\n")
+        archive_text = f"# Archived Memory: {target}\n\n{body}\n"
+    mutations.append(TextMutation(archive_path, archive_text))
+    return mutations
 
 
 def _print_long_decision_entries(entries: list[tuple[str, int]]) -> None:
@@ -191,8 +202,7 @@ def _print_long_decision_entries(entries: list[tuple[str, int]]) -> None:
 def _run_target_compaction(args, memory_dir: Path) -> int:
     target, path = _target_path(memory_dir, args.target)
     if not path.exists():
-        print(f"Target not found: {path}")
-        return 1
+        raise FileNotFoundError(f"Target not found: {path}")
 
     budget = budget_for(target)
     original = path.read_text(encoding="utf-8")
@@ -223,8 +233,19 @@ def _run_target_compaction(args, memory_dir: Path) -> int:
             print(f"Action: remove {removed} exact duplicate bullet(s)")
             print(f"Projected tokens after dedupe: {projected}/{budget} max")
             if args.apply:
-                write_text(path, working)
-                append_changelog(memory_dir, f"Compacted {target}: removed {removed} duplicate bullet(s).")
+                mutations = [TextMutation(path, working)]
+                changelog = memory_dir / "changelog.md"
+                if changelog.exists() and changelog != path:
+                    mutations.append(
+                        TextMutation(
+                            changelog,
+                            changelog_text(
+                                changelog.read_text(encoding="utf-8"),
+                                f"Compacted {target}: removed {removed} duplicate bullet(s).",
+                            ),
+                        )
+                    )
+                apply_mutations(mutations)
                 applied_actions.append("deduped bullets")
             if projected <= budget:
                 if args.apply:
@@ -279,10 +300,20 @@ def _run_target_compaction(args, memory_dir: Path) -> int:
                 )
                 return 1
 
-            write_text(path, plan["compacted"])
-            _write_archive_entries(memory_dir, target, plan["archived"])
-            if target != "changelog.md":
-                append_changelog(memory_dir, f"Compacted {target}: archived {len(plan['archived'])} old entries.")
+            mutations = _archive_mutations(memory_dir, target, plan["archived"])
+            mutations.append(TextMutation(path, plan["compacted"]))
+            changelog = memory_dir / "changelog.md"
+            if target != "changelog.md" and changelog.exists():
+                mutations.append(
+                    TextMutation(
+                        changelog,
+                        changelog_text(
+                            changelog.read_text(encoding="utf-8"),
+                            f"Compacted {target}: archived {len(plan['archived'])} old entries.",
+                        ),
+                    )
+                )
+            apply_mutations(mutations)
             print("Applied target compaction.")
             return 0
 
@@ -298,66 +329,51 @@ def _run_target_compaction(args, memory_dir: Path) -> int:
 def run(args) -> int:
     project_root = resolve_project_root(args.project_root)
     memory_dir = resolve_memory_dir(project_root, args.memory_dir)
+    if not memory_dir.exists():
+        raise FileNotFoundError(f"Memory directory not found: {memory_dir}")
+    if not (memory_dir / "manifest.md").exists():
+        raise ValueError("manifest.md is missing; the MemoryCustodian setup is incomplete or corrupted")
     if args.target:
         return _run_target_compaction(args, memory_dir)
 
     inbox = memory_dir / "inbox.md"
     if not inbox.exists():
-        print(f"Inbox not found: {inbox}")
-        return 1
+        raise FileNotFoundError(f"Inbox not found: {inbox}")
 
     original = inbox.read_text(encoding="utf-8")
-    tombstones = (memory_dir / "do-not-use.md").read_text(encoding="utf-8").casefold() if (memory_dir / "do-not-use.md").exists() else ""
+    tombstone_path = memory_dir / "do-not-use.md"
+    tombstones = tombstone_path.read_text(encoding="utf-8") if tombstone_path.exists() else ""
     items = _extract_items(original)
-    seen: set[str] = set()
-    deduped: list[str] = []
-    duplicates = 0
-    for item in items:
-        key = item.casefold()
-        if key in seen:
-            duplicates += 1
-            continue
-        seen.add(key)
-        deduped.append(item)
-
-    classified: dict[str, list[str]] = {}
-    remaining: list[str] = []
-    for item in deduped:
-        if item.casefold() in tombstones:
-            continue
-        target = _classify(item)
-        if target is None:
-            remaining.append(item)
-        else:
-            classified.setdefault(target, []).append(item)
+    cleaned, candidates, duplicates, tombstone_matches = _clean_inbox(original, tombstones)
 
     print("# Compaction Plan")
     print(f"Inbox items: {len(items)}")
-    print(f"Duplicates: {duplicates}")
-    for target, values in classified.items():
-        print(f"{target}: {len(values)} candidate(s)")
-    print(f"Remaining inbox items: {len(remaining)}")
+    print(f"Exact duplicates removable: {duplicates}")
+    print(f"Exact tombstone matches removable: {tombstone_matches}")
+    print(f"Candidates requiring Agent review: {len(candidates)}")
+    for index, item in enumerate(candidates, start=1):
+        print(f"- [{index}] {item}")
+    print("No semantic destinations are inferred. Review scope, type, confidence, and existing memory before using `add` or editing Markdown.")
 
     if not args.apply:
-        print("Dry run only. Re-run with --apply to write deterministic changes.")
+        if duplicates or tombstone_matches:
+            print("Dry run only. Re-run with --apply to remove only the exact mechanical matches shown above.")
+        else:
+            print("Dry run only. No deterministic inbox cleanup is available.")
         return 0
 
-    for target, values in classified.items():
-        _ensure_destination(memory_dir, target)
-        prepend_target = target in {"decisions.md", "do-not-use.md"}
-        ordered_values = reversed(values) if prepend_target else values
-        for item in ordered_values:
-            if prepend_target:
-                prepend_text(memory_dir / target, _format_for(target, item))
-            else:
-                append_text(memory_dir / target, _format_for(target, item))
+    if cleaned == original:
+        print("No deterministic inbox changes to apply; candidates remain for Agent review.")
+        return 0
 
-    new_inbox = "# Memory Inbox\n\n"
-    if remaining:
-        new_inbox += f"## {today()}\n" + "\n".join(f"- {item}" for item in remaining) + "\n"
+    mutations = [TextMutation(inbox, cleaned)]
+    changelog = memory_dir / "changelog.md"
+    if changelog.exists():
+        message = f"Cleaned inbox: removed {duplicates} exact duplicate(s) and {tombstone_matches} exact tombstone match(es)."
+        mutations.append(TextMutation(changelog, changelog_text(changelog.read_text(encoding="utf-8"), message)))
+    apply_mutations(mutations)
+    if candidates:
+        print("Applied deterministic inbox cleanup; candidates remain for Agent review.")
     else:
-        new_inbox += "No unprocessed memory candidates.\n"
-    write_text(inbox, new_inbox)
-    append_changelog(memory_dir, f"Compacted inbox: moved {sum(len(v) for v in classified.values())} item(s), removed {duplicates} duplicate(s).")
-    print("Applied compaction.")
+        print("Applied deterministic inbox cleanup; no candidates remain.")
     return 0

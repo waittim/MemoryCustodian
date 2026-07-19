@@ -1,6 +1,6 @@
 # MemoryCustodian Generic Agent Instructions
 
-If this project contains `docs/memory/manifest.md`, follow it.
+If this project has no `docs/memory/` directory, continue normally. If the directory exists, follow `docs/memory/manifest.md`; if that file is missing, report an incomplete or corrupted setup and do not infer routes.
 
 Always:
 

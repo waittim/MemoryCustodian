@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import sys
 
 from . import __version__
 from . import add as add_cmd
@@ -15,6 +16,7 @@ from . import migrate as migrate_cmd
 from . import read as read_cmd
 from . import status as status_cmd
 from .protocol import TASK_CATEGORY
+from .mutations import PartialMutationError
 from .templates import DEFAULT_MEMORY_DIR
 
 
@@ -41,7 +43,10 @@ def build_parser() -> argparse.ArgumentParser:
         default="none",
         help="Optionally add platform entry snippets.",
     )
-    init_parser.add_argument("--force", action="store_true", help="Overwrite existing memory files.")
+    init_parser.add_argument("--repair", action="store_true", help="Create missing files and safely repair generated metadata or managed bootstrap blocks without replacing curated memory.")
+    init_parser.add_argument("--replace-existing", action="store_true", help="Preview replacement of existing selected memory files; requires --apply to write.")
+    init_parser.add_argument("--apply", action="store_true", help="Apply a --replace-existing plan. Safe init and --repair do not require this flag.")
+    init_parser.add_argument("--force", action="store_true", help=argparse.SUPPRESS)
     init_parser.add_argument("--force-agent", action="store_true", help="Replace an existing managed or recognized legacy MemoryCustodian block.")
     init_parser.set_defaults(func=init_cmd.run)
 
@@ -103,7 +108,7 @@ def build_parser() -> argparse.ArgumentParser:
     enable_parser = sub.add_parser("enable", help="Enable an optional memory module.")
     _add_common(enable_parser)
     enable_parser.add_argument("feature", help="Feature to enable, such as preferences, changelog, rules/output, profile/git, or area/frontend.")
-    enable_parser.add_argument("--force", action="store_true", help="Overwrite an existing optional memory file.")
+    enable_parser.add_argument("--force", action="store_true", help=argparse.SUPPRESS)
     enable_parser.set_defaults(func=enable_cmd.run)
 
     check_parser = sub.add_parser("check", help="Check protocol consistency.")
@@ -124,7 +129,20 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return args.func(args)
     except ValueError as exc:
-        print(f"Error: {exc}")
+        print(f"Error: {exc}", file=sys.stderr)
+        return 2
+    except PartialMutationError as exc:
+        print(f"I/O error while writing {exc.failed}: {exc}", file=sys.stderr)
+        if exc.completed:
+            print("Partial completion; these files were already written:", file=sys.stderr)
+            for path in exc.completed:
+                print(f"- {path}", file=sys.stderr)
+        else:
+            print("No files were written.", file=sys.stderr)
+        print("Run `memory-custodian check` after resolving the filesystem error.", file=sys.stderr)
+        return 1
+    except OSError as exc:
+        print(f"I/O error: {exc}", file=sys.stderr)
         return 1
 
 

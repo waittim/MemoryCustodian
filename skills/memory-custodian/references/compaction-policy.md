@@ -15,11 +15,7 @@ Compact when:
 
 ## Compaction Inputs
 
-Usually read:
-
-- `brief.md`
-- `inbox.md`
-- relevant destination files such as `decisions.md`, `constraints.md`, `preferences.md`, and `do-not-use.md`
+Follow the project manifest's memory-maintenance route, then read only the candidates and potential destinations needed for review.
 
 Do not read `archive/` unless the user asks.
 
@@ -49,9 +45,9 @@ Do not read `archive/` unless the user asks.
 
 ## CLI Behavior
 
-The CLI can deduplicate and classify obvious inbox bullets, but semantic compaction should be reviewed by an agent or user.
+The CLI must not classify inbox entries by keywords or infer semantic destinations. It may report budgets and candidates, remove exact duplicate bullets, and filter exact tombstone matches. All other candidates remain in the inbox until an Agent or user reviews their scope, type, confidence, and overlap with existing memory.
 
-Use `memory-custodian compact` for an inbox dry run and `memory-custodian compact --apply` for deterministic inbox changes.
+Use `memory-custodian compact` to generate the candidate report. After review, edit the destination Markdown directly or call `add`, then run `check`. Use `memory-custodian compact --apply` only to apply the exact mechanical inbox cleanup shown in the preview; it does not promote candidates or remove them merely because they were reported.
 
 For an over-budget active file, use `memory-custodian compact --target decisions.md` first. With `--target`, the CLI reports the current budget state and applies only conservative deterministic changes: exact duplicate bullet removal for simple bullet files, or older complete H2 entry archival for supported history-like files such as `decisions.md` and `changelog.md`.
 

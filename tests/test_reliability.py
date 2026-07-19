@@ -1,4 +1,4 @@
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
 from unittest import mock
@@ -233,10 +233,10 @@ class PackingAndRoutingTests(unittest.TestCase):
             self.assertEqual(main(["init", "--project-root", tmp]), 0)
             memory = Path(tmp) / "docs" / "memory"
             (memory / "manifest.md").unlink()
-            out = StringIO()
-            with redirect_stdout(out):
-                self.assertEqual(main(["read", "--task", "planning", "--project-root", tmp]), 1)
-            self.assertIn("manifest.md is missing", out.getvalue())
+            err = StringIO()
+            with redirect_stderr(err):
+                self.assertEqual(main(["read", "--task", "planning", "--project-root", tmp]), 2)
+            self.assertIn("manifest.md is missing", err.getvalue())
 
         with tempfile.TemporaryDirectory() as tmp:
             self.assertEqual(main(["init", "--project-root", tmp]), 0)
@@ -244,7 +244,10 @@ class PackingAndRoutingTests(unittest.TestCase):
             text = manifest.read_text(encoding="utf-8")
             text = text.replace("- decisions.md\n- constraints.md", "- ../outside.md\n- constraints.md", 1)
             manifest.write_text(text, encoding="utf-8")
-            self.assertEqual(main(["read", "--task", "planning", "--project-root", tmp]), 1)
+            err = StringIO()
+            with redirect_stderr(err):
+                self.assertEqual(main(["read", "--task", "planning", "--project-root", tmp]), 2)
+            self.assertIn("Error:", err.getvalue())
 
 
 class BootstrapReliabilityTests(unittest.TestCase):
@@ -261,7 +264,10 @@ class BootstrapReliabilityTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             agents = Path(tmp) / "AGENTS.md"
             agents.write_text("# Agent\n\n<!-- memory-custodian:start -->\n", encoding="utf-8")
-            self.assertEqual(main(["init", "--agent", "codex", "--project-root", tmp]), 1)
+            err = StringIO()
+            with redirect_stderr(err):
+                self.assertEqual(main(["init", "--agent", "codex", "--project-root", tmp]), 2)
+            self.assertIn("malformed MemoryCustodian managed block", err.getvalue())
             self.assertEqual(agents.read_text(encoding="utf-8").count("<!-- memory-custodian:start -->"), 1)
 
 
