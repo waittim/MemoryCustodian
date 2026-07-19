@@ -2,6 +2,12 @@
 
 Entries are newest first.
 
+## 2026-07-18 - Protocol 0.5
+Decision:
+Keep for v0.8.
+Reason:
+Existing manifests support strict routing.
+
 ## 2026-07-12 - Prioritize useful and reachable memory over chronological accumulation.
 Decision:
 Prioritize useful and reachable memory over chronological accumulation; keep each decision concise and scope-specific.

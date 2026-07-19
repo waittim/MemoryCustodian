@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+## v0.8.0 - 2026-07-18
+
+### Reliability and privacy
+
+- Made every managed-file write use same-directory atomic replacement with flush and best-effort file `fsync`.
+- Made `forget` preview-first, literal, case-insensitive, broad-match guarded, and structure-safe at complete H2 or bullet boundaries.
+- Kept hard and purge records topic-free; purge now includes archive memory and warns about copies outside command scope.
+
+### Context and routing
+
+- Replaced raw token truncation with complete-entry packing, omission counts, and oversized atomic-entry warnings.
+- Made initialized-project runtime routing authoritative to `manifest.md`, with exact canonical headings, safe paths, and proactive route validation.
+- Kept MemoryCustodian Protocol at 0.5 because existing generated 0.5 manifests already use the required headings and syntax.
+
+### Bootstrap and assurance
+
+- Added idempotent managed blocks for generated `AGENTS.md`, `CLAUDE.md`, and `GEMINI.md` bootstraps, including guarded legacy conversion.
+- Added Python 3.10/3.13 CI for unit, static contract, repository-memory, and whitespace checks.
+- Renamed checker output and documentation to “skill contract check”; it validates static scenarios and does not execute an Agent runtime.
+
 ## v0.7.0 - 2026-07-12
 
 ### Memory Quality

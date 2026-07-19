@@ -2,6 +2,9 @@
 
 Entries are newest first.
 
+## 2026-07-18
+- Prepared package 0.8.0 with atomic writes, preview-first semantic forgetting, complete-entry packing, manifest-authoritative routing, idempotent bootstrap blocks, CI, and static contract-check terminology.
+
 ## 2026-07-12
 - Prepared package 0.7.0 and protocol 0.5 with curated-brief checks, scope-first area memory, per-decision length guards, budget warnings, and semantic compaction safeguards.
 - Corrected Codex marketplace local-source metadata and aligned README installation, plugin contents, task loading, and refresh guidance with the packaged behavior.
