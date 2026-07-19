@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+## v0.9.1 - 2026-07-19
+
+### Protocol and compaction safety
+
+- Refuse `init --repair` and `migrate` when project protocol metadata is newer than the installed CLI or cannot be parsed, preventing false compatibility through metadata downgrade.
+- Make exact compaction operate on complete column-zero top-level bullet units, preserving nested and continuation content, indentation semantics, and fenced examples.
+- Use the same top-level unit rule for inbox counts and show complete candidates in preview output.
+
+### No-op and documentation correctness
+
+- Make repeated `enable` calls true zero-write no-ops, including changelog state.
+- Clarify that the Skill selects a supported canonical task category and resolves its files exclusively through the current project manifest.
+- Keep MemoryCustodian Protocol at 0.5 because this patch strengthens enforcement without changing the manifest schema.
+
 ## v0.9.0 - 2026-07-19
 
 ### Semantic boundary

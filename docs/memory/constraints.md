@@ -15,3 +15,5 @@
 - CLI inbox compaction must not infer semantic destinations from keywords; an Agent or user decides what memory means.
 - Safe repair and optional enablement must not overwrite curated memory.
 - Multi-file commands must precompute and validate mutation plans, then report any partial completion explicitly.
+- Repair and migration must never downgrade a newer project protocol or accept an unparseable protocol version.
+- Destructive bullet cleanup must operate on complete column-zero top-level units, including their nested and continuation content.
