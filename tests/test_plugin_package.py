@@ -202,6 +202,7 @@ class PluginPackageTests(unittest.TestCase):
             self.assertNotIn("hooks/session-start", names)
             self.assertNotIn("docs/memory/brief.md", names)
             self.assertNotIn("tests/test_plugin_package.py", names)
+            self.assertFalse(any(".egg-info/" in name for name in names), names)
 
 
 if __name__ == "__main__":

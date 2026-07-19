@@ -80,7 +80,10 @@ def git_status() -> str:
 
 
 def should_skip(path: Path) -> bool:
-    return any(part in EXCLUDED_NAMES for part in path.parts) or path.suffix in EXCLUDED_SUFFIXES
+    return (
+        any(part in EXCLUDED_NAMES or part.endswith(".egg-info") for part in path.parts)
+        or path.suffix in EXCLUDED_SUFFIXES
+    )
 
 
 def iter_payload_files() -> list[Path]:
