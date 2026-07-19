@@ -79,6 +79,21 @@ MemoryCustodian turns project memory into a small, explicit workflow:
 
 The result is project memory that is inspectable, diffable, portable across agents, and small enough to use in normal coding loops.
 
+## Built with Codex and GPT-5.6
+
+MemoryCustodian existed before OpenAI Build Week, with v0.7.0 as the pre-event baseline. During Build Week, I collaborated with Codex using GPT-5.6 to develop the v0.8.0 reliability release and the v0.8.1 privacy patch.
+
+Codex accelerated repo-wide analysis and implementation across the protocol, CLI, agent skill, adapters, and tests. It helped turn reliability concerns into concrete plans, identify edge cases, coordinate changes, and expand regression coverage.
+
+GPT-5.6 was especially useful for reasoning about the boundary between semantic judgment and deterministic enforcement, including complete-entry context packing, safe structured deletion, ambiguous prose handling, and privacy-safe forgetting.
+
+I retained responsibility for the product boundaries, architecture, safety model, and final release decisions.
+
+The Build Week releases added atomic writes, validated routing, idempotent agent bootstraps, privacy-safe forgetting, CI, and expanded reliability tests.
+
+Codex and GPT-5.6 were used to build and validate these releases; they are not runtime dependencies.
+
+
 ## Installation
 
 MemoryCustodian currently supports local plugin and source-checkout workflows. The Codex plugin bundle exposes the `memory-custodian` skill, CLI wrappers, and platform snippets. The Claude Code plugin also includes a lightweight session-start hook that reminds agents to load memory through the manifest.
