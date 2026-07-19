@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check MemoryCustodian skill eval scenarios and core skill contracts."""
+"""Check MemoryCustodian static scenarios and core skill contracts."""
 
 from __future__ import annotations
 
@@ -84,12 +84,12 @@ def main() -> int:
     issues.extend(_check_scenarios(config))
 
     if issues:
-        print("MemoryCustodian skill eval check: FAILED")
+        print("MemoryCustodian skill contract check: FAILED")
         for issue in issues:
             print(f"- {issue}")
         return 1
 
-    print("MemoryCustodian skill eval check: OK")
+    print("MemoryCustodian skill contract check: OK")
     print(f"Scenarios: {len(config['required_scenarios'])}")
     print(f"Skill contracts: {len(config['skill_contract'])}")
     return 0

@@ -8,7 +8,7 @@ It stores memory as plain Markdown in your repo and loads only the pieces needed
 
 **Durable memory. Minimal context.**
 
-[![Version](https://img.shields.io/badge/version-0.7.0-blue.svg)](#)
+[![Version](https://img.shields.io/badge/version-0.8.0-blue.svg)](#)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-agnostic-blue.svg)](#)
 [![Design: Offline-first](https://img.shields.io/badge/design-offline--first-blue.svg)](#)
@@ -199,6 +199,7 @@ Record durable memory when a decision, constraint, preference, or rejected appro
 memory-custodian add "We chose manifest-first loading." --type decision
 memory-custodian add "Persist sync retry backoff." --type decision --area sync --reason "Keep retries bounded across launches."
 memory-custodian forget "old deployment note" --mode soft
+memory-custodian forget "old deployment note" --mode soft --apply
 ```
 
 Decision entries have a 120-token guide. Overlong writes are rejected before mutation; first shorten the choice to one or two sentences and the reason to one sentence. Use `--allow-long` only after confirming that splitting the supporting detail would lose essential semantics.
@@ -221,7 +222,7 @@ memory-custodian compact
 memory-custodian migrate
 ```
 
-Use `compact --apply` or `migrate --apply` only after reviewing the dry run.
+`forget`, `compact`, and `migrate` are preview-first. Add `--apply` only after reviewing the complete plan. Short topics and plans matching multiple semantic units additionally require `forget --allow-broad-match`.
 Decision archival additionally requires semantic review and explicit confirmation with `compact --target decisions.md --apply --archive-oldest`.
 
 ## Design Principles
@@ -240,7 +241,7 @@ Decision archival additionally requires semantic review and explicit confirmatio
 - `cli/memory_custodian/`: the stdlib-only Python CLI
 - `adapters/`: thin entry snippets for Codex, Claude Code, Gemini, and generic agents
 - `.codex-plugin/`, `.claude-plugin/`, and `.agents/`: local plugin marketplace metadata
-- `evals/memory-custodian/`: skill behavior scenarios and contract checks
+- `evals/memory-custodian/`: static contract scenarios; the checker does not execute Codex, Claude Code, Gemini, or another model runtime
 - `examples/`: small project layouts for common host environments
 - `templates/`: minimal and optional memory module scaffolding
 

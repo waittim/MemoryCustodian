@@ -106,11 +106,11 @@ Treat decision compaction as semantic maintenance, not chronological trimming. B
 
 When the user asks to forget something:
 
-1. Locate matching memory in common memory files.
-2. Remove or rewrite the matching entry.
-3. Add a tombstone to `do-not-use.md` when the topic may otherwise reappear.
-4. Do not reintroduce the forgotten content during compaction.
-5. For hard forget or purge requests, avoid preserving the removed content in summaries.
+1. Preview the complete semantic-unit plan before writing.
+2. Apply only after explicit `--apply`; use `--allow-broad-match` for short topics or multi-unit plans.
+3. Remove whole H2 entries or top-level bullets, never matching lines alone.
+4. Add a topic-bearing tombstone only for soft mode; hard and purge records stay generic.
+5. Do not reintroduce the forgotten content during compaction.
 
 ## References
 
@@ -139,6 +139,7 @@ memory-custodian compact --apply
 memory-custodian compact --target decisions.md
 memory-custodian compact --target decisions.md --apply --archive-oldest
 memory-custodian forget "topic" --mode soft
+memory-custodian forget "topic" --mode soft --apply
 memory-custodian check
 memory-custodian migrate --apply
 ```

@@ -80,9 +80,9 @@
     {
       "id": "forgetting-contract",
       "terms": [
-        "Remove or rewrite the matching entry.",
-        "Add a tombstone to `do-not-use.md`",
-        "avoid preserving the removed content in summaries"
+        "Preview the complete semantic-unit plan before writing.",
+        "Remove whole H2 entries or top-level bullets",
+        "hard and purge records stay generic"
       ]
     }
   ]

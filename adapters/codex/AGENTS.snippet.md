@@ -1,3 +1,4 @@
+<!-- memory-custodian:start -->
 ## MemoryCustodian
 
 This project uses MemoryCustodian for local project memory.
@@ -11,3 +12,4 @@ Before substantial work:
 5. After meaningful decisions, repeated corrections, or rejected approaches, update the appropriate memory file or propose an update.
 
 Keep this file short. MemoryCustodian is the source of truth for durable project memory.
+<!-- memory-custodian:end -->

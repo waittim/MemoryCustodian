@@ -8,7 +8,7 @@ Forgetting is a first-class MemoryCustodian operation.
 
 Use when the user wants an idea removed from active memory but a guard should remain.
 
-- Remove matching content from common files.
+- Preview and remove matching complete semantic units from active memory.
 - Add a tombstone to `do-not-use.md`.
 - Keep ordinary maintenance history unless the user asks otherwise.
 
@@ -16,8 +16,8 @@ Use when the user wants an idea removed from active memory but a guard should re
 
 Use when the user wants the content gone from memory files.
 
-- Remove matching content from all memory markdown files that are not the tombstone destination.
-- Add only a minimal tombstone topic to `do-not-use.md` if needed.
+- Remove matching complete semantic units from active memory.
+- Add only a generic redacted guard; never persist the topic in tombstones or changelog entries.
 - Avoid preserving the removed content in summaries.
 
 ### Purge
@@ -25,14 +25,20 @@ Use when the user wants the content gone from memory files.
 Use only on explicit request.
 
 - Search active files and `archive/`.
-- Remove matching raw notes and references.
-- Leave only a minimal tombstone topic if a guard is required.
+- Remove matching complete semantic units from active files and `archive/`.
+- Do not add a topic-bearing tombstone; keep any operation record generic.
 
-## Tombstone Format
+## Preview and broad-match safety
+
+`forget` is dry-run by default. Use `--apply` only after reviewing the full plan. Applying a topic with fewer than four non-whitespace characters, or a plan matching multiple semantic units, also requires `--allow-broad-match`.
+
+Matching is literal and case-insensitive. Delete whole H2 entries or top-level bullet units, never isolated matching lines.
+
+## Soft Tombstone Format
 
 ```markdown
 ## Tombstone: <topic>
-Do not reintroduce unless the user explicitly reverses this. Reason: the user asked MemoryCustodian to forget this topic. Mode: soft | hard | purge. Date: YYYY-MM-DD.
+Do not reintroduce unless the user explicitly reverses this. Reason: the user asked MemoryCustodian to forget this topic. Mode: soft. Date: YYYY-MM-DD.
 ```
 
 ## Anti-Resurrection Rule

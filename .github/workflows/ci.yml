@@ -1,0 +1,23 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: python -m pip install -e .
+      - run: PYTHONPATH=cli python -m unittest discover -s tests
+      - run: PYTHONPATH=cli python scripts/check-skill-evals.py
+      - run: PYTHONPATH=cli python -m memory_custodian.main check
+      - run: git diff --check

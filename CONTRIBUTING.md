@@ -26,7 +26,7 @@ MemoryCustodian/
   bin/memory-custodian             # Claude plugin PATH wrapper
   scripts/memory-custodian         # Plugin-safe CLI wrapper
   scripts/package-codex-plugin.py  # Deterministic Codex plugin archive builder
-  evals/memory-custodian/          # Skill behavior eval scenarios and contract checks
+  evals/memory-custodian/          # Static skill contract scenarios
   templates/minimal/               # Core protocol templates
   templates/extended/              # Optional memory module scaffolding
   docs/memory/                     # Dogfood memory for this repository
@@ -41,7 +41,7 @@ Run the unit tests:
 PYTHONPATH=cli python3 -m unittest discover -s tests
 ```
 
-Check that the skill's core behavior contract and eval scenario pack have not drifted:
+Run the static skill contract checks. They validate required instructions, scenario structure, required observations, forbidden outcomes, and contractual wording; they do not execute an Agent or model runtime:
 
 ```bash
 PYTHONPATH=cli python3 scripts/check-skill-evals.py
