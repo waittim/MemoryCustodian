@@ -14,7 +14,7 @@ from . import init as init_cmd
 from . import migrate as migrate_cmd
 from . import read as read_cmd
 from . import status as status_cmd
-from .protocol import TASK_FILE_MAP
+from .protocol import TASK_CATEGORY
 from .templates import DEFAULT_MEMORY_DIR
 
 
@@ -42,7 +42,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optionally add platform entry snippets.",
     )
     init_parser.add_argument("--force", action="store_true", help="Overwrite existing memory files.")
-    init_parser.add_argument("--force-agent", action="store_true", help="Append agent snippets even if a MemoryCustodian section exists.")
+    init_parser.add_argument("--force-agent", action="store_true", help="Replace an existing managed or recognized legacy MemoryCustodian block.")
     init_parser.set_defaults(func=init_cmd.run)
 
     status_parser = sub.add_parser("status", help="Report memory file health.")
@@ -51,7 +51,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     read_parser = sub.add_parser("read", help="Render a small context pack for a task.")
     _add_common(read_parser)
-    read_parser.add_argument("--task", choices=sorted(TASK_FILE_MAP.keys()), default="default", help="Task type to determine which files to load.")
+    read_parser.add_argument("--task", choices=sorted(TASK_CATEGORY.keys()), default="default", help="Task type routed by the project manifest.")
     read_parser.add_argument("--profile", action="append", default=[], help="Optional workflow profile to include if present, such as git.")
     read_parser.add_argument("--area", action="append", default=[], help="Optional area memory to include if present, such as frontend.")
     read_parser.add_argument("--names-only", action="store_true", help="Only list files, without printing their contents.")
@@ -94,6 +94,10 @@ def build_parser() -> argparse.ArgumentParser:
     _add_common(forget_parser)
     forget_parser.add_argument("topic", help="Topic or phrase to forget.")
     forget_parser.add_argument("--mode", choices=("soft", "hard", "purge"), default="soft", help="Forgetting mode.")
+    forget_parser.add_argument("--apply", action="store_true", help="Apply the previewed forgetting plan. Default is dry run.")
+    forget_parser.add_argument(
+        "--allow-broad-match", action="store_true", help="Allow applying a short-topic or multi-unit match plan."
+    )
     forget_parser.set_defaults(func=forget_cmd.run)
 
     enable_parser = sub.add_parser("enable", help="Enable an optional memory module.")

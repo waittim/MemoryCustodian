@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 from datetime import date
+import os
 from pathlib import Path
 import re
+import stat
+import tempfile
+from dataclasses import dataclass
 from typing import Iterable
 
 from . import __protocol_version__, __version__
@@ -25,76 +29,22 @@ BUDGETS = {
 
 DECISION_ENTRY_BUDGET = 120
 
-TASK_FILE_MAP = {
-    "default": [("brief.md", True)],
-    "general": [("brief.md", True)],
-    "planning": [("brief.md", True), ("decisions.md", True), ("constraints.md", True), ("do-not-use.md", True)],
-    "architecture": [("brief.md", True), ("decisions.md", True), ("constraints.md", True), ("do-not-use.md", True)],
-    "refactoring": [("brief.md", True), ("decisions.md", True), ("constraints.md", True), ("do-not-use.md", True)],
-    "implementation": [
-        ("brief.md", True),
-        ("decisions.md", True),
-        ("constraints.md", True),
-        ("do-not-use.md", True),
-        ("preferences.md", False),
-    ],
-    "execution": [
-        ("brief.md", True),
-        ("decisions.md", True),
-        ("constraints.md", True),
-        ("do-not-use.md", True),
-        ("preferences.md", False),
-    ],
-    "debugging": [
-        ("brief.md", True),
-        ("decisions.md", True),
-        ("constraints.md", True),
-        ("do-not-use.md", True),
-        ("preferences.md", False),
-    ],
-    "artifact": [("brief.md", True), ("rules/output.md", False), ("preferences.md", False), ("do-not-use.md", True)],
-    "output": [("brief.md", True), ("rules/output.md", False), ("preferences.md", False), ("do-not-use.md", True)],
-    "preferences": [("brief.md", True), ("preferences.md", False)],
-    "recap": [("brief.md", True), ("decisions.md", True), ("changelog.md", False)],
-    "history": [("brief.md", True), ("decisions.md", True), ("changelog.md", False)],
-    "maintenance": [("brief.md", True), ("inbox.md", True), ("do-not-use.md", True), ("changelog.md", False)],
-    "status": [("brief.md", True), ("changelog.md", False)],
-    "compact": [
-        ("brief.md", True),
-        ("inbox.md", True),
-        ("decisions.md", True),
-        ("constraints.md", True),
-        ("do-not-use.md", True),
-        ("preferences.md", False),
-        ("changelog.md", False),
-    ],
-    "forget": [
-        ("brief.md", True),
-        ("decisions.md", True),
-        ("constraints.md", True),
-        ("do-not-use.md", True),
-        ("preferences.md", False),
-        ("inbox.md", True),
-        ("changelog.md", False),
-    ],
+TASK_CATEGORY = {
+    "default": "general", "general": "general",
+    "planning": "planning", "architecture": "planning", "refactoring": "planning",
+    "implementation": "implementation", "execution": "implementation", "debugging": "implementation",
+    "artifact": "artifact", "output": "artifact", "preferences": "preferences",
+    "recap": "history", "history": "history", "status": "history",
+    "maintenance": "maintenance", "compact": "maintenance", "forget": "maintenance",
 }
 
-TASK_SECTION_KEYWORDS = {
-    "planning": ("planning", "architecture", "refactoring"),
-    "architecture": ("planning", "architecture", "refactoring"),
-    "refactoring": ("planning", "architecture", "refactoring"),
-    "implementation": ("implementation", "execution", "debugging"),
-    "execution": ("implementation", "execution", "debugging"),
-    "debugging": ("implementation", "execution", "debugging"),
-    "artifact": ("artifact", "user-facing", "output"),
-    "output": ("artifact", "user-facing", "output"),
-    "preferences": ("preference", "preferences"),
-    "recap": ("change history", "project recap", "history", "recap"),
-    "history": ("change history", "project recap", "history", "recap"),
-    "status": ("change history", "project recap", "history", "recap", "status"),
-    "maintenance": ("memory maintenance", "maintenance"),
-    "compact": ("memory maintenance", "maintenance"),
-    "forget": ("memory maintenance", "maintenance"),
+CATEGORY_HEADINGS = {
+    "planning": {"planning / architecture / refactoring"},
+    "implementation": {"implementation / execution / debugging"},
+    "artifact": {"user-facing artifact / output"},
+    "preferences": {"preferences"},
+    "history": {"change history / recap"},
+    "maintenance": {"memory maintenance"},
 }
 
 COMMON_MEMORY_FILES = (
@@ -224,7 +174,28 @@ def read_text(path: Path) -> str:
 
 def write_text(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(ensure_newline(text), encoding="utf-8")
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=path.parent, prefix=f".{path.name}.", suffix=".tmp", delete=False
+        ) as handle:
+            temporary = Path(handle.name)
+            handle.write(ensure_newline(text))
+            handle.flush()
+            try:
+                os.fsync(handle.fileno())
+            except OSError:
+                pass
+        mode = stat.S_IMODE(path.stat().st_mode) if path.exists() else 0o644
+        os.chmod(temporary, mode)
+        os.replace(temporary, path)
+        temporary = None
+    finally:
+        if temporary is not None:
+            try:
+                temporary.unlink()
+            except FileNotFoundError:
+                pass
 
 
 def append_text(path: Path, text: str) -> None:
@@ -419,15 +390,80 @@ def budget_for(name: str) -> int | None:
     return BUDGETS.get(name)
 
 
-def trim_to_budget(text: str, budget: int | None) -> tuple[str, bool]:
-    if budget is None:
-        return text, False
-    matches = list(re.finditer(r"[A-Za-z0-9_]+|[^\sA-Za-z0-9_]", text))
-    if len(matches) <= budget:
-        return text, False
-    cutoff = matches[budget].start()
-    trimmed = text[:cutoff].rstrip()
-    return trimmed + f"\n\n[Trimmed to {budget} token budget.]", True
+@dataclass(frozen=True)
+class MarkdownUnit:
+    kind: str
+    text: str
+    heading: str | None = None
+
+
+@dataclass(frozen=True)
+class MarkdownDocument:
+    title: str
+    units: tuple[MarkdownUnit, ...]
+
+
+def parse_markdown_units(text: str) -> MarkdownDocument:
+    """Parse the narrow Markdown structures managed by MemoryCustodian."""
+
+    lines = text.rstrip().splitlines()
+    title = lines[0] if lines and lines[0].startswith("# ") else ""
+    start = 1 if title else 0
+    h2_starts = [index for index in range(start, len(lines)) if lines[index].startswith("## ")]
+    units: list[MarkdownUnit] = []
+    if h2_starts:
+        preamble = "\n".join(lines[start:h2_starts[0]]).strip()
+        if preamble:
+            units.append(MarkdownUnit("preamble", preamble))
+        for position, unit_start in enumerate(h2_starts):
+            unit_end = h2_starts[position + 1] if position + 1 < len(h2_starts) else len(lines)
+            unit_text = "\n".join(lines[unit_start:unit_end]).strip()
+            units.append(MarkdownUnit("h2", unit_text, lines[unit_start][3:].strip()))
+        return MarkdownDocument(title, tuple(units))
+
+    bullet_starts = [index for index in range(start, len(lines)) if lines[index].startswith(('- ', '* ', '+ '))]
+    if bullet_starts:
+        preamble = "\n".join(lines[start:bullet_starts[0]]).strip()
+        if preamble:
+            units.append(MarkdownUnit("preamble", preamble))
+        for position, unit_start in enumerate(bullet_starts):
+            unit_end = bullet_starts[position + 1] if position + 1 < len(bullet_starts) else len(lines)
+            unit_text = "\n".join(lines[unit_start:unit_end]).strip()
+            units.append(MarkdownUnit("bullet", unit_text))
+        return MarkdownDocument(title, tuple(units))
+
+    body = "\n".join(lines[start:]).strip()
+    if body:
+        units.append(MarkdownUnit("body", body))
+    return MarkdownDocument(title, tuple(units))
+
+
+def render_markdown_document(document: MarkdownDocument, units: Iterable[MarkdownUnit] | None = None) -> str:
+    parts = [document.title] if document.title else []
+    parts.extend(unit.text for unit in (document.units if units is None else units) if unit.text.strip())
+    return ensure_newline("\n\n".join(parts))
+
+
+def pack_to_budget(text: str, budget: int | None) -> tuple[str, int, bool]:
+    """Pack complete units and return text, omitted count, oversized-unit warning."""
+
+    normalized = text.strip()
+    if budget is None or estimate_tokens(normalized) <= budget:
+        return normalized, 0, False
+    document = parse_markdown_units(normalized)
+    chosen: list[MarkdownUnit] = []
+    oversized = False
+    for index, unit in enumerate(document.units):
+        candidate = render_markdown_document(document, [*chosen, unit]).strip()
+        if estimate_tokens(candidate) <= budget:
+            chosen.append(unit)
+            continue
+        first_semantic = unit.kind != "preamble" and not any(item.kind != "preamble" for item in chosen)
+        if not chosen or first_semantic:
+            chosen.append(unit)
+            oversized = True
+        return render_markdown_document(document, chosen).strip(), len(document.units) - len(chosen), oversized
+    return render_markdown_document(document, chosen).strip(), 0, oversized
 
 
 def is_safe_memory_name(name: str) -> bool:
@@ -524,10 +560,6 @@ def manifest_with_optional_module_index(manifest: str, relative_path: str) -> tu
     return ensure_newline("\n".join(lines)), True
 
 
-def task_file_specs(task: str) -> list[tuple[str, bool]]:
-    return TASK_FILE_MAP.get(task, TASK_FILE_MAP["default"])
-
-
 def _normalize_heading(text: str) -> str:
     return text.strip().strip("#").strip().casefold()
 
@@ -582,30 +614,110 @@ def _dedupe_specs(specs: list[tuple[str, bool]]) -> list[tuple[str, bool]]:
     return [(name, seen[name]) for name in order]
 
 
+def _route_sections(manifest: str) -> dict[str, list[tuple[str, list[str]]]]:
+    sections = {category: [] for category in CATEGORY_HEADINGS}
+    lines = manifest.splitlines()
+    for index, line in enumerate(lines):
+        if not line.strip().startswith("### "):
+            continue
+        heading = _normalize_heading(line)
+        end = len(lines)
+        for next_index in range(index + 1, len(lines)):
+            if lines[next_index].strip().startswith(("### ", "## ")):
+                end = next_index
+                break
+        for category, aliases in CATEGORY_HEADINGS.items():
+            if heading in aliases:
+                sections[category].append((heading, lines[index + 1:end]))
+    return sections
+
+
+def _validate_route_path(name: str) -> str | None:
+    path = Path(name)
+    if not name or path.is_absolute() or "\\" in name or ":" in path.parts[0] or ".." in path.parts or path.suffix != ".md":
+        return f"unsafe or malformed memory path {name!r}"
+    if any(part in {"", "."} for part in path.parts):
+        return f"unsafe or malformed memory path {name!r}"
+    return None
+
+
+def validate_manifest_routes(manifest: str) -> list[str]:
+    issues: list[str] = []
+    always_matches = []
+    lines = manifest.splitlines()
+    for index, line in enumerate(lines):
+        if line.strip().startswith("## ") and _normalize_heading(line) == "always load":
+            end = next((i for i in range(index + 1, len(lines)) if lines[i].strip().startswith("## ")), len(lines))
+            always_matches.append(lines[index + 1:end])
+    if len(always_matches) != 1:
+        issues.append(f"general route: expected exactly one 'Always load' section, found {len(always_matches)}")
+    sections = _route_sections(manifest)
+    for category, matches in sections.items():
+        if len(matches) != 1:
+            candidates = ", ".join(repr(heading) for heading, _lines in matches) or "none"
+            issues.append(f"{category} route: expected one canonical heading; candidates: {candidates}")
+    route_lines = [("general", section) for section in always_matches]
+    route_lines.extend((category, match[0][1]) for category, match in sections.items() if len(match) == 1)
+    for category, section_lines in route_lines:
+        for name, _required in _parse_bullets(section_lines, True):
+            error = _validate_route_path(name)
+            if error:
+                issues.append(f"{category} route: {error}")
+    if len(always_matches) == 1:
+        always_specs = _parse_bullets(always_matches[0], True)
+        for category, matches in sections.items():
+            if len(matches) != 1:
+                continue
+            names = [name for name, _required in [*always_specs, *_parse_bullets(matches[0][1], True)]]
+            duplicates = sorted({name for name in names if names.count(name) > 1})
+            if duplicates:
+                issues.append(f"{category} route: duplicate paths: {', '.join(duplicates)}")
+    return issues
+
+
 def parse_manifest_task_file_specs(manifest: str, task: str) -> list[tuple[str, bool]]:
+    category = TASK_CATEGORY.get(task)
+    if category is None:
+        raise ValueError(f"Unsupported task route: {task}")
+    issues = validate_manifest_routes(manifest)
+    category_issues = [
+        issue for issue in issues
+        if issue.startswith(("general route: expected", f"{category} route: expected"))
+        or issue.startswith(("general route: unsafe", f"{category} route: unsafe"))
+    ]
+    if category_issues:
+        raise ValueError("Invalid manifest routing: " + "; ".join(category_issues))
     always_lines = _section_lines(manifest, "##", lambda heading: heading == "always load")
     specs = _parse_bullets(always_lines, default_required=True)
-
-    keywords = TASK_SECTION_KEYWORDS.get(task, ())
-    if keywords:
-        task_lines = _section_lines(manifest, "###", lambda heading: any(keyword in heading for keyword in keywords))
-        specs.extend(_parse_bullets(task_lines, default_required=True))
-
+    if category != "general":
+        match = _route_sections(manifest)[category][0]
+        specs.extend(_parse_bullets(match[1], default_required=True))
+    for name, _required in specs:
+        error = _validate_route_path(name)
+        if error:
+            raise ValueError(error)
     return _dedupe_specs(specs)
 
 
 def manifest_task_file_specs(memory_dir: Path, task: str) -> list[tuple[str, bool]]:
     manifest = memory_dir / "manifest.md"
     if not manifest.exists():
-        return task_file_specs(task)
-    specs = parse_manifest_task_file_specs(manifest.read_text(encoding="utf-8"), task)
-    if not specs:
-        return task_file_specs(task)
-    return specs
+        raise ValueError(
+            "manifest.md is missing; restore it, apply an applicable migration, or carefully reinitialize the project"
+        )
+    return parse_manifest_task_file_specs(manifest.read_text(encoding="utf-8"), task)
 
 
-def task_files(task: str) -> list[str]:
-    return [name for name, _required in task_file_specs(task)]
+def resolve_manifest_memory_path(memory_dir: Path, name: str) -> Path:
+    error = _validate_route_path(name)
+    if error:
+        raise ValueError(error)
+    path = memory_dir / name
+    try:
+        path.resolve().relative_to(memory_dir.resolve())
+    except ValueError as exc:
+        raise ValueError(f"memory path escapes the configured memory directory: {name!r}") from exc
+    return path
 
 
 def core_files() -> tuple[str, ...]:

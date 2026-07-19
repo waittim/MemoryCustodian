@@ -14,9 +14,12 @@ from .protocol import (
     estimate_tokens,
     long_decision_entries,
     optional_index_paths,
+    parse_manifest_task_file_specs,
     protocol_metadata,
+    resolve_manifest_memory_path,
     resolve_memory_dir,
     resolve_project_root,
+    validate_manifest_routes,
 )
 from .templates import CORE_FILES, brief_needs_curation
 
@@ -103,6 +106,24 @@ def run(args) -> int:
         issues.extend(_check_protocol_metadata(manifest))
     if manifest:
         issues.extend(_manifest_mentions_required_policy(manifest))
+        issues.extend(f"manifest.md: {issue}" for issue in validate_manifest_routes(manifest))
+        for task in ("default", "planning", "implementation", "artifact", "preferences", "history", "maintenance"):
+            try:
+                specs = parse_manifest_task_file_specs(manifest, task)
+            except ValueError:
+                continue
+            for name, required in specs:
+                try:
+                    path = resolve_manifest_memory_path(memory_dir, name)
+                except ValueError as exc:
+                    issue = f"manifest.md: {exc}"
+                    if issue not in issues:
+                        issues.append(issue)
+                    continue
+                if required and not path.exists():
+                    issue = f"manifest.md: required route file is missing: {name}"
+                    if issue not in issues:
+                        issues.append(issue)
 
     brief = _read(memory_dir / "brief.md")
     if brief and brief_needs_curation(brief):

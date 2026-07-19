@@ -7,6 +7,9 @@ from pathlib import Path
 from .protocol import resolve_memory_dir, resolve_project_root, today, write_text
 from .templates import CORE_FILES, OPTIONAL_FILES, render_template
 
+BLOCK_START = "<!-- memory-custodian:start -->"
+BLOCK_END = "<!-- memory-custodian:end -->"
+
 
 def _memory_dir_label(project_root: Path, memory_dir: Path) -> str:
     try:
@@ -16,7 +19,8 @@ def _memory_dir_label(project_root: Path, memory_dir: Path) -> str:
 
 
 def _agent_snippet(memory_label: str) -> str:
-    return f"""## MemoryCustodian
+    return f"""{BLOCK_START}
+## MemoryCustodian
 
 This project uses MemoryCustodian for local project memory.
 
@@ -29,6 +33,7 @@ Before substantial work:
 5. After meaningful decisions, repeated corrections, or rejected approaches, update the appropriate memory file or propose an update.
 
 Keep this file short. MemoryCustodian is the source of truth for durable project memory.
+{BLOCK_END}
 """
 
 
@@ -42,8 +47,36 @@ def _write_if_needed(path: Path, text: str, force: bool) -> str:
 def _append_snippet(path: Path, snippet: str, force: bool) -> str:
     if path.exists():
         existing = path.read_text(encoding="utf-8")
-        if "## MemoryCustodian" in existing and not force:
-            return "kept"
+        starts = existing.count(BLOCK_START)
+        ends = existing.count(BLOCK_END)
+        if starts != ends:
+            raise ValueError(f"{path.name}: malformed MemoryCustodian managed block; review incomplete markers")
+        if starts > 1:
+            raise ValueError(f"{path.name}: multiple MemoryCustodian managed blocks found; manual review required")
+        if starts == 1:
+            if not force:
+                return "kept"
+            start = existing.index(BLOCK_START)
+            end = existing.index(BLOCK_END, start) + len(BLOCK_END)
+            text = existing[:start] + snippet.strip() + existing[end:]
+            write_text(path, text)
+            return "written"
+
+        legacy_count = existing.count("## MemoryCustodian")
+        if legacy_count:
+            if legacy_count > 1:
+                raise ValueError(f"{path.name}: multiple unmanaged MemoryCustodian sections found; manual review required")
+            if not force:
+                return "kept (unmanaged legacy section)"
+            start = existing.index("## MemoryCustodian")
+            next_heading = existing.find("\n## ", start + len("## MemoryCustodian"))
+            end = len(existing) if next_heading == -1 else next_heading + 1
+            legacy = existing[start:end]
+            if "This project uses MemoryCustodian" not in legacy or "manifest.md" not in legacy:
+                raise ValueError(f"{path.name}: legacy MemoryCustodian section is not a recognized safe shape")
+            text = existing[:start] + snippet.strip() + ("\n\n" if next_heading != -1 else "\n") + existing[end:]
+            write_text(path, text)
+            return "written"
         text = existing.rstrip() + "\n\n" + snippet.strip() + "\n"
     else:
         text = "# Agent Instructions\n\n" + snippet.strip() + "\n"

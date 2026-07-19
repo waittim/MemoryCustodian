@@ -48,7 +48,7 @@ class ReadStatusTests(unittest.TestCase):
                 "## Always load\n"
                 "- brief.md\n\n"
                 "## Load by task\n\n"
-                "### Implementation\n"
+                "### Implementation / execution / debugging\n"
                 "Load:\n"
                 "- constraints.md\n"
                 "Load if present:\n"
@@ -71,7 +71,7 @@ class ReadStatusTests(unittest.TestCase):
                 code = main(["status", "--project-root", tmp])
             self.assertEqual(code, 1)
             text = out.getvalue()
-            self.assertIn("CLI version: 0.7.0", text)
+            self.assertIn("CLI version: 0.8.0", text)
             self.assertIn("Protocol version: 0.5 (current)", text)
             self.assertIn("brief.md: NEEDS CURATION", text)
             self.assertIn("inbox.md: OK", text)
@@ -197,7 +197,8 @@ class ReadStatusTests(unittest.TestCase):
             out = StringIO()
             with redirect_stdout(out):
                 code = main(["check", "--project-root", tmp])
-            self.assertEqual(code, 0)
+            self.assertEqual(code, 1)
+            self.assertIn("route: expected one canonical heading", out.getvalue())
 
     def test_migrate_updates_generated_implementation_route(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -2,7 +2,15 @@
 
 from __future__ import annotations
 
-from .protocol import budget_for, is_safe_memory_name, manifest_task_file_specs, resolve_memory_dir, resolve_project_root, trim_to_budget
+from .protocol import (
+    budget_for,
+    is_safe_memory_name,
+    manifest_task_file_specs,
+    pack_to_budget,
+    resolve_manifest_memory_path,
+    resolve_memory_dir,
+    resolve_project_root,
+)
 
 
 def _optional_requested(kind: str, names: list[str]) -> list[tuple[str, bool]]:
@@ -24,19 +32,22 @@ def run(args) -> int:
     loaded: list[str] = []
     missing_required: list[str] = []
     skipped_optional: list[str] = []
-    trimmed_files: list[str] = []
+    omitted_files: list[tuple[str, int]] = []
+    oversized_files: list[str] = []
     contents: list[tuple[str, str]] = []
     seen: set[str] = set()
     for name, required in files:
         if name in seen:
             continue
         seen.add(name)
-        path = memory_dir / name
+        path = resolve_manifest_memory_path(memory_dir, name)
         if path.exists():
             loaded.append(name)
-            text, trimmed = trim_to_budget(path.read_text(encoding="utf-8").strip(), budget_for(name))
-            if trimmed:
-                trimmed_files.append(name)
+            text, omitted, oversized = pack_to_budget(path.read_text(encoding="utf-8"), budget_for(name))
+            if omitted:
+                omitted_files.append((name, omitted))
+            if oversized:
+                oversized_files.append(name)
             contents.append((name, text))
         elif required:
             missing_required.append(name)
@@ -56,10 +67,14 @@ def run(args) -> int:
         print("Skipped optional:")
         for name in skipped_optional:
             print(f"- {name}")
-    if trimmed_files:
-        print("Trimmed:")
-        for name in trimmed_files:
-            print(f"- {name}")
+    if omitted_files:
+        print("Omitted:")
+        for name, count in omitted_files:
+            print(f"- {name}: {count} complete entries omitted because of the {budget_for(name)}-token budget")
+    if oversized_files:
+        print("Oversized atomic entries:")
+        for name in oversized_files:
+            print(f"- {name}: one atomic entry exceeds the budget and was included whole")
     if not args.names_only:
         for name, text in contents:
             print(f"\n## {name}\n")

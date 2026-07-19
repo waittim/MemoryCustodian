@@ -26,7 +26,12 @@ class AddForgetCompactTests(unittest.TestCase):
             memory = Path(tmp) / "docs" / "memory"
             self.assertIn("SQLite", (memory / "decisions.md").read_text(encoding="utf-8"))
 
-            self.assertEqual(main(["forget", "SQLite", "--project-root", tmp, "--mode", "soft"]), 0)
+            out = StringIO()
+            with redirect_stdout(out):
+                self.assertEqual(main(["forget", "SQLite", "--project-root", tmp, "--mode", "soft"]), 0)
+            self.assertIn("Dry run only", out.getvalue())
+            self.assertIn("SQLite", (memory / "decisions.md").read_text(encoding="utf-8"))
+            self.assertEqual(main(["forget", "SQLite", "--project-root", tmp, "--mode", "soft", "--apply"]), 0)
             self.assertNotIn("SQLite", (memory / "decisions.md").read_text(encoding="utf-8"))
             tombstones = (memory / "do-not-use.md").read_text(encoding="utf-8")
             self.assertIn("Tombstone: SQLite", tombstones)
@@ -330,7 +335,7 @@ class AddForgetCompactTests(unittest.TestCase):
             self.assertEqual(main(["enable", "changelog", "--project-root", tmp]), 0)
             self.assertEqual(main(["add", "SensitiveTopic should not remain.", "--type", "decision", "--project-root", tmp]), 0)
 
-            self.assertEqual(main(["forget", "SensitiveTopic", "--mode", "hard", "--project-root", tmp]), 0)
+            self.assertEqual(main(["forget", "SensitiveTopic", "--mode", "hard", "--apply", "--project-root", tmp]), 0)
             memory = Path(tmp) / "docs" / "memory"
             self.assertNotIn("SensitiveTopic", (memory / "changelog.md").read_text(encoding="utf-8"))
             self.assertIn("Completed hard forget operation.", (memory / "changelog.md").read_text(encoding="utf-8"))

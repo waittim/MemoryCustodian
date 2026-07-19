@@ -31,7 +31,7 @@ class InitTests(unittest.TestCase):
             manifest = (memory / "manifest.md").read_text(encoding="utf-8")
             self.assertIn("## MemoryCustodian Protocol", manifest)
             self.assertIn("- protocol_version: 0.5", manifest)
-            self.assertIn("- initialized_with: memory-custodian 0.7.0", manifest)
+            self.assertIn("- initialized_with: memory-custodian 0.8.0", manifest)
             decisions = (memory / "decisions.md").read_text(encoding="utf-8")
             constraints = (memory / "constraints.md").read_text(encoding="utf-8")
             self.assertIn("Entries are newest first.", decisions)
