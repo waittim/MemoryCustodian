@@ -8,7 +8,7 @@ It stores memory as plain Markdown in your repo and loads only the pieces needed
 
 **Durable memory. Minimal context.**
 
-[![Version](https://img.shields.io/badge/version-0.8.1-blue.svg)](#)
+[![Version](https://img.shields.io/badge/version-0.9.0-blue.svg)](#)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-agnostic-blue.svg)](#)
 [![Design: Offline-first](https://img.shields.io/badge/design-offline--first-blue.svg)](#)

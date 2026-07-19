@@ -2,6 +2,12 @@
 
 Entries are newest first.
 
+## 2026-07-19 - Keep Protocol 0.5 for v0.9
+Decision:
+Keep the memory protocol at 0.5 while package 0.9 removes CLI semantic guessing and hardens mutation safety.
+Reason:
+Manifest schema and routing syntax remain compatible with existing 0.5 projects.
+
 ## 2026-07-18 - Protocol 0.5
 Decision:
 Keep for v0.8.
@@ -73,9 +79,3 @@ Decision:
 Keep `SKILL.md` focused on agent execution; put detailed policy in references, README, or memory files.
 Reason:
 `SKILL.md` is an execution entry point, not a positioning document.
-
-## 2026-07-02 - Keep the core protocol minimal
-Decision:
-Default initialization creates only `manifest.md`, `brief.md`, `decisions.md`, `constraints.md`, `do-not-use.md`, and `inbox.md`.
-Reason:
-Small projects should not receive optional memory until needed.

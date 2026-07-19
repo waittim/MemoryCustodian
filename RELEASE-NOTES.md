@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+## v0.9.0 - 2026-07-19
+
+### Semantic boundary
+
+- Removed keyword-based inbox classification. `compact` now reports candidates and applies only exact duplicate and exact tombstone-match cleanup.
+- Made the Agent or user responsible for candidate scope, type, confidence, overlap, and semantic promotion.
+
+### Safe initialization and routing
+
+- Replaced memory-file `init --force` with conservative `init --repair` and preview-first `init --replace-existing --apply`.
+- Made `enable` preserve existing optional memory and made the Skill follow the current manifest as the sole runtime routing authority.
+- Treat an existing memory directory without `manifest.md` as incomplete or corrupted instead of inferring routes.
+
+### Mutation reliability and portability
+
+- Added precomputed mutation plans for multi-file commands, preflight validation, archive-first safety, and explicit partial-completion reporting.
+- Routed invalid input and expected filesystem errors to stderr while leaving unexpected programming failures visible.
+- Added strict profile/area validation and a Windows Python 3.13 CLI smoke job.
+- Kept MemoryCustodian Protocol at 0.5 because the manifest schema and routing syntax remain compatible.
+
 ## v0.8.1 - 2026-07-18
 
 ### Forget privacy and structural safety

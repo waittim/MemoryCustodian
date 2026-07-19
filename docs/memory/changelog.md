@@ -2,6 +2,12 @@
 
 Entries are newest first.
 
+## 2026-07-19
+- Compacted decisions.md: archived 1 old entries.
+
+## 2026-07-19
+- Prepared package 0.9.0 with Agent-owned semantic classification, safe repair and replacement previews, manifest-only routing, planned multi-file mutations, stderr error handling, and Windows CLI smoke coverage.
+
 ## 2026-07-18
 - Prepared package 0.8.1 to upgrade prior soft tombstones during hard/purge forgetting and block apply on body or preamble matches requiring semantic rewrites.
 

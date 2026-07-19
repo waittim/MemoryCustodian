@@ -12,3 +12,6 @@
 - Must keep Skill instructions concise and operational; detailed non-goals belong in README and references.
 - Hard and purge forgetting must remove prior topic-bearing soft tombstones from managed memory.
 - Forget apply must refuse before writing when a topic appears in a non-removable body or preamble that requires semantic rewriting.
+- CLI inbox compaction must not infer semantic destinations from keywords; an Agent or user decides what memory means.
+- Safe repair and optional enablement must not overwrite curated memory.
+- Multi-file commands must precompute and validate mutation plans, then report any partial completion explicitly.
