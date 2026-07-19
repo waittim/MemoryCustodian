@@ -10,3 +10,5 @@
 - Must keep default project initialization to the six core memory files.
 - Must keep workflow-specific rules out of the core protocol.
 - Must keep Skill instructions concise and operational; detailed non-goals belong in README and references.
+- Hard and purge forgetting must remove prior topic-bearing soft tombstones from managed memory.
+- Forget apply must refuse before writing when a topic appears in a non-removable body or preamble that requires semantic rewriting.

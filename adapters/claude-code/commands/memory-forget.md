@@ -8,4 +8,4 @@ memory-custodian forget "<topic>" --mode soft
 memory-custodian forget "<topic>" --mode soft --apply
 ```
 
-Use `--mode hard` or `--mode purge` only when explicitly requested. Respect tombstones after forgetting.
+Use `--mode hard` or `--mode purge` only when explicitly requested. Hard upgrades prior topic-bearing soft tombstones to a generic guard; purge removes them. If preview reports `Manual rewrite required`, rewrite the body or preamble semantically before applying.

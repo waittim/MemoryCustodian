@@ -71,7 +71,7 @@ class ReadStatusTests(unittest.TestCase):
                 code = main(["status", "--project-root", tmp])
             self.assertEqual(code, 1)
             text = out.getvalue()
-            self.assertIn("CLI version: 0.8.0", text)
+            self.assertIn("CLI version: 0.8.1", text)
             self.assertIn("Protocol version: 0.5 (current)", text)
             self.assertIn("brief.md: NEEDS CURATION", text)
             self.assertIn("inbox.md: OK", text)

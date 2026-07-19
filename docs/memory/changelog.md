@@ -3,6 +3,9 @@
 Entries are newest first.
 
 ## 2026-07-18
+- Prepared package 0.8.1 to upgrade prior soft tombstones during hard/purge forgetting and block apply on body or preamble matches requiring semantic rewrites.
+
+## 2026-07-18
 - Prepared package 0.8.0 with atomic writes, preview-first semantic forgetting, complete-entry packing, manifest-authoritative routing, idempotent bootstrap blocks, CI, and static contract-check terminology.
 
 ## 2026-07-12

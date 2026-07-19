@@ -8,7 +8,7 @@ It stores memory as plain Markdown in your repo and loads only the pieces needed
 
 **Durable memory. Minimal context.**
 
-[![Version](https://img.shields.io/badge/version-0.8.0-blue.svg)](#)
+[![Version](https://img.shields.io/badge/version-0.8.1-blue.svg)](#)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-agnostic-blue.svg)](#)
 [![Design: Offline-first](https://img.shields.io/badge/design-offline--first-blue.svg)](#)
@@ -223,6 +223,8 @@ memory-custodian migrate
 ```
 
 `forget`, `compact`, and `migrate` are preview-first. Add `--apply` only after reviewing the complete plan. Short topics and plans matching multiple semantic units additionally require `forget --allow-broad-match`.
+
+Hard forget replaces matching topic-bearing soft tombstones with a generic redacted guard; purge removes them. Matches inside a plain body or preamble are never deleted wholesale: preview reports `Manual rewrite required`, and apply refuses until the text is semantically rewritten.
 Decision archival additionally requires semantic review and explicit confirmation with `compact --target decisions.md --apply --archive-oldest`.
 
 ## Design Principles

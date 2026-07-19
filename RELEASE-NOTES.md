@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## v0.8.1 - 2026-07-18
+
+### Forget privacy and structural safety
+
+- Hard forget now replaces matching topic-bearing soft tombstones with one generic redacted guard.
+- Purge now removes matching topic-bearing soft tombstones instead of leaving the original topic in `do-not-use.md`.
+- Plain body and preamble matches are reported as manual-rewrite blockers; `--apply` refuses before the first write, even with `--allow-broad-match`.
+- Added regression coverage for soft-to-hard/purge upgrades, whole-memory topic removal, body blockers, preamble blockers, and no-partial-write behavior.
+
 ## v0.8.0 - 2026-07-18
 
 ### Reliability and privacy

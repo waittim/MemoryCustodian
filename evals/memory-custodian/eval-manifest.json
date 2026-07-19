@@ -82,7 +82,8 @@
       "terms": [
         "Preview the complete semantic-unit plan before writing.",
         "Remove whole H2 entries or top-level bullets",
-        "hard and purge records stay generic"
+        "require a semantic manual rewrite and refuse apply",
+        "hard replaces prior topic-bearing tombstones with one generic guard, while purge removes them"
       ]
     }
   ]

@@ -17,7 +17,8 @@ Use when the user wants an idea removed from active memory but a guard should re
 Use when the user wants the content gone from memory files.
 
 - Remove matching complete semantic units from active memory.
-- Add only a generic redacted guard; never persist the topic in tombstones or changelog entries.
+- Replace matching topic-bearing soft tombstones with one generic redacted guard.
+- Never persist the topic in new tombstones or changelog entries.
 - Avoid preserving the removed content in summaries.
 
 ### Purge
@@ -26,13 +27,18 @@ Use only on explicit request.
 
 - Search active files and `archive/`.
 - Remove matching complete semantic units from active files and `archive/`.
-- Do not add a topic-bearing tombstone; keep any operation record generic.
+- Remove matching topic-bearing soft tombstones and do not add a replacement.
+- Keep any operation record generic.
 
 ## Preview and broad-match safety
 
 `forget` is dry-run by default. Use `--apply` only after reviewing the full plan. Applying a topic with fewer than four non-whitespace characters, or a plan matching multiple semantic units, also requires `--allow-broad-match`.
 
 Matching is literal and case-insensitive. Delete whole H2 entries or top-level bullet units, never isolated matching lines.
+
+If a match occurs in a plain body or preamble, preview it as `Manual rewrite required`. `--apply` must refuse before the first write until an Agent or user rewrites that content semantically. `--allow-broad-match` does not bypass this blocker.
+
+Treat `do-not-use.md` with tombstone-aware logic rather than as an ordinary deletion target. Hard mode upgrades matching topic-bearing tombstones to one generic guard; purge removes them.
 
 ## Soft Tombstone Format
 

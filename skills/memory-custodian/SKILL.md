@@ -109,8 +109,9 @@ When the user asks to forget something:
 1. Preview the complete semantic-unit plan before writing.
 2. Apply only after explicit `--apply`; use `--allow-broad-match` for short topics or multi-unit plans.
 3. Remove whole H2 entries or top-level bullets, never matching lines alone.
-4. Add a topic-bearing tombstone only for soft mode; hard and purge records stay generic.
-5. Do not reintroduce the forgotten content during compaction.
+4. If a body or preamble matches, require a semantic manual rewrite and refuse apply until it is resolved.
+5. Add a topic-bearing tombstone only for soft mode; hard replaces prior topic-bearing tombstones with one generic guard, while purge removes them.
+6. Do not reintroduce the forgotten content during compaction.
 
 ## References
 
