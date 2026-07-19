@@ -83,15 +83,15 @@ The result is project memory that is inspectable, diffable, portable across agen
 
 ## Built with Codex and GPT-5.6
 
-MemoryCustodian existed before OpenAI Build Week, with v0.7.0 as the pre-event baseline. During Build Week, I collaborated with Codex using GPT-5.6 to develop the v0.8.0 reliability release and the v0.8.1 privacy patch.
+MemoryCustodian existed before OpenAI Build Week, with v0.7.0 as the pre-event baseline. During Build Week, I collaborated with Codex using GPT-5.6 to develop versions 0.8.0 through 0.9.1.
 
-Codex accelerated repo-wide analysis and implementation across the protocol, CLI, agent skill, adapters, and tests. It helped turn reliability concerns into concrete plans, identify edge cases, coordinate changes, and expand regression coverage.
+Codex accelerated repo-wide analysis and implementation across the protocol, CLI, agent skill, adapters, documentation, and tests. It helped turn reliability concerns into concrete plans, coordinate multi-file changes, identify edge cases, and expand regression coverage.
 
-GPT-5.6 was especially useful for reasoning about the boundary between semantic judgment and deterministic enforcement, including complete-entry context packing, safe structured deletion, ambiguous prose handling, and privacy-safe forgetting.
+GPT-5.6 was especially useful for defining the boundary between semantic judgment and deterministic enforcement. The agent or user decides meaning, scope, confidence, and memory promotion; the CLI validates structures, previews mutations, and applies bounded operations safely.
 
 I retained responsibility for the product boundaries, architecture, safety model, and final release decisions.
 
-The Build Week releases added atomic writes, validated routing, idempotent agent bootstraps, privacy-safe forgetting, CI, and expanded reliability tests.
+The Build Week releases added atomic writes, complete-entry context packing, validated routing, privacy-safe forgetting, conservative initialization, precomputed mutation plans, protocol downgrade guards, structure-preserving compaction, cross-platform CI, and expanded tests.
 
 Codex and GPT-5.6 were used to build and validate these releases; they are not runtime dependencies.
 
