@@ -14,6 +14,7 @@ from .protocol import (
     parse_markdown_units,
     resolve_memory_dir,
     resolve_project_root,
+    split_top_level_bullet_units,
     today,
 )
 from .mutations import TextMutation, apply_mutations
@@ -27,24 +28,31 @@ MANUAL_TARGET_REASONS = {
 }
 
 
-def _extract_items(text: str) -> list[str]:
-    items: list[str] = []
-    for line in text.splitlines():
-        stripped = line.strip()
-        if stripped.startswith("- "):
-            item = stripped[2:].strip()
-            if item:
-                items.append(item)
-    return items
+def _bullet_key(text: str) -> str:
+    lines = text.rstrip().splitlines()
+    if not lines:
+        return ""
+    first = lines[0][2:].strip()
+    normalized = [first, *(line.rstrip() for line in lines[1:])]
+    return "\n".join(normalized).strip().casefold()
+
+
+def _bullet_label(text: str) -> str:
+    lines = text.splitlines()
+    return lines[0][2:].strip() if lines else ""
+
+
+def _render_chunks(chunks: list[tuple[str, str]]) -> str:
+    return "\n".join(text for _kind, text in chunks).rstrip() + "\n"
 
 
 def _clean_inbox(text: str, tombstones: str) -> tuple[str, list[str], int, int]:
     """Remove only exact duplicate bullets and exact bullets already in tombstones."""
 
     tombstone_keys = {
-        line.strip()[2:].strip().casefold()
-        for line in tombstones.splitlines()
-        if line.strip().startswith("- ") and line.strip()[2:].strip()
+        _bullet_key(unit_text)
+        for kind, unit_text in split_top_level_bullet_units(tombstones)
+        if kind == "bullet" and _bullet_key(unit_text)
     }
     tombstone_keys.update(
         unit.heading.split(":", 1)[1].strip().casefold()
@@ -56,19 +64,17 @@ def _clean_inbox(text: str, tombstones: str) -> tuple[str, list[str], int, int]:
     )
     seen: set[str] = set()
     candidates: list[str] = []
-    kept_lines: list[str] = []
+    kept_chunks: list[tuple[str, str]] = []
     duplicates = 0
     tombstone_matches = 0
-    for line in text.splitlines():
-        stripped = line.strip()
-        if not stripped.startswith("- "):
-            kept_lines.append(line)
+    for kind, unit_text in split_top_level_bullet_units(text):
+        if kind != "bullet":
+            kept_chunks.append((kind, unit_text))
             continue
-        item = stripped[2:].strip()
-        if not item:
-            kept_lines.append(line)
+        key = _bullet_key(unit_text)
+        if not key:
+            kept_chunks.append((kind, unit_text))
             continue
-        key = item.casefold()
         if key in seen:
             duplicates += 1
             continue
@@ -76,9 +82,9 @@ def _clean_inbox(text: str, tombstones: str) -> tuple[str, list[str], int, int]:
         if key in tombstone_keys:
             tombstone_matches += 1
             continue
-        candidates.append(item)
-        kept_lines.append(line)
-    return "\n".join(kept_lines).rstrip() + "\n", candidates, duplicates, tombstone_matches
+        candidates.append(unit_text)
+        kept_chunks.append((kind, unit_text))
+    return _render_chunks(kept_chunks), candidates, duplicates, tombstone_matches
 
 
 def _normalize_target(target: str) -> str:
@@ -107,17 +113,16 @@ def _target_path(memory_dir: Path, target: str) -> tuple[str, Path]:
 def _dedupe_bullets(text: str) -> tuple[str, int]:
     seen: set[str] = set()
     removed = 0
-    lines: list[str] = []
-    for line in text.splitlines():
-        stripped = line.strip()
-        if stripped.startswith("- "):
-            key = stripped.casefold()
+    kept: list[tuple[str, str]] = []
+    for kind, unit_text in split_top_level_bullet_units(text):
+        if kind == "bullet":
+            key = _bullet_key(unit_text)
             if key in seen:
                 removed += 1
                 continue
             seen.add(key)
-        lines.append(line)
-    return "\n".join(lines).rstrip() + "\n", removed
+        kept.append((kind, unit_text))
+    return _render_chunks(kept), removed
 
 
 def _split_h2_sections(text: str) -> tuple[list[str], list[list[str]]]:
@@ -343,7 +348,7 @@ def run(args) -> int:
     original = inbox.read_text(encoding="utf-8")
     tombstone_path = memory_dir / "do-not-use.md"
     tombstones = tombstone_path.read_text(encoding="utf-8") if tombstone_path.exists() else ""
-    items = _extract_items(original)
+    items = [unit_text for kind, unit_text in split_top_level_bullet_units(original) if kind == "bullet"]
     cleaned, candidates, duplicates, tombstone_matches = _clean_inbox(original, tombstones)
 
     print("# Compaction Plan")
@@ -352,7 +357,10 @@ def run(args) -> int:
     print(f"Exact tombstone matches removable: {tombstone_matches}")
     print(f"Candidates requiring Agent review: {len(candidates)}")
     for index, item in enumerate(candidates, start=1):
-        print(f"- [{index}] {item}")
+        lines = item.splitlines()
+        print(f"- [{index}] {_bullet_label(item)}")
+        for line in lines[1:]:
+            print(f"      {line}")
     print("No semantic destinations are inferred. Review scope, type, confidence, and existing memory before using `add` or editing Markdown.")
 
     if not args.apply:

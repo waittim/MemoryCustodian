@@ -57,7 +57,7 @@ If no memory directory exists, continue normally and offer initialization only w
 
 ## Task Loading
 
-Classify the task as general continuation, planning, implementation, artifact work, preferences, history, maintenance, or another category defined by the project manifest. Then follow the current manifest exactly and use the smallest routed set that can answer the task. Any routes in generated templates or examples are defaults only; they never override a customized project manifest.
+Classify the task into one of the supported canonical categories: general continuation, planning, implementation, artifact work, preferences, history, or maintenance. Then resolve its files exclusively from the current project manifest and use the smallest routed set that can answer the task. Any routes in generated templates or examples are defaults only; they never override a customized project manifest.
 
 ## Writing Memory
 
@@ -85,7 +85,7 @@ After writing, check the target budget. At 80% or above, consolidate or split by
 
 ## Compaction Safety
 
-Inbox compaction is a two-stage workflow. The CLI reports candidates and may remove only exact duplicates or exact tombstone matches; it never promotes an entry to a semantic destination. The Agent reviews each remaining candidate's scope, type, confidence, and overlap, then edits the appropriate Markdown or calls `add`. Run `check` afterward.
+Inbox compaction is a two-stage workflow. The CLI reports candidates and may remove only exact duplicate top-level bullet units or exact tombstone matches; it never promotes an entry to a semantic destination. A top-level bullet unit includes its continuation and nested lines, which are never cleaned up independently. The Agent reviews each remaining candidate's scope, type, confidence, and overlap, then edits the appropriate Markdown or calls `add`. Run `check` afterward.
 
 Treat decision compaction as semantic maintenance, not chronological trimming. Before applying age-based archival:
 

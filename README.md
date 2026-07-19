@@ -243,7 +243,7 @@ memory-custodian migrate
 
 `forget`, `compact`, and `migrate` are preview-first. Add `--apply` only after reviewing the complete plan. Short topics and plans matching multiple semantic units additionally require `forget --allow-broad-match`.
 
-Inbox compaction does not infer decisions, constraints, preferences, or rejected approaches from keywords. The CLI reports candidates and can apply only exact duplicate removal and exact tombstone filtering. An Agent reviews each remaining candidate's scope, type, confidence, and existing overlap, then edits Markdown or calls `add`; `check` validates the result.
+Inbox compaction does not infer decisions, constraints, preferences, or rejected approaches from keywords. The CLI reports candidates and can apply only exact duplicate top-level bullet-unit removal and exact tombstone filtering. Each unit includes its continuation and nested lines; nested bullets are never cleaned up independently. An Agent reviews each remaining candidate's scope, type, confidence, and existing overlap, then edits Markdown or calls `add`; `check` validates the result.
 
 Hard forget replaces matching topic-bearing soft tombstones with a generic redacted guard; purge removes them. Matches inside a plain body or preamble are never deleted wholesale: preview reports `Manual rewrite required`, and apply refuses until the text is semantically rewritten.
 Decision archival additionally requires semantic review and explicit confirmation with `compact --target decisions.md --apply --archive-oldest`.

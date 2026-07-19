@@ -338,6 +338,18 @@ def manifest_with_protocol_metadata(manifest: str, last_migrated_with: str = CUR
 
 
 def manifest_with_current_protocol_metadata(manifest: str) -> tuple[str, bool]:
+    version = protocol_metadata(manifest).get("protocol_version")
+    if version is not None:
+        comparison = compare_versions(version, CURRENT_PROTOCOL_VERSION)
+        if comparison is None:
+            raise ValueError(
+                f"Invalid protocol version {version!r}; review manifest.md manually before updating it."
+            )
+        if comparison > 0:
+            raise ValueError(
+                f"Project protocol {version} is newer than this CLI supports ({CURRENT_PROTOCOL_VERSION}); "
+                "update MemoryCustodian before updating the manifest."
+            )
     return manifest_with_protocol_metadata(manifest, CURRENT_PACKAGE_LABEL)
 
 
@@ -374,8 +386,53 @@ def iter_markdown_files(memory_dir: Path, include_archive: bool = False) -> Iter
         yield from sorted(archive.rglob("*.md"))
 
 
+def split_top_level_bullet_units(text: str) -> list[tuple[str, str]]:
+    """Split complete column-zero Markdown bullets from surrounding content."""
+
+    chunks: list[tuple[str, str]] = []
+    kind = "other"
+    lines: list[str] = []
+    fence: str | None = None
+
+    def flush() -> None:
+        nonlocal lines
+        if lines:
+            chunks.append((kind, "\n".join(lines)))
+            lines = []
+
+    for line in text.splitlines():
+        fence_marker = line[:3] if line.startswith(("```", "~~~")) else None
+        if fence is not None:
+            lines.append(line)
+            if fence_marker == fence:
+                fence = None
+            continue
+        if fence_marker is not None:
+            if kind == "bullet":
+                flush()
+                kind = "other"
+            lines.append(line)
+            fence = fence_marker
+            continue
+
+        top_level_bullet = line.startswith(("- ", "* ", "+ "))
+        column_zero_content = bool(line) and not line[0].isspace()
+        if top_level_bullet:
+            flush()
+            kind = "bullet"
+            lines = [line]
+        elif kind == "bullet" and column_zero_content:
+            flush()
+            kind = "other"
+            lines = [line]
+        else:
+            lines.append(line)
+    flush()
+    return chunks
+
+
 def count_inbox_items(text: str) -> int:
-    return sum(1 for line in text.splitlines() if line.lstrip().startswith("- "))
+    return sum(1 for kind, _unit in split_top_level_bullet_units(text) if kind == "bullet")
 
 
 def count_h2_entries(text: str) -> int:

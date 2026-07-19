@@ -231,6 +231,41 @@ class ReadStatusTests(unittest.TestCase):
             self.assertIn("- decisions.md", implementation)
             self.assertIn("load decisions.md for implementation", out.getvalue())
 
+    def test_migrate_rejects_newer_protocol_without_writing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            memory = Path(tmp) / "docs" / "memory"
+            manifest = memory / "manifest.md"
+            newer = manifest.read_text(encoding="utf-8").replace(
+                "- protocol_version: 0.5", "- protocol_version: 0.6"
+            )
+            manifest.write_text(newer, encoding="utf-8")
+
+            err = StringIO()
+            with redirect_stderr(err):
+                code = main(["migrate", "--project-root", tmp, "--apply"])
+
+            self.assertEqual(code, 2)
+            self.assertIn("newer than this CLI supports", err.getvalue())
+            self.assertEqual(manifest.read_text(encoding="utf-8"), newer)
+
+    def test_migrate_rejects_invalid_protocol_without_writing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            manifest = Path(tmp) / "docs" / "memory" / "manifest.md"
+            invalid = manifest.read_text(encoding="utf-8").replace(
+                "- protocol_version: 0.5", "- protocol_version: future"
+            )
+            manifest.write_text(invalid, encoding="utf-8")
+
+            err = StringIO()
+            with redirect_stderr(err):
+                code = main(["migrate", "--project-root", tmp, "--apply"])
+
+            self.assertEqual(code, 2)
+            self.assertIn("invalid protocol version", err.getvalue().lower())
+            self.assertEqual(manifest.read_text(encoding="utf-8"), invalid)
+
     def test_check_warns_about_machine_specific_preference(self):
         with tempfile.TemporaryDirectory() as tmp:
             self.assertEqual(main(["init", "--project-root", tmp]), 0)

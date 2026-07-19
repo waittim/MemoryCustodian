@@ -97,6 +97,108 @@ class AddForgetCompactTests(unittest.TestCase):
             self.assertEqual((memory / "decisions.md").read_text(encoding="utf-8"), original_decisions)
             self.assertEqual((memory / "constraints.md").read_text(encoding="utf-8"), original_constraints)
 
+    def test_compact_inbox_preserves_shared_nested_details_in_distinct_candidates(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            inbox = Path(tmp) / "docs" / "memory" / "inbox.md"
+            inbox.write_text(
+                "# Memory Inbox\n\n"
+                "Entries are newest first.\n\n"
+                "- Evaluate local storage\n"
+                "  Context for the local option.\n"
+                "  - Compare SQLite and JSON\n"
+                "- Evaluate sync storage\n"
+                "  Context for the sync option.\n"
+                "  - Compare SQLite and JSON\n",
+                encoding="utf-8",
+            )
+
+            out = StringIO()
+            with redirect_stdout(out):
+                self.assertEqual(main(["compact", "--project-root", tmp]), 0)
+            self.assertIn("Exact duplicates removable: 0", out.getvalue())
+
+            self.assertEqual(main(["compact", "--project-root", tmp, "--apply"]), 0)
+            compacted = inbox.read_text(encoding="utf-8")
+            self.assertIn("Evaluate local storage", compacted)
+            self.assertIn("Evaluate sync storage", compacted)
+            self.assertEqual(compacted.count("Compare SQLite and JSON"), 2)
+
+    def test_compact_inbox_dedupes_complete_top_level_bullet_units(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            inbox = Path(tmp) / "docs" / "memory" / "inbox.md"
+            inbox.write_text(
+                "# Memory Inbox\n\n"
+                "Entries are newest first.\n\n"
+                "- Evaluate local storage\n"
+                "  Keep this continuation with its candidate.\n"
+                "  - Compare SQLite and JSON\n"
+                "- Evaluate local storage\n"
+                "  Keep this continuation with its candidate.\n"
+                "  - Compare SQLite and JSON\n",
+                encoding="utf-8",
+            )
+
+            out = StringIO()
+            with redirect_stdout(out):
+                self.assertEqual(main(["compact", "--project-root", tmp]), 0)
+            self.assertIn("Exact duplicates removable: 1", out.getvalue())
+
+            self.assertEqual(main(["compact", "--project-root", tmp, "--apply"]), 0)
+            compacted = inbox.read_text(encoding="utf-8")
+            self.assertEqual(compacted.count("Evaluate local storage"), 1)
+            self.assertEqual(compacted.count("Keep this continuation"), 1)
+            self.assertEqual(compacted.count("Compare SQLite and JSON"), 1)
+
+    def test_compact_preserves_nested_indentation_in_exact_unit_keys(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            inbox = Path(tmp) / "docs" / "memory" / "inbox.md"
+            inbox.write_text(
+                "# Memory Inbox\n\n"
+                "- Candidate\n"
+                "  - Child\n"
+                "    - Grandchild\n"
+                "- Candidate\n"
+                "    - Child\n"
+                "  - Grandchild\n",
+                encoding="utf-8",
+            )
+
+            out = StringIO()
+            with redirect_stdout(out):
+                self.assertEqual(main(["compact", "--project-root", tmp]), 0)
+
+            preview = out.getvalue()
+            self.assertIn("Inbox items: 2", preview)
+            self.assertIn("Exact duplicates removable: 0", preview)
+            self.assertIn("Grandchild", preview)
+
+    def test_compact_counts_star_and_plus_top_level_units_but_not_nested_or_fenced_bullets(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            inbox = Path(tmp) / "docs" / "memory" / "inbox.md"
+            inbox.write_text(
+                "# Memory Inbox\n\n"
+                "* Candidate A\n"
+                "  - Nested detail\n"
+                "+ Candidate B\n"
+                "  * Nested detail\n"
+                "```markdown\n"
+                "- Example only\n"
+                "```\n",
+                encoding="utf-8",
+            )
+
+            out = StringIO()
+            with redirect_stdout(out):
+                self.assertEqual(main(["compact", "--project-root", tmp]), 0)
+
+            preview = out.getvalue()
+            self.assertIn("Inbox items: 2", preview)
+            self.assertIn("Candidates requiring Agent review: 2", preview)
+
     def test_compact_removes_exact_inbox_match_for_h2_tombstone(self):
         with tempfile.TemporaryDirectory() as tmp:
             self.assertEqual(main(["init", "--project-root", tmp]), 0)
@@ -211,6 +313,66 @@ class AddForgetCompactTests(unittest.TestCase):
             self.assertEqual(main(["compact", "--project-root", tmp, "--target", "constraints.md", "--apply"]), 0)
             constraints = (memory / "constraints.md").read_text(encoding="utf-8")
             self.assertEqual(constraints.count("Must keep duplicate constraint"), 1)
+
+    def test_compact_target_preserves_shared_nested_details_in_distinct_bullets(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            memory = Path(tmp) / "docs" / "memory"
+            payload = " ".join(f"context{index}" for index in range(230))
+            constraints = memory / "constraints.md"
+            constraints.write_text(
+                "# Constraints\n\n"
+                f"- Candidate A {payload}\n"
+                "  - Shared nested detail\n"
+                f"- Candidate B {payload}\n"
+                "  - Shared nested detail\n",
+                encoding="utf-8",
+            )
+
+            out = StringIO()
+            with redirect_stdout(out):
+                self.assertEqual(
+                    main(["compact", "--project-root", tmp, "--target", "constraints.md"]),
+                    0,
+                )
+            self.assertNotIn("exact duplicate bullet", out.getvalue())
+
+            self.assertEqual(
+                main(["compact", "--project-root", tmp, "--target", "constraints.md", "--apply"]),
+                0,
+            )
+            compacted = constraints.read_text(encoding="utf-8")
+            self.assertIn("Candidate A", compacted)
+            self.assertIn("Candidate B", compacted)
+            self.assertEqual(compacted.count("Shared nested detail"), 2)
+
+    def test_compact_target_dedupes_complete_top_level_bullet_units(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            constraints = Path(tmp) / "docs" / "memory" / "constraints.md"
+            unit = (
+                "- Keep the exact candidate\n"
+                "  Keep this continuation with its constraint.\n"
+                "  - Preserve this nested detail\n"
+            )
+            constraints.write_text("# Constraints\n\n" + unit * 70, encoding="utf-8")
+
+            out = StringIO()
+            with redirect_stdout(out):
+                self.assertEqual(
+                    main(["compact", "--project-root", tmp, "--target", "constraints.md"]),
+                    0,
+                )
+            self.assertIn("remove 69 exact duplicate bullet(s)", out.getvalue())
+
+            self.assertEqual(
+                main(["compact", "--project-root", tmp, "--target", "constraints.md", "--apply"]),
+                0,
+            )
+            compacted = constraints.read_text(encoding="utf-8")
+            self.assertEqual(compacted.count("Keep the exact candidate"), 1)
+            self.assertEqual(compacted.count("Keep this continuation"), 1)
+            self.assertEqual(compacted.count("Preserve this nested detail"), 1)
 
     def test_compact_target_changelog_does_not_reinflate_itself(self):
         with tempfile.TemporaryDirectory() as tmp:

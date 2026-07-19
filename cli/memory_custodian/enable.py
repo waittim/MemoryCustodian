@@ -82,13 +82,17 @@ def run(args) -> int:
         if changed:
             planned[manifest_path] = updated_manifest
             manifest_state = f"indexed {relative_path}"
+    changed_state = bool(planned)
     changelog = memory_dir / "changelog.md"
-    if relative_path == "changelog.md":
+    if changed_state and relative_path == "changelog.md":
         planned[changelog] = changelog_text(target_text, f"Enabled optional memory module {relative_path}.")
-    elif changelog.exists():
+    elif changed_state and changelog.exists():
         planned[changelog] = changelog_text(
             changelog.read_text(encoding="utf-8"), f"Enabled optional memory module {relative_path}."
         )
+    if not changed_state:
+        print(f"{relative_path}: already enabled")
+        return 0
     apply_mutations([TextMutation(target, content) for target, content in planned.items()])
     print(f"{relative_path}: {state}")
     if manifest_state:

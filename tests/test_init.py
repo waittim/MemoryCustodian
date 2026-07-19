@@ -4,6 +4,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "cli"))
@@ -115,6 +116,69 @@ class InitTests(unittest.TestCase):
             self.assertIn("- custom_owner: team-memory", repaired)
             self.assertIn("<!-- Preserve this project-specific protocol note. -->", repaired)
 
+    def test_init_repair_rejects_newer_project_protocol_without_writing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            memory = Path(tmp) / "docs" / "memory"
+            manifest = memory / "manifest.md"
+            newer = manifest.read_text(encoding="utf-8").replace(
+                "- protocol_version: 0.5", "- protocol_version: 0.6"
+            )
+            manifest.write_text(newer, encoding="utf-8")
+            (memory / "constraints.md").unlink()
+
+            err = StringIO()
+            with redirect_stderr(err):
+                code = main(["init", "--project-root", tmp, "--repair"])
+
+            self.assertEqual(code, 2)
+            self.assertIn("newer than this CLI supports", err.getvalue())
+            self.assertEqual(manifest.read_text(encoding="utf-8"), newer)
+            self.assertFalse((memory / "constraints.md").exists())
+
+    def test_init_repair_rejects_invalid_project_protocol_without_writing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            memory = Path(tmp) / "docs" / "memory"
+            manifest = memory / "manifest.md"
+            invalid = manifest.read_text(encoding="utf-8").replace(
+                "- protocol_version: 0.5", "- protocol_version: not-a-version"
+            )
+            manifest.write_text(invalid, encoding="utf-8")
+            (memory / "constraints.md").unlink()
+
+            err = StringIO()
+            with redirect_stderr(err):
+                code = main(["init", "--project-root", tmp, "--repair"])
+
+            self.assertEqual(code, 2)
+            self.assertIn("invalid protocol version", err.getvalue().lower())
+            self.assertEqual(manifest.read_text(encoding="utf-8"), invalid)
+            self.assertFalse((memory / "constraints.md").exists())
+
+    def test_init_repair_adds_missing_protocol_version(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            manifest = Path(tmp) / "docs" / "memory" / "manifest.md"
+            without_version = manifest.read_text(encoding="utf-8").replace(
+                "- protocol_version: 0.5\n", ""
+            )
+            manifest.write_text(without_version, encoding="utf-8")
+
+            self.assertEqual(main(["init", "--project-root", tmp, "--repair"]), 0)
+
+            self.assertIn("- protocol_version: 0.5", manifest.read_text(encoding="utf-8"))
+
+    def test_init_repair_keeps_same_protocol_manifest_unchanged(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            manifest = Path(tmp) / "docs" / "memory" / "manifest.md"
+            original = manifest.read_text(encoding="utf-8")
+
+            self.assertEqual(main(["init", "--project-root", tmp, "--repair"]), 0)
+
+            self.assertEqual(manifest.read_text(encoding="utf-8"), original)
+
     def test_init_replace_existing_previews_then_requires_apply(self):
         with tempfile.TemporaryDirectory() as tmp:
             self.assertEqual(main(["init", "--project-root", tmp]), 0)
@@ -208,6 +272,23 @@ class InitTests(unittest.TestCase):
             self.assertIn("`areas/frontend.md`", manifest)
             profiles_section = manifest.split("### Enabled profiles", 1)[1].split("### Enabled areas", 1)[0]
             self.assertNotIn("None enabled", profiles_section)
+
+    def test_enable_already_enabled_is_a_zero_write_no_op(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            self.assertEqual(main(["enable", "changelog", "--project-root", tmp]), 0)
+            self.assertEqual(main(["enable", "preferences", "--project-root", tmp]), 0)
+            memory = Path(tmp) / "docs" / "memory"
+            tracked = (memory / "preferences.md", memory / "manifest.md", memory / "changelog.md")
+            before = {path: path.read_bytes() for path in tracked}
+
+            out = StringIO()
+            with patch("memory_custodian.enable.apply_mutations") as apply, redirect_stdout(out):
+                self.assertEqual(main(["enable", "preferences", "--project-root", tmp]), 0)
+
+            apply.assert_not_called()
+            self.assertIn("preferences.md: already enabled", out.getvalue())
+            self.assertEqual({path: path.read_bytes() for path in tracked}, before)
 
 
 if __name__ == "__main__":
