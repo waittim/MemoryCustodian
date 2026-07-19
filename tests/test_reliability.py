@@ -90,6 +90,123 @@ class ForgetReliabilityTests(unittest.TestCase):
             self.assertNotIn("RetiredMarker", (archive / "old.md").read_text(encoding="utf-8"))
             self.assertNotIn("RetiredMarker", (memory / "changelog.md").read_text(encoding="utf-8"))
 
+    def test_hard_upgrades_prior_soft_tombstone_without_revealing_topic(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = self._init(tmp)
+            self.assertEqual(main(["add", "LegacySecret should be removed.", "--type", "decision", "--project-root", tmp]), 0)
+            self.assertEqual(main(["forget", "LegacySecret", "--mode", "soft", "--apply", "--project-root", tmp]), 0)
+            self.assertIn("LegacySecret", (memory / "do-not-use.md").read_text(encoding="utf-8"))
+
+            out = StringIO()
+            with redirect_stdout(out):
+                self.assertEqual(main(["forget", "LegacySecret", "--mode", "hard", "--apply", "--project-root", tmp]), 0)
+            self.assertNotIn("LegacySecret", out.getvalue())
+            tombstones = (memory / "do-not-use.md").read_text(encoding="utf-8")
+            self.assertNotIn("LegacySecret", tombstones)
+            self.assertEqual(tombstones.count("Tombstone: Redacted user-requested removal"), 1)
+            self.assertFalse(any("LegacySecret" in path.read_text(encoding="utf-8") for path in memory.rglob("*.md")))
+
+    def test_purge_removes_prior_soft_tombstone(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = self._init(tmp)
+            self.assertEqual(main(["add", "PurgeLegacy should be removed.", "--type", "decision", "--project-root", tmp]), 0)
+            self.assertEqual(main(["forget", "PurgeLegacy", "--mode", "soft", "--apply", "--project-root", tmp]), 0)
+            self.assertEqual(main(["forget", "PurgeLegacy", "--mode", "purge", "--apply", "--project-root", tmp]), 0)
+            tombstones = (memory / "do-not-use.md").read_text(encoding="utf-8")
+            self.assertNotIn("PurgeLegacy", tombstones)
+            self.assertNotIn("Redacted user-requested removal", tombstones)
+            self.assertFalse(any("PurgeLegacy" in path.read_text(encoding="utf-8") for path in memory.rglob("*.md")))
+
+    def test_hard_upgrade_clears_prior_soft_changelog_and_tombstone(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = self._init(tmp)
+            self.assertEqual(main(["enable", "changelog", "--project-root", tmp]), 0)
+            self.assertEqual(main(["add", "LoggedLegacy should be removed.", "--type", "decision", "--project-root", tmp]), 0)
+            self.assertEqual(main(["forget", "LoggedLegacy", "--mode", "soft", "--apply", "--project-root", tmp]), 0)
+            self.assertEqual(
+                main(
+                    [
+                        "forget",
+                        "LoggedLegacy",
+                        "--mode",
+                        "hard",
+                        "--apply",
+                        "--allow-broad-match",
+                        "--project-root",
+                        tmp,
+                    ]
+                ),
+                0,
+            )
+            self.assertFalse(any("LoggedLegacy" in path.read_text(encoding="utf-8") for path in memory.rglob("*.md")))
+
+    def test_non_tombstone_do_not_use_match_requires_manual_rewrite(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = self._init(tmp)
+            tombstones = memory / "do-not-use.md"
+            tombstones.write_text(
+                "# Do Not Use / Tombstones\n\n## Policy note\nManualGuardSecret appears outside a tombstone.\n",
+                encoding="utf-8",
+            )
+            before = tombstones.read_text(encoding="utf-8")
+            out = StringIO()
+            with redirect_stdout(out):
+                self.assertEqual(main(["forget", "ManualGuardSecret", "--mode", "purge", "--apply", "--project-root", tmp]), 1)
+            self.assertIn("do-not-use.md: h2 contains matching content", out.getvalue())
+            self.assertEqual(tombstones.read_text(encoding="utf-8"), before)
+
+    def test_body_match_requires_manual_rewrite_and_blocks_all_writes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = self._init(tmp)
+            brief = memory / "brief.md"
+            brief.write_text(
+                "# Project Brief\n\nPurpose:\nManualBodySecret is part of the current project description.\n",
+                encoding="utf-8",
+            )
+            before = {path: path.read_text(encoding="utf-8") for path in memory.glob("*.md")}
+
+            out = StringIO()
+            with redirect_stdout(out):
+                self.assertEqual(main(["forget", "ManualBodySecret", "--mode", "hard", "--project-root", tmp]), 0)
+            self.assertIn("Manual rewrite required: 1", out.getvalue())
+            self.assertIn("brief.md: body contains matching content", out.getvalue())
+
+            out = StringIO()
+            with redirect_stdout(out):
+                self.assertEqual(
+                    main(
+                        [
+                            "forget",
+                            "ManualBodySecret",
+                            "--mode",
+                            "hard",
+                            "--apply",
+                            "--allow-broad-match",
+                            "--project-root",
+                            tmp,
+                        ]
+                    ),
+                    1,
+                )
+            self.assertIn("Refusing apply", out.getvalue())
+            self.assertEqual({path: path.read_text(encoding="utf-8") for path in memory.glob("*.md")}, before)
+
+    def test_preamble_match_requires_manual_rewrite(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = self._init(tmp)
+            decisions = memory / "decisions.md"
+            decisions.write_text(
+                "# Decisions\n\nPreambleSecret remains in explanatory text.\n\n"
+                "## Safe entry\nDecision:\nKeep this.\nReason:\nStill active.\n",
+                encoding="utf-8",
+            )
+            before = decisions.read_text(encoding="utf-8")
+            out = StringIO()
+            with redirect_stdout(out):
+                self.assertEqual(main(["forget", "PreambleSecret", "--apply", "--project-root", tmp]), 1)
+            self.assertIn("decisions.md: preamble contains matching content", out.getvalue())
+            self.assertEqual(decisions.read_text(encoding="utf-8"), before)
+
 
 class PackingAndRoutingTests(unittest.TestCase):
     def test_packing_never_cuts_decision_and_reports_omissions(self):

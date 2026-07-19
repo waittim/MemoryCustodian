@@ -25,6 +25,7 @@ class FilePlan:
     path: Path
     updated: str
     matches: tuple[MarkdownUnit, ...]
+    blockers: tuple[MarkdownUnit, ...]
 
 
 def _target_files(memory_dir: Path, mode: str) -> list[Path]:
@@ -46,7 +47,7 @@ def _target_files(memory_dir: Path, mode: str) -> list[Path]:
     return sorted(path for path in candidates if path.name != "README.md" and path.name != "do-not-use.md")
 
 
-def _remove_units(text: str, topic: str) -> tuple[str, tuple[MarkdownUnit, ...]]:
+def _remove_units(text: str, topic: str) -> tuple[str, tuple[MarkdownUnit, ...], tuple[MarkdownUnit, ...]]:
     document = parse_markdown_units(text)
     needle = topic.casefold()
     matches = tuple(
@@ -56,8 +57,11 @@ def _remove_units(text: str, topic: str) -> tuple[str, tuple[MarkdownUnit, ...]]
         and needle in unit.text.casefold()
         and not (unit.kind == "h2" and len(unit.text.splitlines()) == 1)
     )
+    blockers = tuple(
+        unit for unit in document.units if unit.kind in {"preamble", "body"} and needle in unit.text.casefold()
+    )
     kept = [unit for unit in document.units if unit not in matches]
-    return render_markdown_document(document, kept), matches
+    return render_markdown_document(document, kept), matches, blockers
 
 
 def _prepend_entry(text: str, entry: str) -> str:
@@ -89,6 +93,34 @@ def _tombstone(topic: str, mode: str) -> str | None:
     )
 
 
+def _update_existing_tombstones(text: str, topic: str, mode: str) -> tuple[str, tuple[MarkdownUnit, ...], tuple[MarkdownUnit, ...]]:
+    document = parse_markdown_units(text)
+    needle = topic.casefold()
+    matches = tuple(
+        unit
+        for unit in document.units
+        if unit.kind == "h2"
+        and unit.heading is not None
+        and unit.heading.casefold().startswith("tombstone:")
+        and needle in unit.text.casefold()
+    )
+    blockers = tuple(
+        unit
+        for unit in document.units
+        if needle in unit.text.casefold()
+        and (
+            unit.kind in {"preamble", "body"}
+            or (unit.kind == "h2" and (unit.heading is None or not unit.heading.casefold().startswith("tombstone:")))
+        )
+    )
+    kept = [unit for unit in document.units if unit not in matches]
+    if mode == "hard":
+        generic = _tombstone(topic, mode)
+        if generic is not None and not any(unit.text.strip() == generic.strip() for unit in kept):
+            kept.insert(0, MarkdownUnit("h2", generic.strip(), generic.splitlines()[0][3:].strip()))
+    return render_markdown_document(document, kept), matches, blockers
+
+
 def _summary(unit: MarkdownUnit, redact: bool, number: int) -> str:
     if redact:
         return "[redacted matching entry]" if unit.heading else f"entry {number}"
@@ -116,21 +148,34 @@ def run(args) -> int:
     plans: list[FilePlan] = []
     for path in targets:
         original = read_text(path)
-        updated, matches = _remove_units(original, topic)
-        plans.append(FilePlan(path, updated, matches))
+        updated, matches, blockers = _remove_units(original, topic)
+        plans.append(FilePlan(path, updated, matches, blockers))
 
     matched_plans = [plan for plan in plans if plan.matches]
     total_matches = sum(len(plan.matches) for plan in plans)
+    blocker_plans = [plan for plan in plans if plan.blockers]
+    tombstone_matches: tuple[MarkdownUnit, ...] = ()
+    tombstone_blockers: tuple[MarkdownUnit, ...] = ()
+    tombstone_updated: str | None = None
+    tombstone_path = memory_dir / "do-not-use.md"
+    if args.mode in {"hard", "purge"}:
+        tombstone_original = read_text(tombstone_path)
+        candidate, tombstone_matches, tombstone_blockers = _update_existing_tombstones(
+            tombstone_original, topic, args.mode
+        )
+        if candidate != ensure_newline(tombstone_original):
+            tombstone_updated = candidate
+    manual_blockers = sum(len(plan.blockers) for plan in plans) + len(tombstone_blockers)
     broad_reasons: list[str] = []
     if len("".join(topic.split())) < 4:
         broad_reasons.append("topic has fewer than four non-whitespace characters")
-    if total_matches > 1:
+    if total_matches + len(tombstone_matches) + manual_blockers > 1:
         broad_reasons.append("plan matches more than one semantic unit")
 
     tombstone = _tombstone(topic, args.mode)
-    tombstone_path = memory_dir / "do-not-use.md"
     changelog_path = memory_dir / "changelog.md"
-    tombstone_updated = _prepend_entry(read_text(tombstone_path), tombstone) if tombstone else None
+    if args.mode == "soft" and tombstone:
+        tombstone_updated = _prepend_entry(read_text(tombstone_path), tombstone)
     changelog_message = f"Forgot topic '{topic}' with mode soft." if args.mode == "soft" else f"Completed {args.mode} forget operation."
     changelog_plan = next((plan for plan in plans if plan.path == changelog_path), None)
     changelog_base = changelog_plan.updated if changelog_plan else (read_text(changelog_path) if changelog_path.exists() else "")
@@ -145,14 +190,37 @@ def run(args) -> int:
         relative = plan.path.relative_to(memory_dir).as_posix()
         for number, unit in enumerate(plan.matches, start=1):
             print(f"- {relative}: {_summary(unit, redact, number)}")
-    print("Tombstone: " + ("none" if tombstone is None else "generic redacted guard" if redact else "topic-bearing guard"))
+    if tombstone_matches:
+        print(f"Matched tombstones: {len(tombstone_matches)}")
+    if args.mode == "hard" and tombstone_matches:
+        print("Tombstone: replace matching topic-bearing guards with one generic redacted guard")
+    elif args.mode == "hard":
+        print("Tombstone: generic redacted guard")
+    elif args.mode == "purge":
+        print("Tombstone: remove matching topic-bearing guards")
+    else:
+        print("Tombstone: topic-bearing guard")
     print("Changelog: " + ("generic operation record" if changelog_updated and redact else "topic-bearing record" if changelog_updated else "not enabled"))
     print("Broad-match confirmation required: " + ("yes" if broad_reasons else "no"))
+    if manual_blockers:
+        print(f"Manual rewrite required: {manual_blockers} non-removable unit(s)")
+        for plan in blocker_plans:
+            relative = plan.path.relative_to(memory_dir).as_posix()
+            for unit in plan.blockers:
+                print(f"- {relative}: {unit.kind} contains matching content")
+        for unit in tombstone_blockers:
+            print(f"- do-not-use.md: {unit.kind} contains matching content")
     if args.mode == "purge":
         print("Warning: Git history, backups, caches, and external copies are outside this command's scope.")
     if not args.apply:
-        print("Dry run only. Re-run with --apply.")
+        if manual_blockers:
+            print("Dry run only. Rewrite the listed content semantically, then preview again before applying.")
+        else:
+            print("Dry run only. Re-run with --apply.")
         return 0
+    if manual_blockers:
+        print("Refusing apply: rewrite the listed body/preamble content semantically, then preview again.")
+        return 1
     if broad_reasons and not args.allow_broad_match:
         print("Refusing broad-risk apply: " + "; ".join(broad_reasons) + ". Re-run with --allow-broad-match after review.")
         return 1
