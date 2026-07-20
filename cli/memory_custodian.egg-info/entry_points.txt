@@ -1,0 +1,2 @@
+[console_scripts]
+memory-custodian = memory_custodian.main:main

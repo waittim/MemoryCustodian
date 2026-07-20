@@ -1,3 +1,14 @@
+Metadata-Version: 2.4
+Name: memory-custodian
+Version: 0.9.1
+Summary: Repo-native plain-text memory governance for coding agents
+Author: MemoryCustodian contributors
+License: MIT
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Dynamic: license-file
+
 # MemoryCustodian
 
 **Give your coding agents a project memory.**
@@ -83,7 +94,7 @@ The result is project memory that is inspectable, diffable, portable across agen
 
 ## Built with Codex and GPT-5.6
 
-MemoryCustodian existed before OpenAI Build Week, with v0.7.0 as the pre-submission baseline. During Build Week, I collaborated with Codex using GPT-5.6 to develop versions 0.8.0 through 0.9.1.
+MemoryCustodian existed before OpenAI Build Week, with v0.7.0 as the pre-event baseline. During Build Week, I collaborated with Codex using GPT-5.6 to develop versions 0.8.0 through 0.9.1.
 
 Codex accelerated repo-wide analysis and implementation across the protocol, CLI, agent skill, adapters, documentation, and tests. It helped turn reliability concerns into concrete plans, coordinate multi-file changes, identify edge cases, and expand regression coverage.
 
@@ -95,11 +106,6 @@ The Build Week releases added atomic writes, complete-entry context packing, val
 
 Codex and GPT-5.6 were used to build and validate these releases; they are not runtime dependencies.
 
-### Build Week scope 
-- Pre-submission baseline: v0.7.0, released July 12, 2026 
-- Build Week releases: v0.8.0 through v0.9.1, released July 18–19, 2026 
-- Comparison range: v0.7.0...v0.9.1 
-- Core Codex session evidence: provided with the Devpost submission
 
 ## Installation
 
