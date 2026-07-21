@@ -9,10 +9,11 @@ It stores memory as plain Markdown in your repo and loads only the pieces needed
 **Durable memory. Minimal context.**
 
 [![Version](https://img.shields.io/badge/version-0.9.1-blue.svg)](https://github.com/waittim/MemoryCustodian/releases/latest)
+[![CI](https://github.com/waittim/MemoryCustodian/actions/workflows/ci.yml/badge.svg)](https://github.com/waittim/MemoryCustodian/actions/workflows/ci.yml)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-agnostic-blue.svg)](#)
 [![Design: Offline-first](https://img.shields.io/badge/design-offline--first-blue.svg)](#)
-[![Architecture: Zero-RAG](https://img.shields.io/badge/architecture-zero--RAG-blue.svg)](#)
 [![Blog](https://img.shields.io/badge/blog-MemoryCustodian-orange.svg)](https://www.zekun.blog/2026/07/01/memory-custodian/)
 
 ## Why MemoryCustodian?
@@ -27,6 +28,29 @@ MemoryCustodian moves durable project context into the repository. Humans can re
 - optional `rules/`, `profiles/`, and `areas/` only when the manifest says they apply
 
 This is project memory, not chat history.
+
+## See It in Action
+
+The included [NightNotes demo](examples/nightnotes-video-demo) shows a new agent
+session recovering an existing JSON storage decision, offline and
+standard-library constraints, and a rejected SQLite approach.
+
+[Watch the published demo](https://www.youtube.com/watch?v=mYKzzATlOPw).
+
+```bash
+scripts/memory-custodian read \
+  --project-root examples/nightnotes-video-demo \
+  --task planning
+
+scripts/memory-custodian compact \
+  --project-root examples/nightnotes-video-demo
+```
+
+The demo README includes the intentionally failing acceptance test, the exact
+Codex prompt, expected memory, and success criteria so the flow can be
+reproduced without the submission form. The result is recorded as a
+[reproducible live evaluation](docs/evaluations/nightnotes-codex-gpt-5.6.md),
+not presented as a benchmark.
 
 ## Quickstart
 
@@ -99,7 +123,7 @@ Codex and GPT-5.6 were used to build and validate these releases; they are not r
 
 - Pre-submission baseline: v0.7.0, released July 12, 2026
 - Build Week releases: v0.8.0 through v0.9.1, released July 18–19, 2026
-- Comparison range: v0.7.0...v0.9.1
+- Comparison range: [v0.7.0...v0.9.1](https://github.com/waittim/MemoryCustodian/compare/v0.7.0...v0.9.1)
 - Core Codex session evidence: provided with the Devpost submission
 
 ## Installation
@@ -183,7 +207,7 @@ scripts/memory-custodian status --project-root /path/to/project
 scripts/memory-custodian read --project-root /path/to/project --task planning
 ```
 
-Or install editable with Python 3.13+ and use the console script:
+Or install editable with Python 3.10+ and use the console script:
 
 ```bash
 python3 -m pip install -e .

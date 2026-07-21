@@ -2,11 +2,11 @@
 
 Entries are newest first.
 
-## 2026-07-20 - Target Python 3.13+ minimum version
+## 2026-07-21 - Target Python 3.10+ minimum version
 Decision:
-Update project Python version requirement to `>=3.13` across `pyproject.toml`, CI matrix, and documentation.
+Support Python 3.10+ and test the main suite on both Python 3.10 and 3.13.
 Reason:
-Keep runtime requirements aligned with current stable Python major releases and modern stdlib features.
+The stdlib-only implementation does not require Python 3.13 features, and the broader range lowers installation friction while retaining a maintained baseline.
 
 ## 2026-07-19 - Keep Protocol 0.5 for v0.9
 Decision:

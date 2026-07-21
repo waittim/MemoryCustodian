@@ -21,6 +21,8 @@ class PluginPackageTests(unittest.TestCase):
         self.assertTrue((ROOT / "skills" / "memory-custodian" / "SKILL.md").exists())
 
         interface = manifest["interface"]
+        self.assertEqual(manifest["author"]["name"], "Zekun Wang")
+        self.assertEqual(interface["developerName"], "Zekun Wang")
         self.assertIn("Interactive", interface["capabilities"])
         self.assertIn("Read", interface["capabilities"])
         self.assertIn("Write", interface["capabilities"])
@@ -30,6 +32,16 @@ class PluginPackageTests(unittest.TestCase):
             self.assertTrue((ROOT / asset[2:]).exists(), asset)
         self.assertLessEqual(len(interface["defaultPrompt"]), 3)
         self.assertTrue(all(len(prompt) <= 128 for prompt in interface["defaultPrompt"]))
+        self.assertEqual(
+            interface["privacyPolicyURL"],
+            "https://github.com/waittim/MemoryCustodian/blob/main/PRIVACY.md",
+        )
+        self.assertEqual(
+            interface["termsOfServiceURL"],
+            "https://github.com/waittim/MemoryCustodian/blob/main/TERMS.md",
+        )
+        self.assertTrue((ROOT / "PRIVACY.md").exists())
+        self.assertTrue((ROOT / "TERMS.md").exists())
 
     def test_repo_marketplace_points_to_this_plugin(self):
         marketplace = json.loads((ROOT / ".agents" / "plugins" / "marketplace.json").read_text(encoding="utf-8"))

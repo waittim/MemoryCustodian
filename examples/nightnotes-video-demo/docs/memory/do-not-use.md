@@ -2,7 +2,9 @@
 
 Tombstones are newest first.
 
-## SQLite for session persistence
+## Tombstone: SQLite for session persistence
 
-- Do not introduce SQLite for the current session store.
-- The current data size does not justify a database, and portability is a product requirement.
+Do not reintroduce unless the user explicitly reverses this.
+
+Reason:
+The current data size does not justify a database, and portability is a product requirement.

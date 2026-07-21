@@ -2,7 +2,7 @@
   "name": "memory-custodian-dev",
   "description": "Development marketplace for MemoryCustodian local project memory",
   "owner": {
-    "name": "MemoryCustodian contributors"
+    "name": "Zekun Wang"
   },
   "plugins": [
     {
@@ -11,7 +11,7 @@
       "version": "0.9.1",
       "source": "./",
       "author": {
-        "name": "MemoryCustodian contributors"
+        "name": "Zekun Wang"
       }
     }
   ]

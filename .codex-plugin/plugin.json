@@ -3,7 +3,7 @@
   "version": "0.9.1",
   "description": "Local-first plain-text project memory governance for coding agents.",
   "author": {
-    "name": "MemoryCustodian contributors",
+    "name": "Zekun Wang",
     "url": "https://github.com/waittim/MemoryCustodian"
   },
   "homepage": "https://github.com/waittim/MemoryCustodian",
@@ -21,7 +21,7 @@
     "displayName": "MemoryCustodian",
     "shortDescription": "Plain-text project memory for coding agents",
     "longDescription": "Use MemoryCustodian to initialize, load, check, compact, and maintain local Markdown project memory under docs/ while keeping agent context small.",
-    "developerName": "MemoryCustodian contributors",
+    "developerName": "Zekun Wang",
     "category": "Developer Tools",
     "capabilities": [
       "Interactive",
@@ -29,8 +29,8 @@
       "Write"
     ],
     "websiteURL": "https://github.com/waittim/MemoryCustodian",
-    "privacyPolicyURL": "https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement",
-    "termsOfServiceURL": "https://docs.github.com/en/site-policy/github-terms/github-terms-of-service",
+    "privacyPolicyURL": "https://github.com/waittim/MemoryCustodian/blob/main/PRIVACY.md",
+    "termsOfServiceURL": "https://github.com/waittim/MemoryCustodian/blob/main/TERMS.md",
     "defaultPrompt": [
       "Initialize MemoryCustodian for this project.",
       "Check this project's memory health.",
