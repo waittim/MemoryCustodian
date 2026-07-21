@@ -95,10 +95,11 @@ The Build Week releases added atomic writes, complete-entry context packing, val
 
 Codex and GPT-5.6 were used to build and validate these releases; they are not runtime dependencies.
 
-### Build Week scope 
-- Pre-submission baseline: v0.7.0, released July 12, 2026 
-- Build Week releases: v0.8.0 through v0.9.1, released July 18–19, 2026 
-- Comparison range: v0.7.0...v0.9.1 
+### Build Week scope
+
+- Pre-submission baseline: v0.7.0, released July 12, 2026
+- Build Week releases: v0.8.0 through v0.9.1, released July 18–19, 2026
+- Comparison range: v0.7.0...v0.9.1
 - Core Codex session evidence: provided with the Devpost submission
 
 ## Installation
