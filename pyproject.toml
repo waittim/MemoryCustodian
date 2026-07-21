@@ -9,7 +9,7 @@ description = "Repo-native plain-text memory governance for coding agents"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
-authors = [{ name = "MemoryCustodian contributors" }]
+authors = [{ name = "Zekun Wang" }]
 dependencies = []
 
 [project.scripts]

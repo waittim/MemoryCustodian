@@ -10,11 +10,11 @@ class TestNoteStorePersistence(unittest.TestCase):
         test_note = "Session memory test note"
         store1.add_note(test_note)
 
-        # Re-create store instance to simulate a separate process / launch
+        # Re-create the store to simulate a later application session
         store2 = NoteStore()
         notes = store2.get_notes()
 
-        self.assertIn(test_note, notes, "Notes must survive across separate CLI runs.")
+        self.assertIn(test_note, notes, "Notes must survive across separate store instances.")
 
 if __name__ == "__main__":
     unittest.main()

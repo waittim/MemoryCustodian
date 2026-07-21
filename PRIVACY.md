@@ -1,6 +1,7 @@
 # Privacy Policy
 
-MemoryCustodian does not collect, transmit, sell, or share personal data.
+The MemoryCustodian CLI and bundled skill do not independently collect,
+transmit, sell, or share personal data.
 
 Project memory is stored as plain Markdown in the user's own repository. Normal
 runtime memory operations work locally and do not make network requests.
@@ -11,6 +12,10 @@ MemoryCustodian reads or modifies files only through the permissions granted to
 the user, coding agent, or host application. Users remain responsible for the
 content they place in project memory and for their repository's access controls,
 history, backups, and sharing settings.
+
+A coding-agent host may process project files according to that host's own
+privacy settings and terms. MemoryCustodian does not control the host's model
+execution or data handling.
 
 Questions or reports can be filed through the
 [MemoryCustodian issue tracker](https://github.com/waittim/MemoryCustodian/issues).

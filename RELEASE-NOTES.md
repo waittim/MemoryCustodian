@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### Demo and submission materials
+
+- Added the reproducible NightNotes demo fixture and its intentionally failing persistence acceptance test.
+- Added a documented Codex GPT-5.6 live evaluation and published demo video.
+- Added direct demo commands and Build Week evidence links to the README.
+
+### Plugin metadata and policy
+
+- Added project-specific privacy and terms documents.
+- Updated plugin author and policy metadata.
+
+### Compatibility and repository hygiene
+
+- Restored Python 3.10+ support with CI coverage on Python 3.10 and 3.13.
+- Removed generated `egg-info` metadata from source control and expanded build-artifact ignores.
+
 ## v0.9.1 - 2026-07-19
 
 ### Protocol and compaction safety

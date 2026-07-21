@@ -17,7 +17,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests
 ```
 
 The persistence test should fail because a note added to one `NoteStore`
-instance is not available to a second instance. This expected failure is the
+instance is not available to a later instance. This expected failure is the
 implementation task, not a broken demo setup.
 
 ## Inspect the Planning Context
@@ -44,6 +44,9 @@ Expected memory:
 scripts/memory-custodian compact \
   --project-root examples/nightnotes-video-demo
 ```
+
+On Windows, install the console command first and replace
+`scripts/memory-custodian` with `memory-custodian`.
 
 The encryption candidate should remain for Agent review. The CLI should not
 infer a semantic destination for it.

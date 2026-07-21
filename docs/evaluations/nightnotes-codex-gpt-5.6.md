@@ -5,6 +5,7 @@ Model: GPT-5.6
 Session: New session, no prior conversation context  
 Files modified: None  
 Evidence: [Published demo video](https://www.youtube.com/watch?v=mYKzzATlOPw)
+Repository snapshot: `openai-build-week-submission`
 
 This is a reproducible live evaluation, not a benchmark. The fixture and exact
 reproduction steps are documented in the
@@ -38,3 +39,11 @@ Do not modify any files.
 - [x] Human-readable-file constraint recovered.
 - [x] SQLite rejection recovered.
 - [x] No files modified.
+
+## Observed result summary
+
+The response recovered the existing decision to store session state in
+human-readable local JSON, preserved offline and standard-library-only
+operation, and respected the explicit rejection of SQLite for the current
+session store. This is a paraphrase of the observed result, not a verbatim
+transcript.
