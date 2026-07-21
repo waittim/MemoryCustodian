@@ -7,7 +7,7 @@ name = "memory-custodian"
 version = "0.9.1"
 description = "Repo-native plain-text memory governance for coding agents"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.13"
 license = { text = "MIT" }
 authors = [{ name = "MemoryCustodian contributors" }]
 dependencies = []

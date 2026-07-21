@@ -183,7 +183,7 @@ scripts/memory-custodian status --project-root /path/to/project
 scripts/memory-custodian read --project-root /path/to/project --task planning
 ```
 
-Or install editable with Python 3.10+ and use the console script:
+Or install editable with Python 3.13+ and use the console script:
 
 ```bash
 python3 -m pip install -e .

@@ -2,6 +2,13 @@
 
 Entries are newest first.
 
+## 2026-07-20 - Target Python 3.13+ minimum version
+Decision:
+Update project Python version requirement to `>=3.13` across `pyproject.toml`, CI matrix, and documentation.
+Reason:
+Keep runtime requirements aligned with current stable Python major releases and modern stdlib features.
+
+
 ## 2026-07-19 - Keep Protocol 0.5 for v0.9
 Decision:
 Keep the memory protocol at 0.5 while package 0.9 removes CLI semantic guessing and hardens mutation safety.
