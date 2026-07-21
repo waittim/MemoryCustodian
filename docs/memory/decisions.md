@@ -8,7 +8,6 @@ Update project Python version requirement to `>=3.13` across `pyproject.toml`, C
 Reason:
 Keep runtime requirements aligned with current stable Python major releases and modern stdlib features.
 
-
 ## 2026-07-19 - Keep Protocol 0.5 for v0.9
 Decision:
 Keep the memory protocol at 0.5 while package 0.9 removes CLI semantic guessing and hardens mutation safety.
@@ -80,9 +79,3 @@ Decision:
 Memory operations work offline by default; installation/update flows may use network distribution.
 Reason:
 Runtime memory stays local-first while updates can use marketplaces, package managers, or git.
-
-## 2026-07-02 - Keep Skill instructions operational and concise
-Decision:
-Keep `SKILL.md` focused on agent execution; put detailed policy in references, README, or memory files.
-Reason:
-`SKILL.md` is an execution entry point, not a positioning document.

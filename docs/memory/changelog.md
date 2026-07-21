@@ -2,6 +2,9 @@
 
 Entries are newest first.
 
+## 2026-07-21
+- Compacted decisions.md: archived 1 old entries.
+
 ## 2026-07-19
 - Prepared package 0.9.1 with protocol downgrade guards, complete top-level bullet compaction, consistent inbox counts, zero-write repeated enablement, and manifest-authoritative canonical category guidance.
 
