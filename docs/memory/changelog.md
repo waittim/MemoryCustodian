@@ -3,6 +3,7 @@
 Entries are newest first.
 
 ## 2026-07-21
+- Removed the obsolete NightNotes script because it recursively deleted user-provided targets.
 - Cleaned submission artifacts, added NightNotes drift coverage, and made release notes, evidence, policy boundaries, and author metadata consistent.
 - Restored Python 3.10+ support and CI coverage across Python 3.10 and 3.13 after verifying the implementation has no Python 3.13 dependency.
 - Made the NightNotes demo reproducible, linked the published video and live evaluation, standardized its tombstone, and aligned public plugin privacy metadata.

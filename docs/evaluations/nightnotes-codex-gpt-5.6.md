@@ -5,7 +5,7 @@ Model: GPT-5.6
 Session: New session, no prior conversation context  
 Files modified: None  
 Evidence: [Published demo video](https://www.youtube.com/watch?v=mYKzzATlOPw)
-Repository snapshot: `openai-build-week-submission`
+Repository snapshot: [`openai-build-week-submission-final`](https://github.com/waittim/MemoryCustodian/tree/openai-build-week-submission-final)
 
 This is a reproducible live evaluation, not a benchmark. The fixture and exact
 reproduction steps are documented in the

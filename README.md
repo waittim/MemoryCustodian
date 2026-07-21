@@ -127,7 +127,7 @@ Codex and GPT-5.6 were used to build and validate these releases; they are not r
 - Pre-submission baseline: v0.7.0, released July 12, 2026
 - Build Week releases: v0.8.0 through v0.9.1, released July 18–19, 2026
 - Comparison range: [v0.7.0...v0.9.1](https://github.com/waittim/MemoryCustodian/compare/v0.7.0...v0.9.1)
-- Submission snapshot: `openai-build-week-submission`
+- Submission snapshot: [`openai-build-week-submission-final`](https://github.com/waittim/MemoryCustodian/tree/openai-build-week-submission-final)
 - Core Codex session evidence: [NightNotes live evaluation](docs/evaluations/nightnotes-codex-gpt-5.6.md) and the [published demo video](https://www.youtube.com/watch?v=mYKzzATlOPw)
 
 ## Installation

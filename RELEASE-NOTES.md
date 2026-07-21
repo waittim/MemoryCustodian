@@ -17,6 +17,7 @@
 
 - Restored Python 3.10+ support with CI coverage on Python 3.10 and 3.13.
 - Removed generated `egg-info` metadata from source control and expanded build-artifact ignores.
+- Removed an obsolete demo preparation script that recursively deleted a user-provided target path.
 
 ## v0.9.1 - 2026-07-19
 
