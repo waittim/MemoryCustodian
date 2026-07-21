@@ -5,7 +5,7 @@ Loading map for local project memory. Load only the files listed for the current
 ## MemoryCustodian Protocol
 - protocol_version: 0.5
 - initialized_with: memory-custodian 0.3.0
-- last_migrated_with: memory-custodian 0.7.0
+- last_migrated_with: memory-custodian 0.9.1
 ## Always load
 - brief.md
 
