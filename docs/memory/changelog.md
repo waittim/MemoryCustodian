@@ -2,6 +2,15 @@
 
 Entries are newest first.
 
+## 2026-07-28
+- Compacted decisions.md: archived 4 old entries.
+
+## 2026-07-28
+- Added decision memory to decisions.md.
+
+## 2026-07-28
+- Migrated project memory to Protocol 0.6 without rewriting legacy freeform units.
+
 ## 2026-07-21
 - Removed the obsolete NightNotes script because it recursively deleted user-provided targets.
 - Cleaned submission artifacts, added NightNotes drift coverage, and made release notes, evidence, policy boundaries, and author metadata consistent.
@@ -51,11 +60,3 @@ Entries are newest first.
 - Established memory changelog entries as newest-first.
 - Added manifest optional module indexing for enabled rules, profiles, and areas.
 - Enforced project memory directories under `docs/`, with `docs/memory/` as the default.
-
-## 2026-07-02
-- Updated repository memory to the v0.3 minimal-first protocol.
-- Recorded the decision to keep `SKILL.md` focused on operational agent instructions.
-
-## 2026-06-30
-- Initialized MemoryCustodian dogfood memory files.
-- Captured MVP constraints, decisions, preferences, and tombstones from the planning outline.

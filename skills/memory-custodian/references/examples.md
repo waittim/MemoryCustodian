@@ -39,7 +39,13 @@ Loaded:
 ## Decision Entry
 
 ```markdown
-## 2026-06-30 - Use plain text memory files
+## MC-DEC-20260630-a1b2c3d4 — Use plain text memory files
+
+Status: active
+Scope: project
+Evidence:
+- user-confirmed
+
 Decision:
 Store memory as markdown files inside each project.
 Reason:
@@ -51,6 +57,13 @@ Keep the complete entry within 120 tokens. Put detailed consequences in constrai
 ## Tombstone Entry
 
 ```markdown
-## Tombstone: RAG/vector DB as MVP architecture
-Do not reintroduce unless the user explicitly reverses this. Reason: the project targets pure-text memory files and lightweight implementation. Date: 2026-06-30.
+## MC-DNU-20260630-b2c3d4e5 — Tombstone: RAG/vector DB as MVP architecture
+
+Status: active
+Scope: project
+Evidence:
+- user-confirmed
+
+Rejected:
+Do not reintroduce unless the user explicitly reverses this.
 ```

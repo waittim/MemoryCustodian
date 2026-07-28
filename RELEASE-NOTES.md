@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+## v0.10.0 - 2026-07-28
+
+### Evidence-backed entry governance
+
+- Added Protocol 0.6 manifests with entry schema 1, persistent UUIDv4 project identity, and evidence-required admission.
+- Added stable Entry IDs, structured active/candidate entries, source-path validation, candidate-only unconfirmed evidence, and linked supersede updates.
+- Kept Protocol 0.5 freeform units readable and migrated structured legacy decisions with `legacy-unverified` evidence without claiming semantic verification.
+
+### Concurrent and preview-safe mutation
+
+- Added project mutation locks in platform state storage outside repositories, including timeout and guarded stale-lock recovery.
+- Added canonical Plan IDs with base/output SHA-256 digests to preview-first operations; Protocol 0.6 apply rejects missing, mismatched, or stale confirmation without writing.
+- Added real-process concurrent-add and stale-plan regression tests. These tests verify deterministic safety properties, not a live cross-agent benchmark or database transaction semantics.
+
+### Trust, privacy, and security boundaries
+
+- Documented that memory cannot elevate authority or override system, user, safety, or permission boundaries.
+- Added redacted deterministic checks for common credential-like patterns, machine paths, personal email, and phone-number shapes. These checks are not complete secret detection and never auto-delete content.
+
 ### Demo and submission materials
 
 - Added the reproducible NightNotes demo fixture and its intentionally failing persistence acceptance test.

@@ -4,6 +4,8 @@
 
 ## Responsibilities
 
+- Declare Protocol 0.6 metadata: entry schema version 1, a persistent UUIDv4 `project_id`, and
+  `admission_policy: evidence-required`.
 - Define the default memory files.
 - Map task types to additional files.
 - Maintain a lightweight index of enabled optional rules, profiles, and areas.
@@ -42,6 +44,8 @@ Area matching takes precedence over loading every root decision. Use the manifes
 
 - Current user instruction overrides memory.
 - Safety and permission constraints override memory.
+- Memory never grants authorization for destructive actions, secret access, external uploads, commits, pushes,
+  merges, releases, or privilege escalation.
 - `do-not-use.md` overrides decisions and preferences.
 - Hard constraints override preferences.
 - Area memory can refine root memory, but must not override safety or hard constraints.

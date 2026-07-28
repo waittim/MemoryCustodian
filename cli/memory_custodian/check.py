@@ -16,11 +16,21 @@ from .protocol import (
     optional_index_paths,
     parse_manifest_task_file_specs,
     protocol_metadata,
+    valid_project_id,
     resolve_manifest_memory_path,
     resolve_memory_dir,
     resolve_project_root,
     validate_manifest_routes,
+    split_top_level_bullet_units,
 )
+from .entries import (
+    CANDIDATE_ONLY_EVIDENCE,
+    INTERNAL_EVIDENCE,
+    VALID_SCOPES_RE,
+    heading_entry_ids,
+    parse_structured_entries,
+)
+from .scanning import scan_text
 from .templates import CORE_FILES, brief_needs_curation
 
 
@@ -83,6 +93,15 @@ def _check_protocol_metadata(text: str) -> list[str]:
             f"manifest.md: protocol_version {version} is newer than this CLI supports ({CURRENT_PROTOCOL_VERSION}); "
             "update memory-custodian"
         )
+    if version == CURRENT_PROTOCOL_VERSION:
+        if len(re.findall(r"(?m)^- project_id:\s*\S+\s*$", text)) != 1:
+            issues.append("manifest.md: project_id must appear exactly once")
+        if metadata.get("entry_schema_version") != "1":
+            issues.append("manifest.md: missing or invalid entry_schema_version (expected 1)")
+        if not valid_project_id(metadata.get("project_id")):
+            issues.append("manifest.md: missing or invalid UUIDv4 project_id; run `memory-custodian migrate`")
+        if metadata.get("admission_policy") != "evidence-required":
+            issues.append("manifest.md: admission_policy must be evidence-required")
     return issues
 
 
@@ -91,6 +110,7 @@ def run(args) -> int:
     memory_dir = resolve_memory_dir(project_root, args.memory_dir)
     issues: list[str] = []
     warnings: list[str] = []
+    detailed_findings = []
 
     if not memory_dir.exists():
         print(f"Memory directory missing: {memory_dir}")
@@ -131,12 +151,71 @@ def run(args) -> int:
 
     for path in sorted(memory_dir.rglob("*.md")):
         relative = path.relative_to(memory_dir).as_posix()
+        text = _read(path)
+        detailed_findings.extend(scan_text(path, text))
         if relative.startswith("archive/"):
             continue
+        for entry in parse_structured_entries(path, text):
+            expected_inbox = relative == "inbox.md"
+            if entry.status not in {"active", "candidate", "superseded", "promoted"}:
+                issues.append(f"{relative}: {entry.entry_id} has invalid Status {entry.status!r}")
+            if entry.status == "candidate" and not expected_inbox:
+                issues.append(f"{relative}: candidate {entry.entry_id} must be stored in inbox.md")
+            if entry.status == "active":
+                if not entry.evidence:
+                    issues.append(f"{relative}: active entry {entry.entry_id} has no Evidence")
+                elif all(item in CANDIDATE_ONLY_EVIDENCE for item in entry.evidence):
+                    issues.append(f"{relative}: active entry {entry.entry_id} has only unconfirmed Evidence")
+                if "legacy-unverified" in entry.evidence:
+                    warnings.append(f"{relative}: {entry.entry_id} uses migration-only legacy-unverified Evidence")
+            if not VALID_SCOPES_RE.fullmatch(entry.scope):
+                issues.append(f"{relative}: {entry.entry_id} has invalid Scope {entry.scope!r}")
+            if entry.scope.startswith("area:"):
+                expected = f"areas/{entry.scope.split(':', 1)[1]}.md"
+                if relative not in {expected, "inbox.md"}:
+                    issues.append(f"{relative}: {entry.entry_id} area Scope does not match its file")
+            code = entry.entry_id.split("-", 2)[1].upper()
+            expected_codes = {
+                "decisions.md": {"DEC"},
+                "constraints.md": {"CON"},
+                "do-not-use.md": {"DNU", "TOMB"},
+                "preferences.md": {"PREF"},
+                "inbox.md": {"INBOX"},
+            }.get(relative)
+            if relative.startswith(("areas/", "rules/", "profiles/")):
+                expected_codes = {"AREA"}
+            if expected_codes is not None and code not in expected_codes:
+                issues.append(
+                    f"{relative}: {entry.entry_id} type does not match its storage location"
+                )
+
+        if relative in {
+            "decisions.md", "constraints.md", "do-not-use.md", "preferences.md", "inbox.md"
+        } or relative.startswith(("areas/", "rules/", "profiles/")):
+            without_structured = re.sub(
+                r"(?ms)^## MC-(?:DEC|CON|DNU|PREF|AREA|INBOX|TOMB)-[^\n]*\n.*?(?=^## |\Z)",
+                "",
+                text,
+            )
+            legacy_h2 = sum(1 for line in without_structured.splitlines() if line.startswith("## "))
+            legacy_bullets = sum(
+                1 for kind, _unit in split_top_level_bullet_units(without_structured)
+                if kind == "bullet"
+            )
+            legacy_count = legacy_h2 + legacy_bullets
+            if legacy_count:
+                warnings.append(
+                    f"{relative}: {legacy_count} legacy entr{'y' if legacy_count == 1 else 'ies'} "
+                    "remain readable without structured Evidence"
+                )
+
+        ids = heading_entry_ids(text)
+        if len({value.casefold() for value in ids}) != len(ids):
+            issues.append(f"{relative}: duplicate Entry ID within file")
         budget = budget_for(relative)
         if budget is None:
             continue
-        tokens = estimate_tokens(_read(path))
+        tokens = estimate_tokens(text)
         if tokens > budget:
             issues.append(f"{relative}: over budget ({tokens}/{budget} tokens); run `memory-custodian compact --target {relative}`")
         for title, entry_tokens in long_decision_entries(_read(path)):
@@ -174,6 +253,24 @@ def run(args) -> int:
     for entry_name in ("AGENTS.md", "CLAUDE.md", "GEMINI.md"):
         warnings.extend(_check_agent_entry(project_root / entry_name))
 
+    all_ids: dict[str, list[str]] = {}
+    for path in sorted(memory_dir.rglob("*.md")):
+        for value in heading_entry_ids(_read(path)):
+            all_ids.setdefault(value.casefold(), []).append(path.relative_to(memory_dir).as_posix())
+    for value, paths in all_ids.items():
+        if len(paths) > 1:
+            issues.append(f"duplicate Entry ID {value.upper()} in: {', '.join(paths)}")
+
+    security = [item for item in detailed_findings if item.category == "security"]
+    privacy = [item for item in detailed_findings if item.category == "privacy"]
+    for finding in security:
+        message = f"{finding.path.relative_to(memory_dir)}:{finding.line}: {finding.kind}: {finding.preview}"
+        (issues if finding.severity == "ERROR" else warnings).append(message)
+    for finding in privacy:
+        warnings.append(
+            f"{finding.path.relative_to(memory_dir)}:{finding.line}: {finding.kind}: {finding.preview}"
+        )
+
     if issues:
         print("MemoryCustodian check: FAILED")
         for issue in issues:
@@ -185,5 +282,10 @@ def run(args) -> int:
         print("Warnings:")
         for warning in warnings:
             print(f"- {warning}")
+
+    if getattr(args, "security", False):
+        print(f"Security findings: {len(security)}")
+    if getattr(args, "privacy", False):
+        print(f"Privacy findings: {len(privacy)}")
 
     return 1 if issues else 0

@@ -46,6 +46,9 @@ def build_parser() -> argparse.ArgumentParser:
     init_parser.add_argument("--repair", action="store_true", help="Create missing files and safely repair generated metadata or managed bootstrap blocks without replacing curated memory.")
     init_parser.add_argument("--replace-existing", action="store_true", help="Preview replacement of existing selected memory files; requires --apply to write.")
     init_parser.add_argument("--apply", action="store_true", help="Apply a --replace-existing plan. Safe init and --repair do not require this flag.")
+    init_parser.add_argument("--confirm-plan", help="Plan ID printed by a replacement preview.")
+    init_parser.add_argument("--lock-timeout", type=float, default=10.0)
+    init_parser.add_argument("--break-stale-lock", action="store_true")
     init_parser.add_argument("--force", action="store_true", help=argparse.SUPPRESS)
     init_parser.add_argument("--force-agent", action="store_true", help="Replace an existing managed or recognized legacy MemoryCustodian block.")
     init_parser.set_defaults(func=init_cmd.run)
@@ -77,6 +80,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Store a scoped decision, constraint, preference, or tombstone in areas/<name>.md.",
     )
     add_parser.add_argument("--reason", help="Optional reason for decisions or tombstones.")
+    add_parser.add_argument("--evidence", action="append", default=[], help="Evidence reference; repeatable.")
+    add_parser.add_argument("--allow-missing-evidence", action="store_true", help="Retain a source evidence path that does not exist.")
+    add_parser.add_argument("--candidate", action="store_true", help="Store unconfirmed information as an inbox candidate.")
+    add_parser.add_argument("--supersedes", help="Active Entry ID replaced by this new entry.")
+    add_parser.add_argument("--apply", action="store_true", help="Apply a previewed multi-entry supersede plan.")
+    add_parser.add_argument("--confirm-plan", help="Plan ID printed by a supersede preview.")
+    add_parser.add_argument("--lock-timeout", type=float, default=10.0, help="Seconds to wait for the project mutation lock.")
+    add_parser.add_argument("--break-stale-lock", action="store_true", help="Break only a same-host dead-PID lock older than 60 seconds.")
     add_parser.add_argument(
         "--allow-long",
         action="store_true",
@@ -88,6 +99,9 @@ def build_parser() -> argparse.ArgumentParser:
     _add_common(compact_parser)
     compact_parser.add_argument("--target", help="Memory file to compact or review, such as decisions.md. Defaults to inbox.md.")
     compact_parser.add_argument("--apply", action="store_true", help="Write deterministic compaction changes. Default is dry run.")
+    compact_parser.add_argument("--confirm-plan", help="Plan ID printed by the matching preview.")
+    compact_parser.add_argument("--lock-timeout", type=float, default=10.0)
+    compact_parser.add_argument("--break-stale-lock", action="store_true")
     compact_parser.add_argument(
         "--archive-oldest",
         action="store_true",
@@ -100,6 +114,9 @@ def build_parser() -> argparse.ArgumentParser:
     forget_parser.add_argument("topic", help="Topic or phrase to forget.")
     forget_parser.add_argument("--mode", choices=("soft", "hard", "purge"), default="soft", help="Forgetting mode.")
     forget_parser.add_argument("--apply", action="store_true", help="Apply the previewed forgetting plan. Default is dry run.")
+    forget_parser.add_argument("--confirm-plan", help="Plan ID printed by the matching preview.")
+    forget_parser.add_argument("--lock-timeout", type=float, default=10.0)
+    forget_parser.add_argument("--break-stale-lock", action="store_true")
     forget_parser.add_argument(
         "--allow-broad-match", action="store_true", help="Allow applying a short-topic or multi-unit match plan."
     )
@@ -113,11 +130,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     check_parser = sub.add_parser("check", help="Check protocol consistency.")
     _add_common(check_parser)
+    check_parser.add_argument("--privacy", action="store_true", help="Show detailed privacy-pattern scan totals.")
+    check_parser.add_argument("--security", action="store_true", help="Show detailed credential-pattern scan totals.")
     check_parser.set_defaults(func=check_cmd.run)
 
     migrate_parser = sub.add_parser("migrate", help="Migrate memory files to the current protocol.")
     _add_common(migrate_parser)
     migrate_parser.add_argument("--apply", action="store_true", help="Write migration changes. Default is dry run.")
+    migrate_parser.add_argument("--confirm-plan", help="Plan ID printed by the matching preview.")
+    migrate_parser.add_argument("--lock-timeout", type=float, default=10.0)
+    migrate_parser.add_argument("--break-stale-lock", action="store_true")
     migrate_parser.set_defaults(func=migrate_cmd.run)
 
     return parser

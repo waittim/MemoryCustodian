@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 from pathlib import Path
 
+from .locking import mutation_lock
 from .mutations import TextMutation, apply_mutations
+from .plans import MutationPlan, print_plan
 from .protocol import (
+    CURRENT_PROTOCOL_VERSION,
     MarkdownUnit,
+    compare_versions,
     ensure_newline,
     iter_markdown_files,
     optional_index_paths,
@@ -16,6 +21,8 @@ from .protocol import (
     render_markdown_document,
     resolve_memory_dir,
     resolve_project_root,
+    project_id_from_manifest,
+    protocol_metadata,
     today,
 )
 
@@ -77,9 +84,24 @@ def _append_changelog_entry(text: str, message: str) -> str:
     return _prepend_entry(text, entry)
 
 
-def _tombstone(topic: str, mode: str) -> str | None:
+def _tombstone(topic: str, mode: str, project_id: str | None = None) -> str | None:
     if mode == "purge":
         return None
+    if project_id:
+        stamp = today().replace("-", "")
+        suffix = hashlib.sha256(f"{project_id}\0{mode}\0{topic}".encode()).hexdigest()[:8]
+        entry_id = f"MC-TOMB-{stamp}-{suffix}"
+        title = "Redacted user-requested removal" if mode == "hard" else topic
+        statement = (
+            "A user-requested topic was removed in hard mode. Do not reconstruct removed content from prior context."
+            if mode == "hard"
+            else f"Do not reintroduce {topic} unless the user explicitly reverses this request."
+        )
+        return (
+            f"## {entry_id} — Tombstone: {title}\n\n"
+            "Status: active\nScope: project\nEvidence:\n- user-confirmed\n\n"
+            f"Rejected:\n{statement}\n\nReason:\nUser-requested forgetting guard."
+        )
     if mode == "hard":
         return (
             "## Tombstone: Redacted user-requested removal\n"
@@ -93,7 +115,9 @@ def _tombstone(topic: str, mode: str) -> str | None:
     )
 
 
-def _update_existing_tombstones(text: str, topic: str, mode: str) -> tuple[str, tuple[MarkdownUnit, ...], tuple[MarkdownUnit, ...]]:
+def _update_existing_tombstones(
+    text: str, topic: str, mode: str, project_id: str | None = None
+) -> tuple[str, tuple[MarkdownUnit, ...], tuple[MarkdownUnit, ...]]:
     document = parse_markdown_units(text)
     needle = topic.casefold()
     matches = tuple(
@@ -101,7 +125,10 @@ def _update_existing_tombstones(text: str, topic: str, mode: str) -> tuple[str, 
         for unit in document.units
         if unit.kind == "h2"
         and unit.heading is not None
-        and unit.heading.casefold().startswith("tombstone:")
+        and (
+            unit.heading.casefold().startswith("tombstone:")
+            or unit.heading.casefold().startswith("mc-tomb-")
+        )
         and needle in unit.text.casefold()
     )
     blockers = tuple(
@@ -110,12 +137,18 @@ def _update_existing_tombstones(text: str, topic: str, mode: str) -> tuple[str, 
         if needle in unit.text.casefold()
         and (
             unit.kind in {"preamble", "body"}
-            or (unit.kind == "h2" and (unit.heading is None or not unit.heading.casefold().startswith("tombstone:")))
+            or (
+                unit.kind == "h2"
+                and (
+                    unit.heading is None
+                    or not unit.heading.casefold().startswith(("tombstone:", "mc-tomb-"))
+                )
+            )
         )
     )
     kept = [unit for unit in document.units if unit not in matches]
     if mode == "hard":
-        generic = _tombstone(topic, mode)
+        generic = _tombstone(topic, mode, project_id)
         if generic is not None and not any(unit.text.strip() == generic.strip() for unit in kept):
             kept.insert(0, MarkdownUnit("h2", generic.strip(), generic.splitlines()[0][3:].strip()))
     return render_markdown_document(document, kept), matches, blockers
@@ -142,6 +175,10 @@ def run(args) -> int:
         raise ValueError("manifest.md is missing; forgetting cannot safely resolve active memory")
     if not (memory_dir / "do-not-use.md").exists():
         raise ValueError("do-not-use.md is missing; forgetting cannot safely record removal guards")
+    manifest_text = read_text(memory_dir / "manifest.md")
+    metadata = protocol_metadata(manifest_text)
+    protocol_06 = compare_versions(metadata.get("protocol_version", "0.5"), CURRENT_PROTOCOL_VERSION) == 0
+    project_id = project_id_from_manifest(manifest_text) if protocol_06 else None
 
     targets = _target_files(memory_dir, args.mode)
     plans: list[FilePlan] = []
@@ -160,7 +197,7 @@ def run(args) -> int:
     if args.mode in {"hard", "purge"}:
         tombstone_original = read_text(tombstone_path)
         candidate, tombstone_matches, tombstone_blockers = _update_existing_tombstones(
-            tombstone_original, topic, args.mode
+            tombstone_original, topic, args.mode, project_id
         )
         if candidate != ensure_newline(tombstone_original):
             tombstone_updated = candidate
@@ -171,7 +208,7 @@ def run(args) -> int:
     if total_matches + len(tombstone_matches) + manual_blockers > 1:
         broad_reasons.append("plan matches more than one semantic unit")
 
-    tombstone = _tombstone(topic, args.mode)
+    tombstone = _tombstone(topic, args.mode, project_id)
     changelog_path = memory_dir / "changelog.md"
     if args.mode == "soft" and tombstone:
         tombstone_updated = _prepend_entry(read_text(tombstone_path), tombstone)
@@ -211,11 +248,29 @@ def run(args) -> int:
             print(f"- do-not-use.md: {unit.kind} contains matching content")
     if args.mode == "purge":
         print("Warning: Git history, backups, caches, and external copies are outside this command's scope.")
+    writes: list[tuple[Path, str]] = [
+        (plan.path, plan.updated) for plan in matched_plans if plan.path != changelog_path
+    ]
+    if tombstone_updated is not None:
+        writes.append((tombstone_path, tombstone_updated))
+    if changelog_updated is not None:
+        writes.append((changelog_path, changelog_updated))
+    mutations = [TextMutation(path, ensure_newline(updated)) for path, updated in writes]
+    mutation_plan = MutationPlan(
+        "forget",
+        {"topic": topic, "mode": args.mode, "allow_broad_match": args.allow_broad_match},
+        project_id or "legacy-protocol-0.5",
+        metadata.get("protocol_version", "0.5"),
+        tuple(mutations),
+        ("Git history, backups, caches, and external copies are out of scope.",) if args.mode == "purge" else (),
+        tuple(f"{plan.path}: non-removable content" for plan in blocker_plans),
+    )
+    print_plan(mutation_plan)
     if not args.apply:
         if manual_blockers:
             print("Dry run only. Rewrite the listed content semantically, then preview again before applying.")
         else:
-            print("Dry run only. Re-run with --apply.")
+            print("Dry run only. Re-run with --apply" + (" --confirm-plan <PLAN_ID>." if protocol_06 else "."))
         return 0
     if manual_blockers:
         print("Refusing apply: rewrite the listed body/preamble content semantically, then preview again.")
@@ -224,14 +279,23 @@ def run(args) -> int:
         print("Refusing broad-risk apply: " + "; ".join(broad_reasons) + ". Re-run with --allow-broad-match after review.")
         return 1
 
-    writes: list[tuple[Path, str]] = [
-        (plan.path, plan.updated) for plan in matched_plans if plan.path != changelog_path
-    ]
-    if tombstone_updated is not None:
-        writes.append((tombstone_path, tombstone_updated))
-    if changelog_updated is not None:
-        writes.append((changelog_path, changelog_updated))
-    completed_paths = apply_mutations([TextMutation(path, ensure_newline(updated)) for path, updated in writes])
+    if protocol_06:
+        if not args.confirm_plan:
+            raise ValueError("Protocol 0.6 forget apply requires --confirm-plan <PLAN_ID>.")
+        with mutation_lock(
+            project_id, project_root, "forget",
+            timeout=args.lock_timeout, break_stale=args.break_stale_lock,
+        ):
+            current_id = mutation_plan.plan_id
+            if current_id != args.confirm_plan:
+                print_plan(mutation_plan)
+                raise ValueError(
+                    f"Stale or mismatched plan: confirmed {args.confirm_plan}, current Plan ID is {current_id}. No files written."
+                )
+            completed_paths = apply_mutations(mutations)
+    else:
+        print("Migration available: Protocol 0.5 apply keeps legacy confirmation behavior.")
+        completed_paths = apply_mutations(mutations)
     completed = [path.relative_to(memory_dir).as_posix() for path in completed_paths]
 
     print(f"Applied forgetting plan. Written files: {len(completed)}")

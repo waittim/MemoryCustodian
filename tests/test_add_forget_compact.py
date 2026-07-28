@@ -8,7 +8,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "cli"))
 
-from memory_custodian.main import main
+from tests.cli_test_support import main
 
 
 def curate_brief(memory: Path) -> None:
@@ -35,7 +35,7 @@ class AddForgetCompactTests(unittest.TestCase):
             self.assertNotIn("SQLite", (memory / "decisions.md").read_text(encoding="utf-8"))
             tombstones = (memory / "do-not-use.md").read_text(encoding="utf-8")
             self.assertIn("Tombstone: SQLite", tombstones)
-            self.assertNotIn("Status:", tombstones)
+            self.assertIn("Status: active", tombstones)
 
     def test_add_time_series_memory_is_newest_first(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -216,10 +216,10 @@ class AddForgetCompactTests(unittest.TestCase):
             out = StringIO()
             with redirect_stdout(out):
                 self.assertEqual(main(["compact", "--project-root", tmp]), 0)
-            self.assertIn("Exact tombstone matches removable: 1", out.getvalue())
+            self.assertIn("Exact tombstone matches removable: 0", out.getvalue())
 
             self.assertEqual(main(["compact", "--project-root", tmp, "--apply"]), 0)
-            self.assertNotIn("Avoid remote cache.", (memory / "inbox.md").read_text(encoding="utf-8"))
+            self.assertIn("Avoid remote cache.", (memory / "inbox.md").read_text(encoding="utf-8"))
             self.assertEqual((memory / "do-not-use.md").read_text(encoding="utf-8"), tombstones)
 
     def test_compact_apply_does_not_promote_keyword_candidates(self):

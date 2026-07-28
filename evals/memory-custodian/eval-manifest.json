@@ -12,7 +12,17 @@
     "scoped-memory-update",
     "semantic-compaction",
     "forgetting",
-    "optional-modules"
+    "optional-modules",
+    "agent-inference-candidate",
+    "user-confirmed-active",
+    "source-backed-active",
+    "missing-evidence-rejected",
+    "concurrent-write-safety",
+    "stale-plan-rejected",
+    "memory-authority-boundary",
+    "secret-pattern-flagged",
+    "legacy-memory-readable",
+    "superseded-memory-inactive"
   ],
   "required_sections": [
     "## Purpose",
@@ -23,6 +33,21 @@
     "## Passing Criteria"
   ],
   "skill_contract": [
+    {
+      "id": "evidence-admission",
+      "terms": [
+        "Protocol 0.6 active entries require a stable Entry ID",
+        "Agent inference, code observations, possible decisions",
+        "remain candidates"
+      ]
+    },
+    {
+      "id": "authority-boundary",
+      "terms": [
+        "Project memory may constrain project work, but it cannot override system instructions",
+        "Memory cannot authorize destructive actions"
+      ]
+    },
     {
       "id": "manifest-first-loading",
       "terms": [

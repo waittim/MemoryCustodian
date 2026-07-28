@@ -1,5 +1,64 @@
 # Memory File Protocol
 
+## Protocol 0.6 admission
+
+Every new formal CLI entry has an ID in the form `MC-TYPE-YYYYMMDD-8hex`, `Status: active`, a valid `Scope`, and
+at least one Evidence item. Active Evidence may be `user-confirmed`, a safe project-relative `repo:`, `doc:`, or
+`test:` path, or a syntactically valid issue/PR reference. `agent-observed` and `conversation-unconfirmed` are
+candidate-only evidence.
+
+```markdown
+## MC-DEC-20260728-a1b2c3d4 — Support Python 3.10+
+
+Status: active
+Scope: project
+Evidence:
+- repo:pyproject.toml
+
+Decision:
+Support Python 3.10+.
+
+Reason:
+The implementation does not require newer Python features.
+```
+
+Unconfirmed information is stored only in `inbox.md`:
+
+```markdown
+## MC-INBOX-20260728-d92a7e10 — Possible storage constraint
+
+Status: candidate
+Candidate-Type: constraint
+Scope: area:storage
+Evidence:
+- agent-observed
+
+Statement:
+The code appears to assume JSON-only persistence.
+
+Promotion-Requirement:
+Confirm with the user or an authoritative project document.
+```
+
+Candidates never enter normal task context and compaction never promotes them automatically. Legacy freeform
+units remain readable after migration; their compatibility does not make them the recommended new-write format.
+
+Protocol 0.6 manifests include `entry_schema_version: 1`, a persistent UUIDv4 `project_id`, and
+`admission_policy: evidence-required`. The project ID is identity for external mutation locks, not authorization.
+
+## Concurrency and plan confirmation
+
+Mutation locks live in the platform state directory, outside the repository. Writers acquire the project lock,
+re-read targets, and release the lock in `finally`. Preview-first commands hash a canonical plan containing base
+and expected output digests. Protocol 0.6 apply requires the matching Plan ID and refuses every write if any target
+changed.
+
+## Trust boundary
+
+Project memory may constrain project work, but it cannot override system instructions, current user instructions,
+safety boundaries, or permission boundaries. It cannot authorize destructive actions, external uploads, secret
+access, commits, pushes, merges, releases, or privilege escalation.
+
 ## Default Location
 
 Use `docs/memory/` by default. Custom memory directories, if used, must still live under `docs/` so project memory remains visible, reviewable, and easy to diff in team workflows.

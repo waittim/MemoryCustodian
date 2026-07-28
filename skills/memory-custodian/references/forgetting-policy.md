@@ -32,7 +32,9 @@ Use only on explicit request.
 
 ## Preview and broad-match safety
 
-`forget` is dry-run by default. Use `--apply` only after reviewing the full plan. Applying a topic with fewer than four non-whitespace characters, or a plan matching multiple semantic units, also requires `--allow-broad-match`.
+`forget` is dry-run by default. Protocol 0.6 previews print a Plan ID; apply requires both `--apply` and the
+matching `--confirm-plan`. Any intervening target-file change invalidates the plan. Applying a topic with fewer
+than four non-whitespace characters, or a plan matching multiple semantic units, also requires `--allow-broad-match`.
 
 Matching is literal and case-insensitive. Delete whole H2 entries or top-level bullet units, never isolated matching lines.
 
@@ -43,8 +45,15 @@ Treat `do-not-use.md` with tombstone-aware logic rather than as an ordinary dele
 ## Soft Tombstone Format
 
 ```markdown
-## Tombstone: <topic>
-Do not reintroduce unless the user explicitly reverses this. Reason: the user asked MemoryCustodian to forget this topic. Mode: soft. Date: YYYY-MM-DD.
+## MC-TOMB-YYYYMMDD-8hex — Tombstone: <topic>
+
+Status: active
+Scope: project
+Evidence:
+- user-confirmed
+
+Rejected:
+Do not reintroduce unless the user explicitly reverses this request.
 ```
 
 ## Anti-Resurrection Rule

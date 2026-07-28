@@ -2,6 +2,11 @@
 
 Use this audit for production memory, before compaction, or when context loads but fails to help.
 
+Run `memory-custodian check --privacy` and `memory-custodian check --security` for shared-memory audits. These
+deterministic pattern scans are not complete secret or personal-data detection. Findings show file, line, type,
+and a redacted preview; they never auto-delete or auto-repair content. Continue to apply semantic privacy judgment
+before writing shared memory.
+
 ## Usefulness
 
 - Verify `brief.md` names the actual project purpose, system shape, and current direction.

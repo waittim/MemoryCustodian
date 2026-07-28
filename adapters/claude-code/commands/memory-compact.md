@@ -11,7 +11,7 @@ The report lists exact duplicate top-level bullet units, exact tombstone matches
 If the exact mechanical cleanup is appropriate, run:
 
 ```bash
-memory-custodian compact --apply
+memory-custodian compact --apply --confirm-plan <PLAN_ID>
 ```
 
 This command does not classify or promote candidates. It only removes the exact duplicate complete units and tombstone matches shown in the preview; reviewed candidates remain in the inbox until handled explicitly. Run `memory-custodian check` after semantic updates.
@@ -25,7 +25,7 @@ memory-custodian compact --target decisions.md
 First shorten decisions over 120 tokens, merge superseded entries, move subsystem knowledge into matched areas, and retain active invariants in normal loading paths. Then apply only after reviewing the plan:
 
 ```bash
-memory-custodian compact --target decisions.md --apply --archive-oldest
+memory-custodian compact --target decisions.md --apply --archive-oldest --confirm-plan <PLAN_ID>
 ```
 
 For semantic compaction, read `skills/memory-custodian/references/compaction-policy.md` and update memory files directly.

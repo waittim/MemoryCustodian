@@ -9,7 +9,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "cli"))
 
-from memory_custodian.main import main
+from tests.cli_test_support import main
 from memory_custodian.protocol import write_text as actual_write_text
 
 
