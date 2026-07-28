@@ -1,8 +1,7 @@
 # Archived Memory: decisions.md
 
-## 2026-07-28 - From decisions.md
-Reason:
-Active memory exceeded its context budget; older complete entries were moved to explicit-only archive.
+Complete historical entries moved from active memory after reviewed compaction.
+This file is explicit-only and is not part of normal task context.
 
 ## MC-DEC-20260704-b2b839a6 — Use project-memory card branding
 
@@ -51,10 +50,6 @@ Decision:
 Memory operations work offline by default; installation/update flows may use network distribution.
 Reason:
 Runtime memory stays local-first while updates can use marketplaces, package managers, or git.
-
-## 2026-07-28 - From decisions.md
-Reason:
-Version-specific protocol and bootstrap choices are historical after Protocol 0.6 adoption.
 
 ## MC-DEC-20260719-59d6d8ed — Keep Protocol 0.5 for v0.9
 

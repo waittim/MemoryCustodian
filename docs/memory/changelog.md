@@ -3,7 +3,7 @@
 Entries are newest first.
 
 ## 2026-07-28
-- Closed the v0.10 release audit gaps and added deterministic `NEAR LIMIT` maintenance previews.
+- Closed the v0.10 release audit gaps, added deterministic maintenance previews, and made archives idempotent.
 
 ## 2026-07-28
 - Compacted decisions.md: archived 4 old entries.

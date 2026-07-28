@@ -6,7 +6,6 @@ from pathlib import Path, PurePosixPath
 
 from .protocol import (
     DECISION_ENTRY_BUDGET,
-    appended_text,
     budget_for,
     budget_state,
     changelog_text,
@@ -315,6 +314,64 @@ def _archive_target_path(memory_dir: Path, target: str) -> Path:
     return memory_dir / "archive" / f"{stem}-{today()}.md"
 
 
+def _is_legacy_archive_wrapper(section: list[str], target: str) -> bool:
+    heading = section[0] if section else ""
+    return heading.endswith(f" - From {target}") and any(
+        line.strip() == "Reason:" for line in section[1:]
+    )
+
+
+def _merge_changelog_sections(sections: list[list[str]]) -> list[list[str]]:
+    merged: dict[str, list[str]] = {}
+    order: list[str] = []
+    for section in sections:
+        heading = section[0].strip()
+        if heading not in merged:
+            merged[heading] = list(section)
+            order.append(heading)
+            continue
+        body = list(section[1:])
+        while body and not body[0].strip():
+            body.pop(0)
+        if body:
+            if merged[heading] and merged[heading][-1].strip():
+                merged[heading].append("")
+            merged[heading].extend(body)
+
+    dated = all(
+        len(heading) == len("## 2000-01-01")
+        and heading.startswith("## ")
+        and heading[3:7].isdigit()
+        for heading in order
+    )
+    if dated:
+        order.sort(key=lambda heading: heading[3:], reverse=True)
+    return [merged[heading] for heading in order]
+
+
+def _render_archive_document(
+    target: str,
+    existing: str,
+    archived_sections: list[list[str]],
+) -> str:
+    _preamble, existing_sections = _split_h2_sections(existing)
+    retained = [
+        section
+        for section in existing_sections
+        if not _is_legacy_archive_wrapper(section, target)
+    ]
+    sections = [*archived_sections, *retained]
+    if target == "changelog.md":
+        sections = _merge_changelog_sections(sections)
+    preamble = [
+        f"# Archived Memory: {target}",
+        "",
+        "Complete historical entries moved from active memory after reviewed compaction.",
+        "This file is explicit-only and is not part of normal task context.",
+    ]
+    return _join_h2_sections(preamble, sections)
+
+
 def _archive_mutations(memory_dir: Path, target: str, archived_sections: list[list[str]]) -> list[TextMutation]:
     mutations: list[TextMutation] = []
     readme = memory_dir / "archive" / "README.md"
@@ -322,16 +379,8 @@ def _archive_mutations(memory_dir: Path, target: str, archived_sections: list[li
         mutations.append(TextMutation(readme, render_template("archive/README.md", today())))
 
     archive_path = _archive_target_path(memory_dir, target)
-    body = (
-        f"## {today()} - From {target}\n"
-        "Reason:\n"
-        "Active memory exceeded its context budget; older complete entries were moved to explicit-only archive.\n\n"
-        + "\n\n".join("\n".join(section).strip() for section in archived_sections)
-    )
-    if archive_path.exists():
-        archive_text = appended_text(archive_path.read_text(encoding="utf-8"), body)
-    else:
-        archive_text = f"# Archived Memory: {target}\n\n{body}\n"
+    existing = archive_path.read_text(encoding="utf-8") if archive_path.exists() else ""
+    archive_text = _render_archive_document(target, existing, archived_sections)
     mutations.append(TextMutation(archive_path, archive_text))
     return mutations
 

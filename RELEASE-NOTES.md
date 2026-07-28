@@ -18,6 +18,7 @@
 - Rebuild complete replacement, supersede, compaction, forgetting, and migration plans after acquiring the mutation lock; legacy destructive replacement now requires migration first.
 - Added real-process concurrent-add and stale-plan regression tests. These tests verify deterministic safety properties, not a live cross-agent benchmark or database transaction semantics.
 - Added deterministic `OK`, `NEAR LIMIT`, and `OVER BUDGET` states; writes at 80% or above emit a no-write maintenance preview instead of relying on an agent to calculate the threshold.
+- Made same-day archives idempotent: one canonical file note, no repeated batch wrappers, merged changelog date headings, and newest-first archived changelog order.
 
 ### Trust, privacy, and security boundaries
 

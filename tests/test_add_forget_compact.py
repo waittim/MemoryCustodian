@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "cli"))
 
 from tests.cli_test_support import main
+from memory_custodian.compact import _archive_mutations, _archive_target_path
 
 
 def curate_brief(memory: Path) -> None:
@@ -392,6 +393,47 @@ class AddForgetCompactTests(unittest.TestCase):
                 self.assertEqual(main(["check", "--project-root", tmp]), 0)
             active = (memory / "changelog.md").read_text(encoding="utf-8")
             self.assertNotIn("Compacted changelog.md", active)
+
+    def test_same_day_archive_is_idempotent_and_normalizes_legacy_wrappers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = Path(tmp) / "docs" / "memory"
+            archive = memory / "archive"
+            archive.mkdir(parents=True)
+            (archive / "README.md").write_text("# Memory Archive\n", encoding="utf-8")
+            archive_path = _archive_target_path(memory, "changelog.md")
+            archive_path.write_text(
+                "# Archived Memory: changelog.md\n\n"
+                "## 2026-07-28 - From changelog.md\n"
+                "Reason:\nActive memory exceeded its context budget.\n\n"
+                "## 2026-07-19\n- Release A.\n\n"
+                "## 2026-07-28 - From changelog.md\n"
+                "Reason:\nActive memory exceeded its context budget.\n\n"
+                "## 2026-07-19\n- Release B.\n\n"
+                "## 2026-07-18\n- Release C.\n",
+                encoding="utf-8",
+            )
+
+            first = _archive_mutations(
+                memory,
+                "changelog.md",
+                [["## 2026-07-20", "- Release D."]],
+            )[-1].text
+            archive_path.write_text(first, encoding="utf-8")
+            second = _archive_mutations(
+                memory,
+                "changelog.md",
+                [["## 2026-07-21", "- Release E."]],
+            )[-1].text
+
+            self.assertEqual(second.count("# Archived Memory: changelog.md"), 1)
+            self.assertEqual(second.count("Complete historical entries moved"), 1)
+            self.assertNotIn("From changelog.md", second)
+            self.assertEqual(second.count("## 2026-07-19"), 1)
+            self.assertIn("- Release A.", second)
+            self.assertIn("- Release B.", second)
+            self.assertLess(second.index("## 2026-07-21"), second.index("## 2026-07-20"))
+            self.assertLess(second.index("## 2026-07-20"), second.index("## 2026-07-19"))
+            self.assertLess(second.index("## 2026-07-19"), second.index("## 2026-07-18"))
 
     def test_add_rule_creates_optional_rule_file(self):
         with tempfile.TemporaryDirectory() as tmp:

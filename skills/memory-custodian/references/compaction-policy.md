@@ -57,5 +57,7 @@ At `NEAR LIMIT` (80%–100%) or `OVER BUDGET`, use `memory-custodian compact --t
 semantic changes. With `--target`, the CLI reports the current budget state and applies only conservative
 deterministic changes: exact duplicate complete top-level bullet-unit removal for simple bullet files, or older
 complete H2 entry archival for supported history-like files such as `decisions.md` and `changelog.md`.
+Archive files have one canonical file-level explanation. Repeated same-day compaction must not append duplicate
+batch wrappers; changelog entries with the same date are grouped under one heading and remain newest-first.
 
 Decision archival has an explicit semantic gate. First shorten long entries, consolidate, supersede, and relocate scoped knowledge; then review the dry run. The CLI blocks age-based archival while kept decisions remain over the per-entry guide. Use `--apply --archive-oldest` only when the proposed oldest entries contain no active invariant that would become unreachable. Changelog archival does not require this extra confirmation.
