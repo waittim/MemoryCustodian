@@ -80,7 +80,7 @@ Use `--agent codex`, `--agent claude`, `--agent gemini`, or `--agent all` to cre
 
 Initialization creates a `brief.md` scaffold. Curate its TODOs from authoritative project files before treating memory as ready; `status` and `check` report an uncurated brief.
 
-To repair an existing setup, use `memory-custodian init --repair`. Repair creates missing files and updates known generated metadata or managed bootstrap blocks without overwriting curated memory. Full replacement is deliberately separate and preview-first: inspect `memory-custodian init --replace-existing`, then add `--apply` only when the listed files should be replaced. The legacy memory-file `--force` behavior is not supported; `--force-agent` remains available for recognized managed bootstrap blocks.
+To repair an existing setup, use `memory-custodian init --repair`. Repair creates missing files and updates known generated metadata or managed bootstrap blocks without overwriting curated memory. Full replacement is deliberately separate and preview-first: inspect `memory-custodian init --replace-existing`, then add `--apply` only when the listed files should be replaced. Protocol 0.5 memory must be migrated before destructive replacement so preview and apply share a permanent project identity. The legacy memory-file `--force` behavior is not supported; `--force-agent` remains available for recognized managed bootstrap blocks.
 
 The default initializer creates the core protocol:
 
@@ -290,7 +290,8 @@ memory-custodian migrate
 Protocol 0.6 formal entries use stable IDs such as `MC-DEC-20260728-a1b2c3d4`. Active writes require Evidence;
 `agent-observed` and `conversation-unconfirmed` can create only candidates, which normal task context never loads.
 Legacy 0.5 prose and bullets remain readable after conservative migration and are reported as legacy coverage rather
-than silently rewritten.
+than silently rewritten. Migration assigns a random UUIDv4 once, persists it outside the repository between preview
+and apply, and also upgrades clearly structured decisions in enabled `areas/*.md` files.
 
 `forget`, `compact`, `migrate`, and destructive replacement are preview-first. The preview prints target files,
 base/output digests, operations, warnings, blockers, and a Plan ID. Protocol 0.6 apply requires
@@ -301,6 +302,8 @@ Inbox compaction does not infer decisions, constraints, preferences, or rejected
 
 Hard forget replaces matching topic-bearing soft tombstones with a generic redacted guard; purge removes them. Matches inside a plain body or preamble are never deleted wholesale: preview reports `Manual rewrite required`, and apply refuses until the text is semantically rewritten.
 Decision archival additionally requires semantic review and explicit confirmation with `compact --target decisions.md --apply --archive-oldest`.
+Plain `check` reports redacted privacy/security finding counts; use `check --privacy` or `check --security` to show
+redacted file and line locations.
 
 ## Design Principles
 

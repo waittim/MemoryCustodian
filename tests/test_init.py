@@ -1,6 +1,7 @@
 from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
+import re
 import sys
 import tempfile
 import unittest
@@ -215,6 +216,24 @@ class InitTests(unittest.TestCase):
                 0,
             )
             self.assertIn("TODO: Describe what this project does", brief.read_text(encoding="utf-8"))
+
+    def test_legacy_init_replace_requires_migration_first(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            manifest = Path(tmp) / "docs" / "memory" / "manifest.md"
+            legacy = re.sub(
+                r"(?m)^- project_id: .*\n|- entry_schema_version: .*\n|- admission_policy: .*\n",
+                "",
+                manifest.read_text(encoding="utf-8").replace(
+                    "- protocol_version: 0.6", "- protocol_version: 0.5"
+                ),
+            )
+            manifest.write_text(legacy, encoding="utf-8")
+            error = StringIO()
+            with redirect_stderr(error):
+                code = main(["init", "--replace-existing", "--project-root", tmp])
+            self.assertEqual(code, 2)
+            self.assertIn("must be migrated before --replace-existing", error.getvalue())
 
     def test_init_can_add_codex_snippet(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -5,12 +5,17 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 import re
-import uuid
 
 from .entries import ENTRY_ID_RE, split_h2
 from .locking import mutation_lock
 from .mutations import TextMutation, apply_mutations
-from .plans import MutationPlan, print_plan
+from .plans import (
+    MutationPlan,
+    digest_text,
+    discard_pending_seed,
+    pending_project_id,
+    print_plan,
+)
 from .protocol import (
     CURRENT_PROTOCOL_VERSION,
     changelog_text,
@@ -18,6 +23,7 @@ from .protocol import (
     manifest_with_current_protocol_metadata,
     manifest_with_current_task_routing,
     manifest_with_optional_index,
+    optional_index_paths,
     project_id_from_manifest,
     protocol_metadata,
     resolve_memory_dir,
@@ -25,21 +31,21 @@ from .protocol import (
 )
 
 
-def _stable_uuid4(seed: str) -> str:
-    raw = bytearray(hashlib.sha256(seed.encode("utf-8")).digest()[:16])
-    raw[6] = (raw[6] & 0x0F) | 0x40
-    raw[8] = (raw[8] & 0x3F) | 0x80
-    return str(uuid.UUID(bytes=bytes(raw)))
-
-
-def _legacy_id(project_id: str, relative: str, section: str, index: int) -> str:
+def _legacy_id(project_id: str, relative: str, section: str, index: int, code: str) -> str:
     digest = hashlib.sha256(f"{project_id}\0{relative}\0{index}\0{section}".encode("utf-8")).hexdigest()[:8]
     date_match = re.search(r"\b(\d{4})-(\d{2})-(\d{2})\b", section.splitlines()[0])
     stamp = "".join(date_match.groups()) if date_match else "19700101"
-    return f"MC-DEC-{stamp}-{digest}"
+    return f"MC-{code}-{stamp}-{digest}"
 
 
-def _migrate_decisions(text: str, project_id: str, relative: str = "decisions.md") -> tuple[str, int, int]:
+def _migrate_decisions(
+    text: str,
+    project_id: str,
+    relative: str = "decisions.md",
+    *,
+    scope: str = "project",
+    code: str = "DEC",
+) -> tuple[str, int, int]:
     preamble, sections = split_h2(text)
     changed = 0
     manual = 0
@@ -52,7 +58,7 @@ def _migrate_decisions(text: str, project_id: str, relative: str = "decisions.md
             manual += 1
             updated.append(section)
             continue
-        entry_id = _legacy_id(project_id, relative, section, index)
+        entry_id = _legacy_id(project_id, relative, section, index, code)
         lines = section.splitlines()
         title = re.sub(r"^##\s+(?:\d{4}-\d{2}-\d{2}\s+-\s+)?", "", lines[0]).strip()
         migrated = "\n".join(
@@ -60,7 +66,7 @@ def _migrate_decisions(text: str, project_id: str, relative: str = "decisions.md
                 f"## {entry_id} — {title}",
                 "",
                 "Status: active",
-                "Scope: project",
+                f"Scope: {scope}",
                 "Evidence:",
                 "- legacy-unverified",
                 "",
@@ -73,7 +79,7 @@ def _migrate_decisions(text: str, project_id: str, relative: str = "decisions.md
     return "\n\n".join(part for part in parts if part).rstrip() + "\n", changed, manual
 
 
-def _build_plan(project_root: Path, memory_dir: Path) -> tuple[MutationPlan, list[str]]:
+def _build_plan(project_root: Path, memory_dir: Path) -> tuple[MutationPlan, list[str], Path | None]:
     manifest_path = memory_dir / "manifest.md"
     original = manifest_path.read_text(encoding="utf-8")
     metadata = protocol_metadata(original)
@@ -86,7 +92,14 @@ def _build_plan(project_root: Path, memory_dir: Path) -> tuple[MutationPlan, lis
             raise ValueError(
                 f"Project protocol {version} is newer than this CLI supports ({CURRENT_PROTOCOL_VERSION})."
             )
-    project_id = metadata.get("project_id") or _stable_uuid4(original)
+    seed_path: Path | None = None
+    project_id = metadata.get("project_id")
+    if not project_id:
+        project_id, seed_path = pending_project_id(
+            "migrate",
+            project_root,
+            digest_text(original),
+        )
     # Supply the stable preview seed through metadata; the protocol helper preserves it.
     seeded = original
     if "project_id" not in metadata:
@@ -120,7 +133,7 @@ def _build_plan(project_root: Path, memory_dir: Path) -> tuple[MutationPlan, lis
         changes.append("manifest.md: add optional module index")
 
     decisions_path = memory_dir / "decisions.md"
-    manual = 0
+    manual_reports: list[str] = []
     migrated_count = 0
     if decisions_path.exists():
         decisions = decisions_path.read_text(encoding="utf-8")
@@ -128,6 +141,32 @@ def _build_plan(project_root: Path, memory_dir: Path) -> tuple[MutationPlan, lis
         if migrated != decisions:
             mutations.append(TextMutation(decisions_path, migrated))
             changes.append(f"decisions.md: add stable IDs and legacy-unverified Evidence to {migrated_count} structured entries")
+        if manual:
+            manual_reports.append(f"{manual} ambiguous decisions.md H2 section(s)")
+
+    for relative in sorted(
+        path for path in optional_index_paths(original)
+        if path.startswith("areas/") and path.endswith(".md")
+    ):
+        area_path = memory_dir.joinpath(*Path(relative).parts)
+        if not area_path.exists():
+            continue
+        slug = Path(relative).stem
+        area_original = area_path.read_text(encoding="utf-8")
+        area_updated, area_count, area_manual = _migrate_decisions(
+            area_original,
+            project_id,
+            relative,
+            scope=f"area:{slug}",
+            code="AREA",
+        )
+        if area_updated != area_original:
+            mutations.append(TextMutation(area_path, area_updated))
+            changes.append(
+                f"{relative}: add stable area IDs and legacy-unverified Evidence to {area_count} structured entries"
+            )
+        if area_manual:
+            manual_reports.append(f"{area_manual} ambiguous {relative} H2 section(s)")
 
     changelog = memory_dir / "changelog.md"
     if changelog.exists() and mutations:
@@ -141,8 +180,8 @@ def _build_plan(project_root: Path, memory_dir: Path) -> tuple[MutationPlan, lis
             )
         )
     warnings = []
-    if manual:
-        warnings.append(f"Manual migration recommended for {manual} ambiguous decisions.md H2 section(s).")
+    for report in manual_reports:
+        warnings.append(f"Manual migration recommended for {report}.")
     warnings.append("Legacy top-level bullets remain readable and are not mechanically rewritten.")
     return (
         MutationPlan(
@@ -154,6 +193,7 @@ def _build_plan(project_root: Path, memory_dir: Path) -> tuple[MutationPlan, lis
             tuple(warnings),
         ),
         changes,
+        seed_path,
     )
 
 
@@ -166,7 +206,7 @@ def run(args) -> int:
     if not manifest_path.exists():
         raise ValueError(f"manifest.md missing: {manifest_path}")
 
-    plan, changes = _build_plan(project_root, memory_dir)
+    plan, changes, seed_path = _build_plan(project_root, memory_dir)
     if not plan.mutations:
         print("MemoryCustodian migrate: no changes needed")
         return 0
@@ -184,13 +224,14 @@ def run(args) -> int:
         plan.project_id, project_root, "migrate",
         timeout=args.lock_timeout, break_stale=args.break_stale_lock,
     ):
-        current, _changes = _build_plan(project_root, memory_dir)
+        current, _changes, current_seed_path = _build_plan(project_root, memory_dir)
         if current.plan_id != args.confirm_plan:
             print_plan(current)
             raise ValueError(
                 f"Stale or mismatched plan: confirmed {args.confirm_plan}, current Plan ID is {current.plan_id}. No files written."
             )
         apply_mutations(list(current.mutations))
+    discard_pending_seed(current_seed_path or seed_path)
     print("Applied migration. Written files:")
     for mutation in current.mutations:
         print(f"- {mutation.path}")

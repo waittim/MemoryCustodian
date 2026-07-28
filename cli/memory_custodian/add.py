@@ -305,15 +305,21 @@ def run(args) -> int:
                 project_id, project_root, "add --supersedes",
                 timeout=args.lock_timeout, break_stale=args.break_stale_lock,
             ):
-                current_fingerprint = _supersede_fingerprint(args, project_id, memory_dir)
-                if current_fingerprint != fingerprint or plan.plan_id != args.confirm_plan:
-                    raise ValueError(
-                        f"Stale or mismatched plan: confirmed {args.confirm_plan}, "
-                        f"current Plan ID is {plan.plan_id}. No files written."
-                    )
                 current_mutations, target, new_id = _build_mutations(
                     args, project_root, memory_dir, True, fixed_id=new_id
                 )
+                current_plan = MutationPlan(
+                    "add --supersedes",
+                    {"type": args.type, "supersedes": args.supersedes, "message": args.message},
+                    project_id,
+                    CURRENT_PROTOCOL_VERSION,
+                    tuple(current_mutations),
+                )
+                if current_plan.plan_id != args.confirm_plan:
+                    raise ValueError(
+                        f"Stale or mismatched plan: confirmed {args.confirm_plan}, "
+                        f"current Plan ID is {current_plan.plan_id}. No files written."
+                    )
                 apply_mutations(current_mutations)
             try:
                 seed_path.unlink()

@@ -24,6 +24,8 @@ from memory_custodian.plans import MutationPlan
 from memory_custodian.mutations import TextMutation
 from memory_custodian.protocol import count_inbox_items
 from memory_custodian.scanning import scan_text
+from memory_custodian import compact as compact_module
+from memory_custodian import forget as forget_module
 
 
 def preview_id(argv: list[str]) -> str:
@@ -105,6 +107,29 @@ class Protocol06Tests(unittest.TestCase):
             self.assertIn("must be stored in inbox.md", text)
             self.assertIn("duplicate Entry ID", text)
 
+    def test_check_rejects_active_inbox_and_broken_relations(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            inbox = Path(tmp) / "docs" / "memory" / "inbox.md"
+            inbox.write_text(
+                "# Memory Inbox\n\n"
+                "## MC-INBOX-20260728-a1b2c3d4 — Invalid active inbox entry\n\n"
+                "Status: active\n"
+                "Scope: project\n"
+                "Evidence:\n"
+                "- user-confirmed\n\n"
+                "Supersedes: MC-CON-20260728-ffffffff\n\n"
+                "Statement:\nInvalid.\n",
+                encoding="utf-8",
+            )
+            output = StringIO()
+            with redirect_stdout(output):
+                code = main(["check", "--project-root", tmp])
+            text = output.getvalue()
+            self.assertEqual(code, 1)
+            self.assertIn("inbox entries must be candidate or promoted", text)
+            self.assertIn("references missing entry", text)
+
     def test_repair_preserves_project_id(self):
         with tempfile.TemporaryDirectory() as tmp:
             self.assertEqual(main(["init", "--project-root", tmp]), 0)
@@ -185,6 +210,40 @@ class Protocol06Tests(unittest.TestCase):
             self.assertEqual(code, 2)
             self.assertEqual((memory / "constraints.md").read_text(encoding="utf-8"), before)
 
+    def test_compact_and_forget_rebuild_complete_plan_under_lock(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            memory = Path(tmp) / "docs" / "memory"
+            inbox = memory / "inbox.md"
+            inbox.write_text("# Memory Inbox\n\n- Duplicate\n- Duplicate\n", encoding="utf-8")
+            compact_args = ["compact", "--project-root", tmp]
+            compact_plan = preview_id(compact_args)
+            with patch(
+                "memory_custodian.compact._inbox_cleanup_mutations",
+                wraps=compact_module._inbox_cleanup_mutations,
+            ) as rebuilt:
+                self.assertEqual(
+                    main([*compact_args, "--apply", "--confirm-plan", compact_plan]),
+                    0,
+                )
+            self.assertEqual(rebuilt.call_count, 2)
+
+            (memory / "constraints.md").write_text(
+                "# Constraints\n\n- Remove Alpha.\n",
+                encoding="utf-8",
+            )
+            forget_args = ["forget", "Alpha", "--mode", "soft", "--project-root", tmp]
+            forget_plan = preview_id(forget_args)
+            with patch(
+                "memory_custodian.forget._build_forget_mutation_plan",
+                wraps=forget_module._build_forget_mutation_plan,
+            ) as rebuilt:
+                self.assertEqual(
+                    main([*forget_args, "--apply", "--confirm-plan", forget_plan]),
+                    0,
+                )
+            self.assertEqual(rebuilt.call_count, 2)
+
     def test_lock_acquire_release_timeout_and_stale(self):
         with tempfile.TemporaryDirectory() as state, patch.dict(os.environ, {"XDG_STATE_HOME": state}):
             project_id = str(uuid.uuid4())
@@ -225,6 +284,14 @@ class Protocol06Tests(unittest.TestCase):
                 "Local path: /Users/alice/private/project\n",
                 encoding="utf-8",
             )
+            normal = StringIO()
+            with redirect_stdout(normal):
+                normal_code = main(["check", "--project-root", tmp])
+            self.assertEqual(normal_code, 1)
+            self.assertIn("run `memory-custodian check --security`", normal.getvalue())
+            self.assertIn("run `memory-custodian check --privacy`", normal.getvalue())
+            self.assertNotIn("brief.md:6", normal.getvalue())
+
             output = StringIO()
             with redirect_stdout(output):
                 code = main(["check", "--security", "--privacy", "--project-root", tmp])
@@ -234,6 +301,80 @@ class Protocol06Tests(unittest.TestCase):
             self.assertIn("Security findings:", text)
             self.assertIn("Privacy findings:", text)
             self.assertNotIn("abcdefghijklmnopqrstuvwxyz", text)
+
+    def test_identical_legacy_projects_receive_distinct_random_project_ids(self):
+        legacy_manifest = (
+            "# Memory Manifest\n\n"
+            "## Always load\n"
+            "- brief.md\n\n"
+            "## Load by task\n\n"
+            "### Planning / architecture / refactoring\n"
+            "Load:\n"
+            "- decisions.md\n"
+            "- constraints.md\n"
+            "- do-not-use.md\n\n"
+            "## Explicit only\n"
+            "- archive/\n\n"
+            "## Optional rules\n"
+            "- rules/\n\n"
+            "## Optional profiles\n"
+            "- profiles/\n"
+        )
+        with tempfile.TemporaryDirectory() as parent, tempfile.TemporaryDirectory() as state:
+            roots = [Path(parent) / "one", Path(parent) / "two"]
+            for root in roots:
+                memory = root / "docs" / "memory"
+                memory.mkdir(parents=True)
+                (memory / "manifest.md").write_text(legacy_manifest, encoding="utf-8")
+
+            with patch.dict(os.environ, {"XDG_STATE_HOME": state}):
+                for root in roots:
+                    args = ["migrate", "--project-root", str(root)]
+                    plan_id = preview_id(args)
+                    self.assertEqual(
+                        main([*args, "--apply", "--confirm-plan", plan_id]),
+                        0,
+                    )
+
+            project_ids = []
+            for root in roots:
+                text = (root / "docs" / "memory" / "manifest.md").read_text(encoding="utf-8")
+                project_ids.append(re.search(r"project_id: ([0-9a-f-]+)", text).group(1))
+            self.assertNotEqual(project_ids[0], project_ids[1])
+            self.assertTrue(all(uuid.UUID(value).version == 4 for value in project_ids))
+
+    def test_migrate_converts_clear_area_decisions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            self.assertEqual(
+                main([
+                    "add", "Temporary area setup.", "--type", "area", "--name", "backend",
+                    "--evidence", "user-confirmed", "--project-root", tmp,
+                ]),
+                0,
+            )
+            memory = Path(tmp) / "docs" / "memory"
+            manifest = memory / "manifest.md"
+            manifest.write_text(
+                manifest.read_text(encoding="utf-8").replace(
+                    "- protocol_version: 0.6", "- protocol_version: 0.5"
+                ),
+                encoding="utf-8",
+            )
+            area = memory / "areas" / "backend.md"
+            area.write_text(
+                "# Area: backend\n\n"
+                "## 2026-07-28 - Keep backend offline\n"
+                "Decision:\nUse only local storage.\n",
+                encoding="utf-8",
+            )
+            args = ["migrate", "--project-root", tmp]
+            plan_id = preview_id(args)
+            self.assertEqual(main([*args, "--apply", "--confirm-plan", plan_id]), 0)
+            migrated = area.read_text(encoding="utf-8")
+            self.assertRegex(migrated, r"MC-AREA-20260728-[0-9a-f]{8}")
+            self.assertIn("Scope: area:backend", migrated)
+            self.assertIn("- legacy-unverified", migrated)
 
     def test_real_concurrent_add_preserves_both_entries(self):
         with tempfile.TemporaryDirectory() as tmp:

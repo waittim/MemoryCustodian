@@ -163,6 +163,88 @@ def _summary(unit: MarkdownUnit, redact: bool, number: int) -> str:
     return first[:100]
 
 
+def _build_forget_mutation_plan(
+    args,
+    memory_dir: Path,
+    project_id: str | None,
+    protocol_version: str,
+) -> MutationPlan:
+    topic = args.topic.strip()
+    targets = _target_files(memory_dir, args.mode)
+    plans: list[FilePlan] = []
+    for path in targets:
+        original = read_text(path)
+        updated, matches, blockers = _remove_units(original, topic)
+        plans.append(FilePlan(path, updated, matches, blockers))
+    matched_plans = [plan for plan in plans if plan.matches]
+
+    tombstone_path = memory_dir / "do-not-use.md"
+    tombstone_updated: str | None = None
+    tombstone_blockers: tuple[MarkdownUnit, ...] = ()
+    if args.mode in {"hard", "purge"}:
+        candidate, _matches, tombstone_blockers = _update_existing_tombstones(
+            read_text(tombstone_path),
+            topic,
+            args.mode,
+            project_id,
+        )
+        if candidate != ensure_newline(read_text(tombstone_path)):
+            tombstone_updated = candidate
+    tombstone = _tombstone(topic, args.mode, project_id)
+    if args.mode == "soft" and tombstone:
+        tombstone_updated = _prepend_entry(read_text(tombstone_path), tombstone)
+
+    changelog_path = memory_dir / "changelog.md"
+    changelog_plan = next((plan for plan in plans if plan.path == changelog_path), None)
+    changelog_base = (
+        changelog_plan.updated
+        if changelog_plan
+        else (read_text(changelog_path) if changelog_path.exists() else "")
+    )
+    changelog_message = (
+        f"Forgot topic '{topic}' with mode soft."
+        if args.mode == "soft"
+        else f"Completed {args.mode} forget operation."
+    )
+    changelog_updated = (
+        _append_changelog_entry(changelog_base, changelog_message)
+        if changelog_path.exists()
+        else None
+    )
+    writes: list[tuple[Path, str]] = [
+        (plan.path, plan.updated)
+        for plan in matched_plans
+        if plan.path != changelog_path
+    ]
+    if tombstone_updated is not None:
+        writes.append((tombstone_path, tombstone_updated))
+    if changelog_updated is not None:
+        writes.append((changelog_path, changelog_updated))
+    blockers = [
+        f"{plan.path}: {unit.kind} contains non-removable matching content"
+        for plan in plans
+        for unit in plan.blockers
+    ]
+    blockers.extend(
+        f"{tombstone_path}: {unit.kind} contains non-removable matching content"
+        for unit in tombstone_blockers
+    )
+    return MutationPlan(
+        "forget",
+        {"topic": topic, "mode": args.mode, "allow_broad_match": args.allow_broad_match},
+        project_id or "legacy-protocol-0.5",
+        protocol_version,
+        tuple(
+            TextMutation(path, ensure_newline(updated))
+            for path, updated in writes
+        ),
+        ("Git history, backups, caches, and external copies are out of scope.",)
+        if args.mode == "purge"
+        else (),
+        tuple(blockers),
+    )
+
+
 def run(args) -> int:
     topic = args.topic.strip()
     if not topic:
@@ -255,16 +337,13 @@ def run(args) -> int:
         writes.append((tombstone_path, tombstone_updated))
     if changelog_updated is not None:
         writes.append((changelog_path, changelog_updated))
-    mutations = [TextMutation(path, ensure_newline(updated)) for path, updated in writes]
-    mutation_plan = MutationPlan(
-        "forget",
-        {"topic": topic, "mode": args.mode, "allow_broad_match": args.allow_broad_match},
-        project_id or "legacy-protocol-0.5",
+    mutation_plan = _build_forget_mutation_plan(
+        args,
+        memory_dir,
+        project_id,
         metadata.get("protocol_version", "0.5"),
-        tuple(mutations),
-        ("Git history, backups, caches, and external copies are out of scope.",) if args.mode == "purge" else (),
-        tuple(f"{plan.path}: non-removable content" for plan in blocker_plans),
     )
+    mutations = list(mutation_plan.mutations)
     print_plan(mutation_plan)
     if not args.apply:
         if manual_blockers:
@@ -286,13 +365,19 @@ def run(args) -> int:
             project_id, project_root, "forget",
             timeout=args.lock_timeout, break_stale=args.break_stale_lock,
         ):
-            current_id = mutation_plan.plan_id
-            if current_id != args.confirm_plan:
-                print_plan(mutation_plan)
+            current_plan = _build_forget_mutation_plan(
+                args,
+                memory_dir,
+                project_id,
+                metadata.get("protocol_version", "0.5"),
+            )
+            if current_plan.plan_id != args.confirm_plan:
+                print_plan(current_plan)
                 raise ValueError(
-                    f"Stale or mismatched plan: confirmed {args.confirm_plan}, current Plan ID is {current_id}. No files written."
+                    f"Stale or mismatched plan: confirmed {args.confirm_plan}, "
+                    f"current Plan ID is {current_plan.plan_id}. No files written."
                 )
-            completed_paths = apply_mutations(mutations)
+            completed_paths = apply_mutations(list(current_plan.mutations))
     else:
         print("Migration available: Protocol 0.5 apply keeps legacy confirmation behavior.")
         completed_paths = apply_mutations(mutations)

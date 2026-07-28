@@ -3,6 +3,9 @@
 Entries are newest first.
 
 ## 2026-07-28
+- Closed the v0.10 release audit gaps for random migration identity, lock-inner plan rebuilding, area migration, relation validation, scanner detail flags, CI version checks, and targeted regressions.
+
+## 2026-07-28
 - Compacted decisions.md: archived 4 old entries.
 
 ## 2026-07-28
@@ -53,10 +56,3 @@ Entries are newest first.
 - Added Codex plugin support files: repo-local marketplace, plugin asset, CLI wrapper, and plugin packaging tests.
 - Compressed dogfood memory files and minimal templates to keep high-frequency context short.
 - Added the memory-update reminder to generated agent bootstrap snippets.
-
-## 2026-07-03
-- Added v0.4 protocol metadata, migration checks, release notes, and plugin manifests.
-- Clarified that offline constraints apply to memory operations, not skill/plugin update distribution.
-- Established memory changelog entries as newest-first.
-- Added manifest optional module indexing for enabled rules, profiles, and areas.
-- Enforced project memory directories under `docs/`, with `docs/memory/` as the default.

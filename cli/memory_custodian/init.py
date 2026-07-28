@@ -141,6 +141,61 @@ def _looks_generated(name: str, text: str, rendered: str) -> bool:
     return normalized == known_empty.get(name)
 
 
+def _replacement_state(
+    args,
+    project_root: Path,
+    memory_dir: Path,
+    memory_label: str,
+    project_id: str,
+    current_date: str,
+) -> tuple[list[str], list[TextMutation], list[str]]:
+    results: list[str] = []
+    mutations: list[TextMutation] = []
+    replacement_warnings: list[str] = []
+    files = list(CORE_FILES)
+    if args.extended:
+        files.extend(OPTIONAL_FILES)
+    for name in files:
+        path = memory_dir / name
+        rendered = render_template(
+            name,
+            current_date,
+            memory_label,
+            project_id=project_id if name == "manifest.md" else None,
+        )
+        if name == "manifest.md":
+            rendered, _indexed = _index_existing_optional(memory_dir, rendered)
+        existing = path.read_text(encoding="utf-8") if path.exists() else ""
+        if path.exists() and existing == rendered:
+            result = "kept (already current)"
+        else:
+            result = "replace planned" if path.exists() else "create planned"
+            mutations.append(TextMutation(path, rendered))
+            if path.exists() and not _looks_generated(name, existing, rendered):
+                replacement_warnings.append(name)
+        results.append(f"{name}: {result}")
+
+    agent = args.agent
+    selected = (
+        ("AGENTS.md", args.with_codex or agent in {"codex", "all"}),
+        ("CLAUDE.md", args.with_claude or agent in {"claude", "all"}),
+        ("GEMINI.md", args.with_gemini or agent in {"gemini", "all"}),
+    )
+    for name, enabled in selected:
+        if not enabled:
+            continue
+        path = project_root / name
+        result, updated = _snippet_update(
+            path,
+            _agent_snippet(memory_label),
+            args.force_agent,
+        )
+        if updated is not None:
+            mutations.append(TextMutation(path, updated))
+        results.append(f"{name}: {result}")
+    return results, mutations, replacement_warnings
+
+
 def run(args) -> int:
     if args.force:
         raise ValueError(
@@ -158,14 +213,85 @@ def run(args) -> int:
     current_date = today()
     existing_manifest = memory_dir / "manifest.md"
     existing_project_id = None
+    existing_protocol_version = None
     if existing_manifest.exists():
+        existing_metadata = protocol_metadata(existing_manifest.read_text(encoding="utf-8"))
+        existing_protocol_version = existing_metadata.get("protocol_version")
         existing_project_id = project_id_from_manifest(
             existing_manifest.read_text(encoding="utf-8"), required=False
         )
+    if args.replace_existing:
+        if existing_protocol_version != CURRENT_PROTOCOL_VERSION or existing_project_id is None:
+            raise ValueError(
+                "Legacy memory must be migrated before --replace-existing; "
+                "run `memory-custodian migrate` to establish a stable Protocol 0.6 project_id first."
+            )
+        results, mutations, replacement_warnings = _replacement_state(
+            args,
+            project_root,
+            memory_dir,
+            memory_label,
+            existing_project_id,
+            current_date,
+        )
+        print("MemoryCustodian replacement plan:")
+        for item in results:
+            print(f"- {item}")
+        if replacement_warnings:
+            print("Warning: these files contain non-template content and will be overwritten:")
+            for name in replacement_warnings:
+                print(f"- {name}")
+        plan = MutationPlan(
+            "init --replace-existing",
+            {"extended": args.extended, "memory_dir": str(memory_dir)},
+            existing_project_id,
+            CURRENT_PROTOCOL_VERSION,
+            tuple(mutations),
+            tuple(f"overwrite non-template content: {name}" for name in replacement_warnings),
+        )
+        print_plan(plan)
+        if not args.apply:
+            print("Dry run only. Re-run with --replace-existing --apply --confirm-plan <PLAN_ID>.")
+            return 0
+        if not args.confirm_plan:
+            raise ValueError("Protocol 0.6 replacement apply requires --confirm-plan <PLAN_ID>.")
+        with mutation_lock(
+            existing_project_id,
+            project_root,
+            "init --replace-existing",
+            timeout=args.lock_timeout,
+            break_stale=args.break_stale_lock,
+        ):
+            current_results, current_mutations, current_warnings = _replacement_state(
+                args,
+                project_root,
+                memory_dir,
+                memory_label,
+                existing_project_id,
+                current_date,
+            )
+            current_plan = MutationPlan(
+                "init --replace-existing",
+                {"extended": args.extended, "memory_dir": str(memory_dir)},
+                existing_project_id,
+                CURRENT_PROTOCOL_VERSION,
+                tuple(current_mutations),
+                tuple(f"overwrite non-template content: {name}" for name in current_warnings),
+            )
+            if current_plan.plan_id != args.confirm_plan:
+                print_plan(current_plan)
+                raise ValueError(
+                    f"Stale or mismatched plan: confirmed {args.confirm_plan}, "
+                    f"current Plan ID is {current_plan.plan_id}. No files written."
+                )
+            apply_mutations(current_mutations)
+        print(f"Initialized MemoryCustodian at {memory_dir}")
+        for item in current_results:
+            print(f"- {item}")
+        return 0
     init_project_id = existing_project_id or str(uuid.uuid4())
     results: list[str] = []
     mutations: list[TextMutation] = []
-    replacement_warnings: list[str] = []
     files = list(CORE_FILES)
     if args.extended:
         files.extend(OPTIONAL_FILES)
@@ -178,17 +304,6 @@ def run(args) -> int:
         if not path.exists():
             result = "written"
             mutations.append(TextMutation(path, rendered))
-        elif args.replace_existing:
-            existing = path.read_text(encoding="utf-8")
-            if name == "manifest.md":
-                rendered, _indexed = _index_existing_optional(memory_dir, rendered)
-            if existing == rendered:
-                result = "kept (already current)"
-            else:
-                result = "replace planned"
-                mutations.append(TextMutation(path, rendered))
-                if not _looks_generated(name, existing, rendered):
-                    replacement_warnings.append(name)
         elif args.repair and name == "manifest.md":
             repaired, changed = _repair_manifest(path.read_text(encoding="utf-8"))
             repaired, indexed = _index_existing_optional(memory_dir, repaired)
@@ -223,43 +338,11 @@ def run(args) -> int:
             mutations.append(TextMutation(path, updated))
         results.append(f"GEMINI.md: {result}")
 
-    if args.replace_existing:
-        print("MemoryCustodian replacement plan:")
-        for item in results:
-            print(f"- {item}")
-        if replacement_warnings:
-            print("Warning: these files contain non-template content and will be overwritten:")
-            for name in replacement_warnings:
-                print(f"- {name}")
-        plan = MutationPlan(
-            "init --replace-existing",
-            {"extended": args.extended, "memory_dir": str(memory_dir)},
-            init_project_id,
-            "0.6",
-            tuple(mutations),
-            tuple(f"overwrite non-template content: {name}" for name in replacement_warnings),
-        )
-        print_plan(plan)
-        if not args.apply:
-            print("Dry run only. Re-run with --replace-existing --apply --confirm-plan <PLAN_ID>.")
-            return 0
-        if not args.confirm_plan:
-            raise ValueError("Protocol 0.6 replacement apply requires --confirm-plan <PLAN_ID>.")
-        if args.confirm_plan != plan.plan_id:
-            raise ValueError(
-                f"Stale or mismatched plan: confirmed {args.confirm_plan}, current Plan ID is {plan.plan_id}. No files written."
-            )
-
     if mutations:
         with mutation_lock(
             init_project_id, project_root, "init",
             timeout=args.lock_timeout, break_stale=args.break_stale_lock,
         ):
-            if args.replace_existing and args.confirm_plan != plan.plan_id:
-                print_plan(plan)
-                raise ValueError(
-                    f"Stale plan after acquiring the mutation lock; current Plan ID is {plan.plan_id}. No files written."
-                )
             apply_mutations(mutations)
 
     action = "Repaired" if args.repair else "Initialized"

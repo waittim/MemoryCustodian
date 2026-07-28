@@ -14,12 +14,15 @@
 
 - Added project mutation locks in platform state storage outside repositories, including timeout and guarded stale-lock recovery.
 - Added canonical Plan IDs with base/output SHA-256 digests to preview-first operations; Protocol 0.6 apply rejects missing, mismatched, or stale confirmation without writing.
+- Generate migration project identity from a random UUIDv4 persisted in platform state for the preview/apply pair, preventing identical legacy projects from sharing locks or future overlays.
+- Rebuild complete replacement, supersede, compaction, forgetting, and migration plans after acquiring the mutation lock; legacy destructive replacement now requires migration first.
 - Added real-process concurrent-add and stale-plan regression tests. These tests verify deterministic safety properties, not a live cross-agent benchmark or database transaction semantics.
 
 ### Trust, privacy, and security boundaries
 
 - Documented that memory cannot elevate authority or override system, user, safety, or permission boundaries.
 - Added redacted deterministic checks for common credential-like patterns, machine paths, personal email, and phone-number shapes. These checks are not complete secret detection and never auto-delete content.
+- Keep ordinary scan output summary-only while `--security` and `--privacy` reveal redacted locations; validate inbox statuses and promotion/supersede relation integrity.
 
 ### Demo and submission materials
 
@@ -35,6 +38,7 @@
 ### Compatibility and repository hygiene
 
 - Restored Python 3.10+ support with CI coverage on Python 3.10 and 3.13.
+- Run CI on every pushed branch and include version-drift verification plus explicit privacy/security checks.
 - Removed generated `egg-info` metadata from source control and expanded build-artifact ignores.
 - Removed an obsolete demo preparation script that recursively deleted a user-provided target path.
 

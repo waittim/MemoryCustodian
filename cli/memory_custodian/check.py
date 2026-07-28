@@ -111,6 +111,7 @@ def run(args) -> int:
     issues: list[str] = []
     warnings: list[str] = []
     detailed_findings = []
+    structured_by_id: dict[str, list] = {}
 
     if not memory_dir.exists():
         print(f"Memory directory missing: {memory_dir}")
@@ -153,14 +154,26 @@ def run(args) -> int:
         relative = path.relative_to(memory_dir).as_posix()
         text = _read(path)
         detailed_findings.extend(scan_text(path, text))
+        parsed_entries = parse_structured_entries(path, text)
+        for entry in parsed_entries:
+            structured_by_id.setdefault(entry.entry_id.casefold(), []).append(entry)
         if relative.startswith("archive/"):
             continue
-        for entry in parse_structured_entries(path, text):
+        for entry in parsed_entries:
             expected_inbox = relative == "inbox.md"
             if entry.status not in {"active", "candidate", "superseded", "promoted"}:
                 issues.append(f"{relative}: {entry.entry_id} has invalid Status {entry.status!r}")
             if entry.status == "candidate" and not expected_inbox:
                 issues.append(f"{relative}: candidate {entry.entry_id} must be stored in inbox.md")
+            if expected_inbox and entry.status not in {"candidate", "promoted"}:
+                issues.append(
+                    f"{relative}: {entry.entry_id} has Status {entry.status!r}; "
+                    "inbox entries must be candidate or promoted"
+                )
+            if entry.status == "promoted" and not entry.fields.get("Promoted-To"):
+                issues.append(f"{relative}: promoted entry {entry.entry_id} has no Promoted-To")
+            if entry.status == "superseded" and not entry.fields.get("Superseded-By"):
+                issues.append(f"{relative}: superseded entry {entry.entry_id} has no Superseded-By")
             if entry.status == "active":
                 if not entry.evidence:
                     issues.append(f"{relative}: active entry {entry.entry_id} has no Evidence")
@@ -233,7 +246,8 @@ def run(args) -> int:
     preferences = memory_dir / "preferences.md"
     if preferences.exists() and LOCAL_PATH_RE.search(_read(preferences)):
         warnings.append(
-            "preferences.md: contains a machine-specific absolute path; confirm it belongs in shared project memory"
+            "preferences.md: contains a machine-specific absolute path; "
+            "run `memory-custodian check --privacy` for redacted locations"
         )
 
     indexed_optional_paths = optional_index_paths(manifest)
@@ -261,14 +275,64 @@ def run(args) -> int:
         if len(paths) > 1:
             issues.append(f"duplicate Entry ID {value.upper()} in: {', '.join(paths)}")
 
+    for entries in structured_by_id.values():
+        if len(entries) != 1:
+            continue
+        entry = entries[0]
+        relative = entry.path.relative_to(memory_dir).as_posix()
+        relations = (
+            ("Promoted-To", entry.fields.get("Promoted-To")),
+            ("Superseded-By", entry.fields.get("Superseded-By")),
+            ("Supersedes", entry.fields.get("Supersedes")),
+        )
+        for label, target_id in relations:
+            if target_id and target_id.casefold() not in structured_by_id:
+                issues.append(
+                    f"{relative}: {entry.entry_id} {label} references missing entry {target_id}"
+                )
+        superseded_by = entry.fields.get("Superseded-By")
+        if superseded_by and len(structured_by_id.get(superseded_by.casefold(), [])) == 1:
+            replacement = structured_by_id[superseded_by.casefold()][0]
+            if replacement.fields.get("Supersedes", "").casefold() != entry.entry_id.casefold():
+                issues.append(
+                    f"{relative}: {entry.entry_id} Superseded-By relation is not reciprocal"
+                )
+        supersedes = entry.fields.get("Supersedes")
+        if supersedes and len(structured_by_id.get(supersedes.casefold(), [])) == 1:
+            previous = structured_by_id[supersedes.casefold()][0]
+            if previous.fields.get("Superseded-By", "").casefold() != entry.entry_id.casefold():
+                issues.append(
+                    f"{relative}: {entry.entry_id} Supersedes relation is not reciprocal"
+                )
+
     security = [item for item in detailed_findings if item.category == "security"]
     privacy = [item for item in detailed_findings if item.category == "privacy"]
-    for finding in security:
-        message = f"{finding.path.relative_to(memory_dir)}:{finding.line}: {finding.kind}: {finding.preview}"
-        (issues if finding.severity == "ERROR" else warnings).append(message)
-    for finding in privacy:
+    security_errors = [item for item in security if item.severity == "ERROR"]
+    security_warnings = [item for item in security if item.severity != "ERROR"]
+    if getattr(args, "security", False):
+        for finding in security:
+            message = f"{finding.path.relative_to(memory_dir)}:{finding.line}: {finding.kind}: {finding.preview}"
+            (issues if finding.severity == "ERROR" else warnings).append(message)
+    else:
+        if security_errors:
+            issues.append(
+                f"security scan: {len(security_errors)} error finding(s); "
+                "run `memory-custodian check --security` for redacted locations"
+            )
+        if security_warnings:
+            warnings.append(
+                f"security scan: {len(security_warnings)} warning finding(s); "
+                "run `memory-custodian check --security` for redacted locations"
+            )
+    if getattr(args, "privacy", False):
+        for finding in privacy:
+            warnings.append(
+                f"{finding.path.relative_to(memory_dir)}:{finding.line}: {finding.kind}: {finding.preview}"
+            )
+    elif privacy:
         warnings.append(
-            f"{finding.path.relative_to(memory_dir)}:{finding.line}: {finding.kind}: {finding.preview}"
+            f"privacy scan: {len(privacy)} finding(s); "
+            "run `memory-custodian check --privacy` for redacted locations"
         )
 
     if issues:

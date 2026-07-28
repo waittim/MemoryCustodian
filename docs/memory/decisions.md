@@ -10,10 +10,11 @@ Evidence:
 - user-confirmed
 
 Decision:
-Adopt Protocol 0.6 evidence admission and mutation safety.
+Use Protocol 0.6 evidence admission. Persist a random legacy-migration UUIDv4 outside the repository across
+preview/apply, and rebuild every preview-first plan under lock.
 
 Reason:
-Formal memory needs auditable provenance, stable identity, and stale-write rejection.
+This ensures auditable provenance, distinct identity, and stale-write rejection from current inputs.
 
 ## MC-DEC-20260721-3578b077 — Target Python 3.10+ minimum version
 
