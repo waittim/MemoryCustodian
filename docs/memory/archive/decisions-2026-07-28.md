@@ -51,3 +51,43 @@ Decision:
 Memory operations work offline by default; installation/update flows may use network distribution.
 Reason:
 Runtime memory stays local-first while updates can use marketplaces, package managers, or git.
+
+## 2026-07-28 - From decisions.md
+Reason:
+Version-specific protocol and bootstrap choices are historical after Protocol 0.6 adoption.
+
+## MC-DEC-20260719-59d6d8ed — Keep Protocol 0.5 for v0.9
+
+Status: active
+Scope: project
+Evidence:
+- legacy-unverified
+
+Decision:
+Keep the memory protocol at 0.5 while package 0.9 removes CLI semantic guessing and hardens mutation safety.
+Reason:
+Manifest schema and routing syntax remain compatible with existing 0.5 projects.
+
+## MC-DEC-20260718-491db2c3 — Protocol 0.5
+
+Status: active
+Scope: project
+Evidence:
+- legacy-unverified
+
+Decision:
+Keep for v0.8.
+Reason:
+Existing manifests support strict routing.
+
+## MC-DEC-20260704-a4ce76c2 — Add lightweight plugin bootstrap and deterministic packaging
+
+Status: active
+Scope: project
+Evidence:
+- legacy-unverified
+
+Decision:
+Add a thin session-start bootstrap and deterministic Codex archive packaging while keeping memory protocol 0.4.
+Reason:
+Startup should nudge manifest-first loading without injecting full skill text or memory; package versions may advance separately.

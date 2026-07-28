@@ -11,7 +11,7 @@ Evidence:
 
 Decision:
 Use Protocol 0.6 evidence admission. Persist a random legacy-migration UUIDv4 outside the repository across
-preview/apply, and rebuild every preview-first plan under lock.
+preview/apply, rebuild every preview-first plan under lock, and report deterministic budget states at the 80% threshold.
 
 Reason:
 This ensures auditable provenance, distinct identity, and stale-write rejection from current inputs.
@@ -27,30 +27,6 @@ Decision:
 Support Python 3.10+ and test the main suite on both Python 3.10 and 3.13.
 Reason:
 The stdlib-only implementation does not require Python 3.13 features, and the broader range lowers installation friction while retaining a maintained baseline.
-
-## MC-DEC-20260719-59d6d8ed — Keep Protocol 0.5 for v0.9
-
-Status: active
-Scope: project
-Evidence:
-- legacy-unverified
-
-Decision:
-Keep the memory protocol at 0.5 while package 0.9 removes CLI semantic guessing and hardens mutation safety.
-Reason:
-Manifest schema and routing syntax remain compatible with existing 0.5 projects.
-
-## MC-DEC-20260718-491db2c3 — Protocol 0.5
-
-Status: active
-Scope: project
-Evidence:
-- legacy-unverified
-
-Decision:
-Keep for v0.8.
-Reason:
-Existing manifests support strict routing.
 
 ## MC-DEC-20260712-53d9eded — Prioritize useful and reachable memory over chronological accumulation.
 
@@ -87,18 +63,6 @@ Decision:
 Add `compact --target <file>` for over-budget active files. It dry-runs by default, dedupes simple bullet files, archives old complete H2 entries for decisions/changelog, and has `status`/`check` suggest the command.
 Reason:
 Agents need an offline, reviewable path from budget failure to safe maintenance. Semantic rewrites still require review.
-
-## MC-DEC-20260704-a4ce76c2 — Add lightweight plugin bootstrap and deterministic packaging
-
-Status: active
-Scope: project
-Evidence:
-- legacy-unverified
-
-Decision:
-Add a thin session-start bootstrap and deterministic Codex archive packaging while keeping memory protocol 0.4.
-Reason:
-Startup should nudge manifest-first loading without injecting full skill text or memory; package versions may advance separately.
 
 ## MC-DEC-20260704-ddfc2d0c — Treat Claude as a plugin-root distribution target
 

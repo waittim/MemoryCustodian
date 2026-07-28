@@ -25,6 +25,7 @@ from .protocol import (
     DECISION_ENTRY_BUDGET,
     appended_text,
     budget_for,
+    budget_state,
     changelog_text,
     compare_versions,
     estimate_tokens,
@@ -112,8 +113,27 @@ def _report_budget(path: Path, target: str) -> None:
     if budget is None:
         return
     tokens = estimate_tokens(path.read_text(encoding="utf-8"))
+    state = budget_state(tokens, budget)
     print(f"Budget: {target} {tokens}/{budget} tokens")
-    if tokens > budget:
+    print(f"State: {state}")
+    if state == "OK":
+        return
+    print(
+        "Maintenance required."
+        if state == "OVER BUDGET"
+        else "Maintenance recommended before the next write."
+    )
+    print("Generating maintenance preview...")
+    print("Maintenance preview (dry run; no files changed):")
+    if target == "decisions.md" or target.startswith("areas/"):
+        print(f"- Shorten entries over {DECISION_ENTRY_BUDGET} tokens.")
+        print("- Merge duplicates and link superseded decisions.")
+        print("- Move subsystem-specific knowledge to the matching area.")
+        print("- Confirm active invariants remain reachable before archival.")
+    else:
+        print("- Review duplicates, obsolete detail, and content that belongs in a scoped module.")
+    print(f"Run: memory-custodian compact --target {target}")
+    if state == "OVER BUDGET":
         print(f"Warning: {target} is over its context budget.")
         if target == "decisions.md":
             print("Next: consolidate or relocate scoped decisions before considering age-based archival.")

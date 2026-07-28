@@ -92,7 +92,10 @@ Keep `brief.md` about the project, not MemoryCustodian. Refresh it after initial
 
 For sensitive, personal, credential-like, private, or machine-specific information, ask before writing. Do not commit workstation paths as shared project preferences without confirmation. When unsure whether a note is durable, propose the update instead of writing it.
 
-After writing, check the target budget. At 80% or above, consolidate or split by area before adding more entries.
+After writing, check the target budget. When `add`, `status`, or `check` reports `NEAR LIMIT` or `OVER BUDGET`,
+immediately perform a dry-run maintenance review before adding more active memory. At 80% or above, shorten long
+entries, merge duplicates or superseded decisions, and split scoped knowledge by area before considering archival.
+Never auto-apply semantic maintenance or archival.
 
 ## Compaction Safety
 

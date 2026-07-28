@@ -8,6 +8,7 @@ from .protocol import (
     DECISION_ENTRY_BUDGET,
     appended_text,
     budget_for,
+    budget_state,
     changelog_text,
     estimate_tokens,
     long_decision_entries,
@@ -358,6 +359,8 @@ def _run_target_compaction(args, project_root: Path, memory_dir: Path) -> int:
     print("# Target Compaction Plan")
     print(f"Target: {target}")
     print(f"Current tokens: {tokens}/{budget} max")
+    state = budget_state(tokens, budget)
+    print(f"State: {state}")
     _print_long_decision_entries(long_entries)
     if tokens <= budget:
         if long_entries:
@@ -365,6 +368,14 @@ def _run_target_compaction(args, project_root: Path, memory_dir: Path) -> int:
                 "Manual review required: shorten long decisions semantically; "
                 "move supporting detail to constraints, matched area context, or source documentation."
             )
+        elif state == "NEAR LIMIT":
+            print("Maintenance preview (dry run; no files changed):")
+            if target == "decisions.md":
+                print("- Shorten long entries, merge duplicates, link superseded decisions, and move scoped knowledge.")
+                print("- Confirm active invariants remain reachable before considering age-based archival.")
+            else:
+                print("- Review duplicates, obsolete detail, and content that belongs in a scoped module.")
+            print("Maintenance recommended before the next write.")
         else:
             print("Status: OK")
         return 0

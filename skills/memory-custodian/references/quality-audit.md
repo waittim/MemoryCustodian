@@ -34,6 +34,6 @@ before writing shared memory.
 ## Budget
 
 - Keep each decision entry within 120 tokens; preserve the choice and reason, not implementation narration.
-- Treat 80% usage as an early consolidation signal.
+- Treat `NEAR LIMIT` (80%–100%) as an immediate dry-run maintenance signal; `OVER BUDGET` requires maintenance.
 - Split by area before raising global budgets.
 - Run `status` and `check` after maintenance and inspect warnings, not only exit status.

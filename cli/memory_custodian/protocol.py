@@ -29,6 +29,7 @@ BUDGETS = {
 }
 
 DECISION_ENTRY_BUDGET = 120
+BUDGET_NEAR_PERCENT = 80
 
 TASK_CATEGORY = {
     "default": "general", "general": "general",
@@ -543,6 +544,14 @@ def budget_for(name: str) -> int | None:
     if name.startswith("areas/"):
         return 600
     return BUDGETS.get(name)
+
+
+def budget_state(tokens: int, budget: int) -> str:
+    if tokens > budget:
+        return "OVER BUDGET"
+    if tokens * 100 >= budget * BUDGET_NEAR_PERCENT:
+        return "NEAR LIMIT"
+    return "OK"
 
 
 @dataclass(frozen=True)

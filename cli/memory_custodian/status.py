@@ -6,6 +6,7 @@ from .protocol import (
     CURRENT_PROTOCOL_VERSION,
     DECISION_ENTRY_BUDGET,
     budget_for,
+    budget_state,
     compare_versions,
     count_h2_entries,
     count_inbox_items,
@@ -59,11 +60,12 @@ def run(args) -> int:
         text = path.read_text(encoding="utf-8")
         tokens = estimate_tokens(text)
         budget = budget_for(name)
+        usage_state = budget_state(tokens, budget) if budget is not None else "OK"
         long_entries = long_decision_entries(text) if name == "decisions.md" else []
         if name == "brief.md" and brief_needs_curation(text):
             state = "NEEDS CURATION"
-        elif budget is not None and tokens > budget:
-            state = "OVER BUDGET"
+        elif usage_state != "OK":
+            state = usage_state
         elif long_entries:
             state = "LONG ENTRIES"
         else:
@@ -73,6 +75,8 @@ def run(args) -> int:
             detail += f"/{budget} max"
         if state == "OVER BUDGET":
             detail += f", run compact --target {name}"
+        elif state == "NEAR LIMIT":
+            detail += f", maintenance recommended before next write; run compact --target {name}"
         elif state == "NEEDS CURATION":
             detail += ", replace generated placeholders with real project context"
         elif state == "LONG ENTRIES":
@@ -96,11 +100,11 @@ def run(args) -> int:
         text = path.read_text(encoding="utf-8")
         tokens = estimate_tokens(text)
         budget = budget_for(name)
-        state = "OK" if budget is None or tokens <= budget else "OVER BUDGET"
+        state = "OK" if budget is None else budget_state(tokens, budget)
         detail = f", {tokens} tokens"
         if budget is not None:
             detail += f"/{budget} max"
-        if state != "OK":
+        if state in {"NEAR LIMIT", "OVER BUDGET"}:
             detail += f", run compact --target {name}"
         print(f"{name}: {state}{detail}")
         if state != "OK":

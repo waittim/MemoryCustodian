@@ -52,6 +52,10 @@ Markdown directly or call `add`, then run `check`. Under Protocol 0.6, use
 `memory-custodian compact --apply --confirm-plan <PLAN_ID>` only to apply the exact mechanical inbox cleanup shown
 in the preview; it does not promote candidates or remove them merely because they were reported.
 
-For an over-budget active file, use `memory-custodian compact --target decisions.md` first. With `--target`, the CLI reports the current budget state and applies only conservative deterministic changes: exact duplicate complete top-level bullet-unit removal for simple bullet files, or older complete H2 entry archival for supported history-like files such as `decisions.md` and `changelog.md`.
+At `NEAR LIMIT` (80%–100%) or `OVER BUDGET`, use `memory-custodian compact --target decisions.md` first.
+`add` emits a deterministic dry-run maintenance preview when a write reaches either state, but never applies
+semantic changes. With `--target`, the CLI reports the current budget state and applies only conservative
+deterministic changes: exact duplicate complete top-level bullet-unit removal for simple bullet files, or older
+complete H2 entry archival for supported history-like files such as `decisions.md` and `changelog.md`.
 
 Decision archival has an explicit semantic gate. First shorten long entries, consolidate, supersede, and relocate scoped knowledge; then review the dry run. The CLI blocks age-based archival while kept decisions remain over the per-entry guide. Use `--apply --archive-oldest` only when the proposed oldest entries contain no active invariant that would become unreachable. Changelog archival does not require this extra confirmation.

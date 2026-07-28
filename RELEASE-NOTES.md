@@ -17,6 +17,7 @@
 - Generate migration project identity from a random UUIDv4 persisted in platform state for the preview/apply pair, preventing identical legacy projects from sharing locks or future overlays.
 - Rebuild complete replacement, supersede, compaction, forgetting, and migration plans after acquiring the mutation lock; legacy destructive replacement now requires migration first.
 - Added real-process concurrent-add and stale-plan regression tests. These tests verify deterministic safety properties, not a live cross-agent benchmark or database transaction semantics.
+- Added deterministic `OK`, `NEAR LIMIT`, and `OVER BUDGET` states; writes at 80% or above emit a no-write maintenance preview instead of relying on an agent to calculate the threshold.
 
 ### Trust, privacy, and security boundaries
 

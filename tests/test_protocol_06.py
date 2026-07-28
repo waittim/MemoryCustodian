@@ -22,7 +22,7 @@ from memory_custodian.locking import LockError, lock_path, mutation_lock, stale_
 from memory_custodian.main import main
 from memory_custodian.plans import MutationPlan
 from memory_custodian.mutations import TextMutation
-from memory_custodian.protocol import count_inbox_items
+from memory_custodian.protocol import budget_state, count_inbox_items, estimate_tokens
 from memory_custodian.scanning import scan_text
 from memory_custodian import compact as compact_module
 from memory_custodian import forget as forget_module
@@ -38,6 +38,12 @@ def preview_id(argv: list[str]) -> str:
 
 
 class Protocol06Tests(unittest.TestCase):
+    def test_budget_state_boundaries(self):
+        self.assertEqual(budget_state(639, 800), "OK")
+        self.assertEqual(budget_state(640, 800), "NEAR LIMIT")
+        self.assertEqual(budget_state(800, 800), "NEAR LIMIT")
+        self.assertEqual(budget_state(801, 800), "OVER BUDGET")
+
     def test_entry_id_format_and_collision_retry(self):
         with patch("memory_custodian.entries.uuid.uuid4") as generated:
             generated.side_effect = [
@@ -301,6 +307,55 @@ class Protocol06Tests(unittest.TestCase):
             self.assertIn("Security findings:", text)
             self.assertIn("Privacy findings:", text)
             self.assertNotIn("abcdefghijklmnopqrstuvwxyz", text)
+
+    def test_near_limit_is_reported_and_generates_dry_run_maintenance_preview(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            memory = Path(tmp) / "docs" / "memory"
+            (memory / "brief.md").write_text(
+                "# Project Brief\n\nPurpose:\nBudget trigger fixture.\n",
+                encoding="utf-8",
+            )
+            decisions = memory / "decisions.md"
+            decisions.write_text(
+                "# Decisions\n\n" + " ".join("context" for _ in range(640)) + "\n",
+                encoding="utf-8",
+            )
+            self.assertGreaterEqual(estimate_tokens(decisions.read_text(encoding="utf-8")), 640)
+
+            added = StringIO()
+            with redirect_stdout(added):
+                self.assertEqual(
+                    main([
+                        "add", "Keep maintenance previews non-destructive.", "--type", "decision",
+                        "--evidence", "user-confirmed", "--project-root", tmp,
+                    ]),
+                    0,
+                )
+            add_text = added.getvalue()
+            self.assertIn("State: NEAR LIMIT", add_text)
+            self.assertIn("Generating maintenance preview", add_text)
+            self.assertIn("Maintenance preview (dry run; no files changed)", add_text)
+            self.assertIn("memory-custodian compact --target decisions.md", add_text)
+
+            status = StringIO()
+            with redirect_stdout(status):
+                self.assertEqual(main(["status", "--project-root", tmp]), 1)
+            self.assertIn("decisions.md: NEAR LIMIT", status.getvalue())
+
+            checked = StringIO()
+            with redirect_stdout(checked):
+                self.assertEqual(main(["check", "--project-root", tmp]), 0)
+            self.assertIn("decisions.md: near limit", checked.getvalue())
+
+            compacted = StringIO()
+            with redirect_stdout(compacted):
+                self.assertEqual(
+                    main(["compact", "--target", "decisions.md", "--project-root", tmp]),
+                    0,
+                )
+            self.assertIn("State: NEAR LIMIT", compacted.getvalue())
+            self.assertIn("Maintenance preview (dry run; no files changed)", compacted.getvalue())
 
     def test_identical_legacy_projects_receive_distinct_random_project_ids(self):
         legacy_manifest = (

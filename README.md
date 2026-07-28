@@ -305,6 +305,10 @@ Decision archival additionally requires semantic review and explicit confirmatio
 Plain `check` reports redacted privacy/security finding counts; use `check --privacy` or `check --security` to show
 redacted file and line locations.
 
+Budget reporting uses three deterministic states: `OK` below 80%, `NEAR LIMIT` from 80% through 100%, and
+`OVER BUDGET` above 100%. A write that reaches either maintenance state prints a dry-run review and target
+compaction command, but never automatically rewrites, archives, or applies semantic maintenance.
+
 ## Design Principles
 
 - Memory lives as local Markdown under `docs/memory/`, so it can be reviewed, diffed, committed, and rolled back like code.

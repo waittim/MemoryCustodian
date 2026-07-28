@@ -9,6 +9,7 @@ from .protocol import (
     CURRENT_PROTOCOL_VERSION,
     DECISION_ENTRY_BUDGET,
     budget_for,
+    budget_state,
     compare_versions,
     count_inbox_items,
     estimate_tokens,
@@ -229,8 +230,14 @@ def run(args) -> int:
         if budget is None:
             continue
         tokens = estimate_tokens(text)
-        if tokens > budget:
+        state = budget_state(tokens, budget)
+        if state == "OVER BUDGET":
             issues.append(f"{relative}: over budget ({tokens}/{budget} tokens); run `memory-custodian compact --target {relative}`")
+        elif state == "NEAR LIMIT":
+            warnings.append(
+                f"{relative}: near limit ({tokens}/{budget} tokens); maintenance recommended before "
+                f"the next write; run `memory-custodian compact --target {relative}`"
+            )
         for title, entry_tokens in long_decision_entries(_read(path)):
             issues.append(
                 f"{relative}: decision {title!r} is too long ({entry_tokens}/{DECISION_ENTRY_BUDGET} tokens); "
