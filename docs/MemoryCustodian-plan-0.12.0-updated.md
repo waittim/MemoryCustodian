@@ -38,7 +38,7 @@ MemoryCustodian v0.12 必须实现并通过仓库内测试、fixtures、audit �
 
 1. Project memory 是 plain Markdown，repo-native，可审查、可 diff。
 2. Manifest 是运行时路由的唯一 shared authority。
-3. 相同 shared memory、task 和 paths 会产生确定的 shared context pack。
+3. 相同 shared memory、canonical task、paths、explicit areas/rules/profiles 和 local mode 会产生确定的 shared context pack。
 4. Active memory 有稳定身份和可审查依据。
 5. Agent inference 不会静默升级为正式记忆。
 6. 多 agent 同时写入不会静默丢失更新。
@@ -51,6 +51,9 @@ MemoryCustodian v0.12 必须实现并通过仓库内测试、fixtures、audit �
 13. Protocol 0.5、0.6、0.7 项目存在明确迁移路径。
 14. 核心运行不依赖网络、数据库、embedding、daemon 或第三方 runtime package。
 15. Codex、Claude Code、Gemini 和 generic agent 使用同一协议与 context pack 规则。
+16. 每个 enabled module 都有可审计的 loaded、skipped、missing 或 omitted disposition。
+17. 缺少 routing scope 时不会静默声称 context pack 完整；strict routing 会阻止 substantial work。
+18. Active project-scoped hard constraints 在正常 substantial routes 中保持可达。
 
 不得宣称：
 
@@ -362,6 +365,7 @@ memory-custodian audit
 --budgets
 --local
 --transactions
+--completeness
 --all
 --format text
 --format json
@@ -372,6 +376,7 @@ memory-custodian audit
 ```text
 routing
 reachability
+completeness
 evidence
 relations
 budgets
@@ -445,13 +450,44 @@ Evidence coverage:
 - source-backed: ...
 - legacy-unverified: ...
 Routing:
+- completeness: COMPLETE / INCOMPLETE / AMBIGUOUS / INVALID
+- enabled modules: ...
+- loaded modules: ...
+- skipped modules: ...
 - reachable active entries: ...
 - unreachable active entries: ...
+- unreachable hard constraints: ...
 Budgets:
 - ...
 Transactions:
 - clean / recovery required
 ```
+
+### 4.3 Routing completeness findings
+
+统一 audit 必须吸收 v0.11 的 routing result model，而不是重新实现第二套逻辑。
+
+至少提供稳定 findings：
+
+```text
+MC-ROUTING-001  Missing canonical route
+MC-ROUTING-002  Enabled module has no activation path
+MC-ROUTING-003  Enabled path-routed areas were not evaluated
+MC-ROUTING-004  Ambiguous overlapping route
+MC-ROUTING-005  Required module missing
+MC-ROUTING-006  Unreachable active entry
+MC-ROUTING-007  Unreachable active hard constraint
+MC-ROUTING-008  Adapter omitted required scope input
+```
+
+要求：
+
+* `MC-ROUTING-003` 在普通 inspection 中至少为 WARNING/REVIEW。
+* strict substantial workflow 中，`MC-ROUTING-003` 必须导致非零 exit。
+* `MC-ROUTING-007` 至少为 ERROR；若 root hard-memory safety baseline 被破坏则为 BLOCKER。
+* Audit 与 `read --explain` 必须共享 module disposition 与 reason-code 数据模型。
+* Audit 不通过文件内容猜测 module relevance。
+* Audit 不自动添加 paths、改变 routes 或移动 entries。
 
 ---
 
@@ -486,9 +522,15 @@ Transactions:
 * 文档说明 JSON schema 在 `0.12.x` 与 Protocol 0.8 生命周期内保持兼容；进入 1.0 前仍可能通过显式 migration 调整，不得承诺未来所有 1.x 兼容性。
 * Context pack 的 JSON 输出包含：
 
+  * supplied task and canonical task
+  * normalized paths and explicit modules
+  * routing completeness
   * loaded files
+  * skipped files
+  * missing files
   * loaded entry IDs
   * omitted entry IDs
+  * stable reason codes
   * reasons
   * budgets
   * shared/local distinction
@@ -510,6 +552,9 @@ manifest
 canonical task
 paths
 explicit areas
+explicit rules
+explicit profiles
+strict-routing mode
 --no-local
 CLI version
 ```
@@ -519,6 +564,9 @@ CLI version
 * 相同 loaded file set
 * 相同 loaded entry order
 * 相同 omission set
+* 相同 skipped module set
+* 相同 routing completeness
+* 相同 stable reason codes
 * 相同 explanation reason
 * 相同 context text，除非存在明确记录的换行平台差异
 
@@ -530,6 +578,11 @@ CLI version
 * Glob matching 不能依赖 OS。
 * Token estimation 或 budget calculation 必须确定。
 * 不使用 Python hash randomization 影响顺序。
+* 每个 enabled module 必须获得唯一最终 disposition。
+* `no path match`、`profile not requested`、`task mismatch` 与 `scope missing` 必须使用不同 reason code。
+* 存在 enabled path-routed areas 但未提供 paths/explicit areas 时，routing completeness 必须为 INCOMPLETE。
+* `--strict-routing` 在 INCOMPLETE、AMBIGUOUS 或 INVALID 时返回非零 exit code。
+* 不得使用 “all relevant memory loaded” 描述缺失 scope 的 context pack。
 
 ### 6.2 Adapters
 
@@ -545,10 +598,12 @@ CLI version
 1. 定位 MemoryCustodian。
 2. 在 substantial work 前触发 manifest-first loading。
 3. 使用 canonical task。
-4. 必要时传递 touched paths。
-5. 遵守 trust boundary。
-6. 在 meaningful decision 后提出或执行 memory update。
-7. 不直接把全部 `docs/memory/` 注入 context。
+4. 必须传递 touched paths，或明确传递 explicit areas；缺失 scope 时不得静默继续 substantial work。
+5. 必要时显式传递 rules 与 profiles。
+6. 检查 routing completeness，并在 strict mode failure 时停止 substantial work。
+7. 遵守 trust boundary。
+8. 在 meaningful decision 后提出或执行 memory update。
+9. 不直接把全部 `docs/memory/` 注入 context。
 
 Adapters 不能分别定义另一套路由表。
 
@@ -569,7 +624,9 @@ evals/memory-custodian/cross-agent/
 * touched paths
 * expected loaded files
 * expected loaded entry IDs
+* expected skipped modules
 * expected skipped reasons
+* expected routing completeness
 * expected warnings
 * expected context pack hash
 
@@ -604,6 +661,7 @@ evals/memory-custodian/cross-agent/
 * 不自动创建 local overlay。
 * 不自动移动 shared preferences 到 local。
 * 不自动添加 area glob。
+* 不自动把 missing routing scope 标记为 complete。
 * 不自动重写 freeform rules/profiles。
 * 无法自动 canonicalize 的 legacy entries 产生 manual migration report。
 
@@ -767,6 +825,11 @@ CI 至少覆盖：
 * Soft/hard/purge。
 * Anti-resurrection。
 * Area routing。
+* Global hard-constraint baseline。
+* Routing completeness。
+* Strict routing。
+* Full enabled-module disposition。
+* Stable routing reason codes。
 * Local precedence。
 * Budget packing。
 * Explain。
@@ -794,8 +857,11 @@ CI 至少覆盖：
 每个 fixture 验证：
 
 * expected file set
+* expected skipped module set
 * expected entry set
 * expected order
+* expected routing completeness
+* expected stable reason codes
 * expected reasons
 * expected warnings
 * expected context hash
@@ -950,6 +1016,9 @@ README 使用产品语言，不重复全部 MUST 级规则。
 * Evidence coverage 可解释。
 * `audit --all` 不存在 ERROR/BLOCKER。
 * manifest area index 与实际文件一致。
+* 所有 active project-scoped hard constraints 对 substantial routes 可达。
+* 每个 enabled module 的 route metadata 完整。
+* `read --strict-routing --explain` 对 dogfood fixtures 不产生未解释的 INCOMPLETE。
 * brief 仍是项目内容，不是 protocol boilerplate。
 * budgets 健康。
 
@@ -1004,13 +1073,18 @@ README 使用产品语言，不重复全部 MUST 级规则。
 * Superseded entry 不作为 active invariant。
 * Relations 可审计。
 * Reachability 可审计。
+* Unreachable active project-scoped hard constraint 至少为 ERROR；若会导致 substantial routes 无法满足安全基线则为 BLOCKER。
 * Freshness 只提示，不自动改写。
 
 ### Routing
 
 * Manifest 仍是唯一 shared routing authority。
 * Path-to-area matching 确定且跨平台一致。
-* `read --explain` 完整说明加载与跳过原因。
+* Root project constraints 对 substantial routes 保持可达。
+* 每个 enabled module 都有唯一 loaded、skipped、missing、omitted 或 invalid disposition。
+* `read --explain` 完整说明加载与跳过原因，并使用稳定 reason code。
+* Missing scope 不得静默显示 COMPLETE。
+* `--strict-routing` 对 INCOMPLETE、AMBIGUOUS 和 INVALID 返回非零 exit code。
 * `--no-local` 产生可复现 shared context。
 * Local memory 不能覆盖 shared hard memory。
 * Archive 和 inbox 仍默认不加载。

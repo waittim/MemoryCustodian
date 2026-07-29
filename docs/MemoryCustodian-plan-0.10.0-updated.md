@@ -37,6 +37,8 @@
 7. 项目记忆不能扩大 agent 的权限。
 8. Shared memory 中明显的 secrets、个人信息和本机路径能够被检测。
 9. 现有 Protocol 0.5 项目可以保守迁移，不丢失任何已有内容。
+10. Runtime routing 的输入与输出边界必须明确：CLI 不进行隐藏的 relevance scoring，所有已加载内容必须能够追溯到 manifest route 或显式参数。
+11. 为后续版本的完整 routing explainability 保留稳定的 module identity、canonical task 和结构化 reason model 基础，但本版本不实现自然语言 relevance 判断。
 
 目标版本：
 
@@ -90,6 +92,33 @@ Git 可以作为可选增强，用于检查 evidence revision，但不能成为�
 * `check` 对重复、无效或缺失的 `project_id` 报告错误或迁移提示。
 * 不能根据项目路径生成 `project_id`，因为项目可能移动。
 * Protocol 0.5 项目仍可被旧格式读取，但 Protocol 0.6 新写入必须使用新准入规则。
+
+
+### 3.1 路由可观察性基础
+
+v0.10 不实现新的 relevance engine，也不改变 v0.9.1 的 canonical task routing 模型。必须明确以下 contract，为 v0.11 的 deterministic routing 与完整 explain 做准备：
+
+* `manifest.md` 仍是 shared runtime routing 的唯一依据。
+* CLI 不根据自由文本 task description 执行 keyword matching、semantic similarity、embedding、LLM judgment 或隐藏 relevance scoring。
+* Runtime routing 只允许使用可显式记录的输入：
+  * canonical task
+  * manifest route
+  * 显式 `--profile`
+  * 显式 `--area`
+* 每个 routed 或 optional module 使用规范化的 repo-relative path 作为稳定 module identity。
+* Route parser 内部必须保留“来源类别”，至少区分：
+  * always load
+  * canonical task route
+  * explicit profile
+  * explicit area
+  * optional file absent
+  * budget omission
+* 这些来源类别应由共享内部数据模型表示，不能只通过拼接 human-readable 文本产生。
+* v0.10 的普通 `read` 可以保持现有输出兼容，但后续 v0.11 必须能够基于该模型实现完整 `--explain`。
+* 文档不得宣称 MemoryCustodian“自动理解任意任务需要哪些记忆”。应使用更准确的表述：
+  * the manifest routes a bounded context pack through explicit task categories
+  * routing is deterministic for the supplied task and explicit scope
+* 当前 agent 仍负责选择 canonical task；v0.10 不得把这一判断边界描述为已解决问题。
 
 ---
 
@@ -751,6 +780,8 @@ AGENTS.md / CLAUDE.md / GEMINI.md managed bootstrap templates
 * Plan ID calculation
 * Privacy/security scanning
 * Migration 0.5 → 0.6
+* Canonical routing input normalization
+* Stable module identity and internal route reason model
 
 如现有结构已有类似模块，应扩展现有模块而不是重复创建。
 
@@ -785,6 +816,10 @@ AGENTS.md / CLAUDE.md / GEMINI.md managed bootstrap templates
 * Machine path scan。
 * Legacy entry compatibility。
 * Protocol downgrade guard 保持正常。
+* Canonical task normalization 不读取自由文本做语义猜测。
+* Manifest route、显式 profile 与显式 area 的来源类别可被内部模型区分。
+* Module identity 使用规范化 repo-relative path，跨平台结果一致。
+* 现有 `read --names-only` 与普通 `read` 输出兼容。
 
 ### 13.2 Process-level concurrency tests
 
@@ -834,6 +869,8 @@ Fixtures：
 8. Secret-like content is flagged。
 9. Legacy memory remains readable。
 10. Superseded decision no longer behaves as active invariant。
+11. Routing does not perform hidden semantic relevance scoring。
+12. Loaded modules can be traced to manifest routes or explicit inputs。
 
 静态 checker 不要声称执行真实 agent runtime。
 
@@ -871,6 +908,9 @@ README 新增或更新：
 * Plan confirmation
 * Trust boundary
 * Protocol 0.6 migration
+* Routing boundary：canonical task、manifest route 与显式 optional inputs
+* 当前版本不保证 agent 选择了正确 task category
+* 当前版本不提供完整 excluded-module explanation trace；该能力属于 v0.11
 
 CLI recipes 至少包含：
 
@@ -929,6 +969,10 @@ Release notes 必须真实描述实现内容，不得宣称：
 * Memory trust boundary 出现在协议、Skill 和 adapters。
 * Privacy/security scan 不泄露检测值。
 * Migration 不丢已有内容。
+* CLI 不执行隐藏的 keyword、semantic 或 LLM relevance selection。
+* 每个 loaded module 都可追溯到 manifest route 或显式参数。
+* 稳定 module identity 与内部 route reason model 已建立，可供 v0.11 扩展。
+* 文档不把 canonical task classification 描述为自动解决的 relevance problem。
 * 全部 unit、integration、skill eval 和 repository checks 通过。
 * README、references、templates、examples、dogfood memory 和 release notes 同步更新。
 * 没有新增第三方 runtime dependency。
