@@ -1,6 +1,6 @@
 # MemoryCustodian v0.11.0 实施指南
 
-## Protocol 0.7：Local Overlay、确定性路由、冲突审计、Erasure Scope 与完整解释
+## Protocol 0.7：确定性路由、可解释上下文、Local Overlay 与冲突检测
 
 你正在继续修改已经完成 v0.10 / Protocol 0.6 的 MemoryCustodian。
 
@@ -18,16 +18,18 @@ v0.10 已提供：
 * Stable Subject registry、Canonical-Ref、aliases 与 controlled Facet
 * Structural conflict identity：Scope + Subject ID + Facet
 * Current-memory mutation preflight prevents a second exact active owner
-* Structured `ErasureScope` contract for soft, hard and purge operations
+* Structured `ErasureScope` contract for soft、hard 与 purge operations
 * Forgetting output explicitly excludes Git-history rewrite and revocation of distributed copies
 
 当前阶段要解决的核心问题是：
 
-> 对于给定 task，MemoryCustodian 如何确定加载哪些 memory；当某个 module 没有被加载时，用户如何看到它被排除的原因；当 task scope 不足时，系统如何避免静默地产生一个看似完整、实际可能漏载的 context pack。
+> 对于给定 task 与显式 scope，MemoryCustodian 如何确定加载哪些 memory；当某个 module 没有被加载时，用户如何看到它被排除的可验证原因；当 task scope 不足时，系统如何避免静默地产生一个看似完整、实际可能漏载的 context pack。
 
 同时解决另一类静默失败：
 
-> 两个分支分别新增可以干净合并、但可能互相矛盾的 active hard-memory entries 时，如何检测确定性的结构冲突，并让无法自动判断的并发语义变化强制进入人工或 agent reconciliation。
+> 当前 worktree 或两个分支中的 hard-memory changes 是否形成可确定的结构冲突；当 CLI 无法证明它们相同或不同，如何明确产生 reconciliation requirement，而不是静默声明 conflict-free。
+
+v0.11 的治理能力以**检测、解释、inventory 与 preview**为主。会跨多个 governance files 改写身份或关系的操作，例如 Subject merge apply、reconciliation acknowledgement apply、Exception-To mutation apply 与 multi-file promotion apply，统一推迟到 v0.12 transaction journal 可用之后。v0.11 不得发布一个只能依靠 partial-write reporting 维持一致性的复杂治理 apply workflow。
 
 不要询问更多信息。先完整检查 v0.10 的实现、测试、模板、Skill、references、examples、evals、dogfood memory 和 adapters，再按照本指南完成端到端实现。
 
@@ -43,40 +45,55 @@ v0.10 已提供：
 * Conflict schema version：`1`
 * Local overlay schema version：`1`
 
-`local_overlay_schema_version` 只存在于 repo 外 local manifest；shared manifest 不以当前机器是否存在
-overlay 作为 validity 条件。Shared manifest 只声明 shared Protocol、routing 与 conflict contracts。
+`local_overlay_schema_version` 只存在于 repo 外 local manifest；shared manifest 不以当前机器是否存在 overlay 作为 validity 条件。Shared manifest 只声明 shared Protocol、routing 与 conflict contracts。
 
----
+### Protocol 0.7 实施前置条件
+
+在写入 `protocol_version: 0.7` 之前，必须先验证或补齐以下 Protocol 0.6 基础能力：
+
+* 所有 mutating commands 使用同一个 project mutation guard。
+* bootstrap lock 到 permanent project lock 的 handoff 在同一 guard 中完成。
+* 最终写入 manifest 的 `project_id` 与持有的 permanent lock identity 完全一致。
+* `init`、`repair`、`migrate`、`enable` 与 Protocol 0.5 compatibility writes 不得各自维护不同 lock-selection 逻辑。
+* Structured entry parser 必须拒绝 duplicate scalar fields、duplicate Evidence blocks 与缺失 typed body。
+* Entry type、storage path 与 typed body 必须一致。
+* Repo 外 state directory 在 POSIX 上使用 `0700`；state files 使用 exclusive private write 与 `0600`。
+* State helper 必须拒绝 symlink replacement，并对 fallback path 使用相同权限规则。
+* Canonical Plan 中的 path 与 path-like arguments 使用 repo-relative POSIX representation。
+* Internal execution plan、public preview representation 与未来 transaction journal representation 必须分离。
+* Hard/purge public plan 不包含 raw topic；不得直接公开序列化内部 canonical execution arguments。
+
+如果这些能力尚未回补到 v0.10，必须作为 v0.11 Phase 0 完成，并保留相应 regression tests。
 
 ## 一、版本目标
 
 MemoryCustodian v0.11 必须实现以下保障：
 
 1. Shared routing 对给定 canonical task、touched paths 和显式 optional inputs 是确定的。
-2. Root project constraints 成为 substantial work 的安全基线，不再依赖 agent 逐条判断其 relevance。
-3. Area memory 通过 manifest 中声明的 path matchers 确定性加载。
-4. Rules 通过 canonical task 或显式 rule route 加载。
-5. Profiles 通过显式请求加载，不依赖隐藏的 workflow guessing。
-6. `read --explain` 枚举所有 enabled modules，并说明每个 module 被 loaded、skipped、missing 或 omitted 的原因。
-7. 当项目启用了 area memory，但 substantial task 没有提供 paths 或 explicit areas 时，输出必须标记 routing incomplete。
-8. `--strict-routing` 在 routing incomplete 或 ambiguous 时拒绝把 context pack 视为成功。
-9. Reachability audit 能发现永远无法加载的 active memory，尤其是 unreachable hard constraints。
-10. Freshness audit 能提示证据或条目可能陈旧，但不自动改写 memory。
-11. Local user/machine preferences 可以存在 repo 外，不污染 shared memory。
-12. ID-based list、show、forget 和 promotion/supersede workflows 可操作 canonical entries。
-13. 现有 Protocol 0.6 项目可以保守迁移，不丢失 custom routes、entries 或 Evidence。
+2. Root project constraints 成为 substantial work 的安全基线，不再依赖 agent 逐条判断 relevance。
+3. Area memory 只通过 manifest 中声明的 path matchers 或显式 `--area` 确定性加载。
+4. Rules 只通过 canonical task 或显式 rule route 加载。
+5. Profiles 默认只通过显式请求加载，不依赖隐藏的 workflow guessing。
+6. `read --explain` 为每个 enabled module 分配且仅分配一个 module disposition，并单独报告 entry-level budget omissions。
+7. 当项目启用了 path-routed area，但 substantial task 没有提供 paths 或 explicit areas 时，输出必须标记 routing INCOMPLETE。
+8. `--strict-routing` 在 routing INCOMPLETE、AMBIGUOUS 或 INVALID 时拒绝把 context pack 视为成功。
+9. Reachability check 能发现永远无法加载的 active memory，尤其是 unreachable hard constraints。
+10. Freshness check 能提示 Evidence 或 relation 可能陈旧，但不自动改写 memory。
+11. Local user/machine preferences 可以存在 repo 外，不污染 shared memory，也不覆盖 shared hard memory。
+12. ID-based list、show 与 forget 可以操作 canonical entries；promotion 与治理关系修改在 v0.11 只提供验证和 preview。
+13. 现有 Protocol 0.6 项目可以保守迁移，不丢失 custom routes、entries、Evidence 或 human-readable descriptions。
 14. 不引入 semantic search、embedding、LLM runtime relevance scoring 或后台索引。
-15. `check --conflicts` 能确定性发现同一或重叠 Scope 下的 Subject/Facet active ownership 冲突。
-16. Git 可用时，`audit --merge-base <ref>` 能发现两个分支并发修改 hard memory 的 reconciliation risk。
-17. 两个分支分别创建不同 Subject ID 时，exact Canonical-Ref 或 alias collision 被确定性发现；无法证明同义的异名 Subject 被标记为 review，而不是静默视为无冲突。
-18. Subject merge、scope exception 和 supersede 使用显式关系与 preview-first multi-file mutation。
-19. Topic-based forget、`forget --id`、purge 和 local reset 使用同一 erasure-scope model，且不会以不同措辞产生误导。
+15. `check --conflicts` 能确定性发现 current-worktree structural conflicts 与 invalid relations。
+16. Git 可用时，`check --conflicts --merge-base <ref>` 能只读发现两个分支的 deterministic conflicts 与 reconciliation risks。
+17. 两个分支分别创建不同 Subject ID 时，exact Canonical-Ref 或 alias collision 被确定性发现；异名 Subject 不被自动合并。
+18. Subject merge、reconciliation 与 Exception-To workflows 在 v0.11 具有规范数据模型、完整 inventory 和 preview，但 transactional apply 推迟到 Protocol 0.8。
+19. Topic forget、`forget --id`、purge 与 local-reset preview 使用同一 ErasureScope model，不产生不同删除承诺。
 20. Git 可用时，用户可以显式请求 best-effort history exposure inspection；不可用或未检查时不得被解释为安全擦除证明。
-21. Local reset 只影响当前机器上当前 `project_id` 的 overlay，不声称删除其他机器或备份中的 local copies。
+21. Local overlay 使用 explicit root binding；公开的 `project_id` 只是 namespace identifier，不是 authentication secret。
 
 v0.11 解决的是：
 
-> deterministic and explainable routing for supplied task and scope
+> deterministic and explainable context routing for supplied task and scope, plus structural conflict detection
 
 v0.11 不声称解决：
 
@@ -86,7 +103,9 @@ v0.11 不声称解决：
 
 > proving that every pair of differently named natural-language entries is semantically contradictory
 
----
+也不声称提供：
+
+> crash-recoverable multi-file governance mutation; that guarantee begins in Protocol 0.8
 
 ## 二、必须保留的产品边界
 
@@ -113,6 +132,8 @@ v0.11 不声称解决：
 * 根据编辑距离、关键词或正文相似度自动合并 Subject
 * 自动判断两个任意自然语言 constraints 是否语义矛盾
 * 在 merge-aware review 未完成时静默声明 hard-memory conflict-free
+* 在 transaction journal 可用前执行 Subject merge、reconciliation acknowledgement、Exception-To mutation 或 multi-file promotion apply
+* 在 v0.11 建立一个随后由 v0.12 重新定义的第二套正式 `audit` namespace
 * 自动运行 Git history rewrite、force push、删除远程 refs 或清理其他 clones/forks
 * 将 `no reachable copy detected` 表述为不存在外部副本的证明
 * 将 local overlay 当作 secret store，或声称 `local reset` 能清除其他机器上的副本
@@ -257,50 +278,77 @@ Module index 必须可机器解析，并包含与 module type 相符的 route me
 ### Enabled rules
 
 - `rules/output.md`
+  - activation: task
   - tasks: artifact
 
 - `rules/review.md`
+  - activation: task-or-explicit
   - tasks: planning, implementation
-  - explicit: allowed
 
 ### Enabled profiles
 
 - `profiles/git.md`
-  - activation: explicit
+  - activation: explicit-only
 
 - `profiles/release.md`
-  - activation: explicit
+  - activation: explicit-only
 
 ### Enabled areas
 
 - `areas/frontend.md`
+  - activation: path-or-explicit
   - paths: `web/**`, `frontend/**`, `tests/frontend/**`
 
 - `areas/backend.md`
+  - activation: path-or-explicit
   - paths: `cli/**`, `server/**`, `tests/backend/**`
 ```
+
+规范性 activation vocabulary：
+
+```text
+task
+explicit-only
+task-or-explicit
+path
+path-or-explicit
+```
+
+Module compatibility matrix：
+
+| Module type | Allowed activation | Required metadata | Forbidden metadata |
+| --- | --- | --- | --- |
+| `rules/` | `task`, `task-or-explicit`, `explicit-only` | `tasks` when activation includes `task` | `paths` |
+| `profiles/` | `explicit-only` | none | `tasks`, `paths` |
+| `areas/` | `path`, `path-or-explicit`, `explicit-only` | `paths` when activation includes `path` | `tasks` |
 
 要求：
 
 * Module path 必须唯一。
 * 路径必须位于允许目录。
 * Path metadata 必须是 repo-relative POSIX-style path。
-* `rules/` 必须声明 canonical tasks，或明确 `activation: explicit`。
-* `profiles/` 默认 `activation: explicit`。
-* `areas/` 必须声明至少一个 path matcher，除非被明确标记 `activation: explicit-only`。
+* 不允许同时维护 `activation` 与第二套 `explicit: allowed` vocabulary。
 * 不允许仅依赖自然语言描述如 “load when clearly relevant” 作为唯一 machine route。
-* 可保留 human-readable description，但它不能影响 CLI routing result。
+* Human-readable description 可以保留，但不能影响 CLI routing result。
 * Manifest parser 必须拒绝同一 module 的矛盾重复声明。
-* 该 nested-bullet grammar 是 Protocol 0.7 的规范性 machine grammar，不是展示建议：
+* 该 nested-bullet grammar 是 Protocol 0.7 的规范性 machine grammar：
   * module 行必须是 subsection 下 column-zero 的 `- \`path\``。
   * metadata 行固定缩进两个空格，并使用 `- key: value`。
-  * allowed keys 固定为 `tasks`、`activation`、`explicit`、`paths` 与 `description`。
+  * allowed keys 固定为 `activation`、`tasks`、`paths` 与 `description`。
   * scalar key 在同一 module 内不得重复；重复 module path 一律 INVALID。
-  * key 顺序不影响语义；canonical renderer 按上述固定顺序输出。
-  * task/value list 使用逗号分隔的 unquoted canonical tokens。
-  * path glob 必须使用 Markdown code span；反引号、换行或无法解析的 escaping 一律 INVALID。
-  * unknown machine key 一律 INVALID；human prose 只能放在 `description`，且不参与 routing。
-  * parser error 不得 fallback 到自然语言 route guessing。
+  * key 顺序不影响语义；canonical renderer 按 `activation`、`tasks`、`paths`、`description` 顺序输出。
+  * task list 使用逗号分隔的 unquoted canonical tokens。
+  * path glob 必须使用 Markdown code span。
+  * unknown machine key 一律 INVALID。
+  * parser error 不得 fallback 到 natural-language route guessing。
+
+`description` 规则：
+
+* 单行 UTF-8 文本。
+* 不允许 continuation line。
+* 可以包含逗号，但不得被解析为 tasks 或 paths。
+* 不参与 route identity、reason code 或 Plan ID。
+* Canonical renderer 必须保留其语义文本，但 routing tests 不依赖 description。
 
 ### 4.4 Area path matching
 
@@ -313,19 +361,33 @@ memory-custodian read \
   --path tests/test_read.py
 ```
 
-Path routing 规则：
+Protocol 0.7 固定 glob dialect：
 
+```text
+/    canonical segment separator
+*    zero or more characters within one segment
+?    exactly one character within one segment
+**   zero or more complete path segments
+```
+
+要求：
+
+* 不支持 character class、brace expansion、extglob 或 shell-specific escaping。
+* `**/*.py` 必须匹配根目录与任意子目录中的 `.py` 文件。
+* Dotfiles 与普通 segment 使用相同匹配规则，不采用 shell 隐藏文件特例。
+* Matching 对 canonical repo path 大小写敏感，跨平台保持一致。
+* Backslash 输入先按 CLI path normalization 转换为 `/`；manifest glob 中出现 backslash 一律 INVALID。
+* Absolute path、drive-prefixed manifest glob、空 segment、`.` 或 `..` segment 一律 INVALID。
 * 输入 path 规范化为 project-relative POSIX path。
-* 拒绝 project 外路径。
-* 拒绝 traversal。
-* 不要求 path 已存在，允许用于 planned files；但输出必须标记 missing-on-disk。
-* Glob semantics 由 MemoryCustodian 自己确定，不依赖 OS shell expansion。
-* 匹配大小写规则必须文档化并跨平台一致；建议按 repo path 精确大小写处理。
-* 排序不依赖 filesystem enumeration。
-* 同一 area 被多个 path 命中时只加载一次，并列出全部 relevant matches 或稳定排序后的首要 reason。
-* 显式 `--area <slug>` 可以加载 area，即使没有 path match；reason 必须标记 explicit-area。
+* 拒绝 project 外路径与 traversal。
+* 不要求 path 已存在，允许用于 planned files；输出必须标记 `missing-on-disk`。
+* 对不存在 path 先做 lexical containment，再 resolve nearest existing parent，拒绝 symlink escape。
+* 对已存在 path 重新检查 realpath，不能逃逸 project root。
+* Glob matching 不依赖 OS shell expansion、filesystem enumeration order 或 Python hash order。
+* 同一 area 被多个 path 命中时只加载一次，并稳定列出全部 matching inputs 与 patterns。
+* 显式 `--area <slug>` 可以加载 area，即使没有 path match；reason 必须标记 `MC-ROUTE-EXPLICIT-AREA`。
 * Path match 不读取文件内容，不执行 semantic inspection。
-* Symlink path 必须按安全 realpath 规则检查，不能逃逸 project root。
+* 不在 Protocol 0.7 引入静态 area-overlap group 或 glob-intersection theorem。不同 areas 默认独立；如果同一次 read 的 supplied paths 同时激活多个 areas，并且它们拥有相同 Subject/Facet，产生 matched-context REVIEW。
 
 ### 4.5 Rules 与 Profiles
 
@@ -380,24 +442,36 @@ INVALID
 
 含义：
 
-* `COMPLETE`：所有当前 enabled routing dimensions 都获得足够显式输入，且无冲突。
+* `COMPLETE`：所有当前 enabled routing dimensions 都获得足够显式输入，且 manifest 与参数合法。
 * `INCOMPLETE`：存在可能影响 context pack 的 scope 输入缺失。
-* `AMBIGUOUS`：输入或 manifest 可以产生多种合理 route interpretation。
-* `INVALID`：manifest 或参数违反协议。
+* `AMBIGUOUS`：manifest 与参数语法都合法，但当前 invocation 激活多个由协议明确声明为互斥、且无法唯一裁决的 route interpretation。
+* `INVALID`：manifest、grammar、metadata combination 或参数违反协议。
 
 至少以下情况为 `INCOMPLETE`：
 
 * substantial task 启用了一个或多个 path-routed area，但未提供任何 `--path` 或 `--area`。
-* adapter 表示正在修改项目文件，却未传递 touched paths。
+* adapter 表示正在修改项目文件，却未传递 touched paths 或 explicit area。
 * manifest 声明 scope input required，但命令未提供。
-* supplied paths 全部被判定为 project 外或无效。
+* supplied scope inputs 全部缺失；非法 path 本身归入 INVALID，不得通过丢弃非法输入后继续显示 COMPLETE。
 
 至少以下情况为 `AMBIGUOUS`：
 
-* 同一路径匹配多个互斥 area group。
-* 同一 module 有矛盾 route metadata。
-* task alias 无法唯一规范化。
-* custom route 同时声明 task-only 与 explicit-only 且未定义 precedence。
+* 同一次 invocation 的 supplied path 激活多个被 manifest 中合法 policy 明确标记为 mutually exclusive 的 route；Protocol 0.7 默认 manifest 不生成此 policy。
+* 一个保留的 legacy task alias 在明确 compatibility table 中映射到多个 canonical tasks。
+
+以下情况必须为 `INVALID`，不得降级为 AMBIGUOUS：
+
+* duplicate module declaration。
+* contradictory route metadata。
+* unsupported activation combination。
+* task-only 与 explicit-only 同时声明。
+* unknown machine key。
+* malformed nested-bullet grammar。
+* invalid task、path 或 glob。
+* duplicate scalar key。
+* module type 与 metadata 不兼容。
+
+实现应尽量在 manifest parse 阶段消除 ambiguity；不得将 parser error 描述为 routing uncertainty。
 
 ### 5.2 默认行为
 
@@ -582,15 +656,15 @@ Warning: enabled path-routed areas were not evaluated because no paths or explic
 ---
 
 
-## 七、Conflict Identity 与 Merge Reconciliation
+## 七、Conflict Identity、Merge Review 与治理 Preview
 
 ### 7.1 设计边界
 
 v0.11 不实现通用自然语言 contradiction detector。系统必须区分：
 
-1. **Deterministic structural conflict**：可以由 Scope、Subject ID、Facet、relations 和 registry metadata 确定。
+1. **Deterministic structural conflict**：由 Scope、Subject ID、Facet、relations 与 registry metadata 确定。
 2. **Potential semantic conflict**：两个分支并发改变 hard memory，但结构身份不同，CLI 无法证明相同或不同。
-3. **No detected conflict**：没有确定冲突，也没有触发 merge reconciliation risk；这不等同于证明所有自然语言陈述一致。
+3. **No detected conflict**：没有确定冲突，也没有触发 reconciliation risk；不等同于证明所有自然语言陈述一致。
 
 不得使用：
 
@@ -601,14 +675,21 @@ v0.11 不实现通用自然语言 contradiction detector。系统必须区分：
 * fuzzy title similarity 自动决定 Subject 等价
 * LLM runtime 自动裁决
 
-时间戳、Evidence 和 Git history只用于解释与 review，不赋予 precedence。
+时间戳、Evidence 与 Git history只用于解释和 review，不赋予 precedence。
+
+v0.11 的 mutation boundary：
+
+* 可以检测、解释、列出 blockers、生成 stable preview 与 Plan ID。
+* 可以验证手工维护的 Exception-To 与 reconciliation records。
+* 不执行 Subject merge apply、Exception-To add/remove apply、reconciliation acknowledgement apply 或 multi-file promotion apply。
+* v0.12 transaction journal 上线后，才允许这些治理操作以 crash-recoverable transaction apply。
 
 ### 7.2 Structural conflict identity
 
 沿用 v0.10：
 
 ```text
-Scope + Subject ID + Facet
+normalized Scope + Subject ID + Facet
 ```
 
 Scope overlap 规则：
@@ -616,20 +697,21 @@ Scope overlap 规则：
 * 相同 `project` scope：exact overlap。
 * 相同 `area:<slug>`：exact overlap。
 * `project` 与任意 `area:<slug>`：narrower-scope overlap。
-* 两个不同 area：默认不 overlap，除非 manifest 显式声明 area overlap group。
+* 两个不同 area 在静态 current-worktree audit 中默认独立。
+* 如果某次 read 的 supplied paths 同时激活多个 areas，且多个 active owners 使用相同 Subject/Facet，则 matched-context status 为 REVIEW。
 * `local-user`、`local-machine` 不参与 shared hard-memory ownership。
 
 Finding：
 
 * exact overlap 下存在多个 active owner：`CONFLICT / ERROR`。
-* project 与 area 对同一 Subject/Facet 同时 active，且无显式 exception relation：`REVIEW`。
-* 同一 Subject/Facet 在两个声明为互斥或重叠的 area 中 active：按 manifest policy 报 `REVIEW` 或 `CONFLICT`。
+* project 与 area 对同一 Subject/Facet 同时 active，且无合法 Exception-To：`REVIEW`。
+* matched context 中两个不同 areas 对同一 Subject/Facet 同时 active：`REVIEW`。
 * Superseded、candidate、archive entries 不计为 active owner。
-* 正文是否相同不影响 exact conflict；一个 invariant identity 只能有一个 active owner。
+* 正文是否相同不影响 exact conflict；一个 exact invariant identity 只能有一个 active owner。
 
 ### 7.3 Explicit exception relation
 
-为 narrower-scope exception 增加：
+为 narrower-scope exception 定义：
 
 ```text
 Exception-To: <ENTRY_ID>
@@ -640,14 +722,58 @@ Exception-To: <ENTRY_ID>
 * 只允许 area-scoped active entry 指向 project-scoped active entry。
 * 两者必须使用相同 Subject ID 与 Facet。
 * 被引用 entry 必须存在且 active。
-* `Exception-To` 不代表任意 override，只表示该 area 下有显式、可审查的 narrower policy。
+* `Exception-To` 不表示任意 override，只表示该 area 下有显式、可审查的 narrower policy。
 * Explain 必须同时加载并显示 project baseline 与 matched area exception。
-* Constraint packing 和 agent workflow 必须明确 narrower exception 的作用范围。
-* relation 断裂、scope 不合法或 Subject/Facet 不一致为 ERROR。
-* 不允许 exception cycle。
+* Relation 断裂、scope 不合法、Subject/Facet 不一致或 cycle 为 ERROR。
 * Local overlay 不得创建 `Exception-To` 覆盖 shared hard memory。
+* v0.11 可以验证已有 relation，并提供 add/remove preview；apply 推迟到 v0.12。
 
-### 7.4 `check --conflicts`
+### 7.4 Reconciliation record contract
+
+Protocol 0.7 选择独立 reconciliation record，不使用散落在两个 entries 中的单值 scalar relation作为唯一 acknowledgement。
+
+规范文件：
+
+```text
+docs/memory/reconciliations.md
+```
+
+Canonical unit：
+
+```md
+## MC-REC-20260729-a1b2c3d4 — Distinct invariants
+
+Status: active
+Entries:
+- MC-CON-...
+- MC-CON-...
+Resolution: distinct
+Evidence:
+- user-confirmed
+```
+
+`Resolution` 枚举：
+
+```text
+distinct
+superseded
+exception
+subject-merged
+```
+
+要求：
+
+* 至少引用两个 Entry IDs，排序 canonical。
+* `distinct` 表示 reviewer 明确确认 entries 管理不同 invariant。
+* `superseded` 必须与 Supersedes/Superseded-By 一致。
+* `exception` 必须与合法 Exception-To 一致。
+* `subject-merged` 必须与 Subject registry `Merged-Into` 一致。
+* Record 必须带 admissible Evidence。
+* 不允许 duplicate active reconciliation identity。
+* 新的后续修改或 relation change 可以重新触发 REVIEW。
+* v0.11 验证手工 record，并提供 preview；record apply 推迟到 v0.12。
+
+### 7.5 `check --conflicts`
 
 新增：
 
@@ -661,13 +787,13 @@ memory-custodian check --conflicts
 * invalid or broken `Exception-To`
 * duplicate active Canonical-Ref
 * alias simultaneously owned by multiple active Subjects
-* subject registry entry missing or inactive
+* Subject registry entry missing、inactive 或 merged
 * managed hard-memory entry missing Subject/Facet
-* merged Subject 仍被新 active entry 引用
 * project/area overlap without explicit exception
-* exact identity owner没有 supersede relation但存在多个 active entries
+* invalid reconciliation record
+* reconciliation record inconsistent with Supersedes、Exception-To 或 Subject merge
 
-固定结果至少包括：
+固定结果：
 
 ```text
 CLEAR
@@ -676,28 +802,29 @@ CONFLICT
 INVALID
 ```
 
-建议 findings：
+Stable findings 至少包括：
 
 ```text
 MC-CONFLICT-001  Multiple active owners for one structural identity
 MC-CONFLICT-002  Project/area overlap requires explicit exception review
 MC-CONFLICT-003  Duplicate active Canonical-Ref
 MC-CONFLICT-004  Alias owned by multiple active Subjects
-MC-CONFLICT-005  Subject reference missing or inactive
+MC-CONFLICT-005  Subject reference missing, inactive, or merged
 MC-CONFLICT-006  Invalid Exception-To relation
 MC-CONFLICT-007  Managed hard-memory entry lacks Subject or Facet
-MC-CONFLICT-008  Merged Subject still referenced as active identity
+MC-CONFLICT-008  Invalid or inconsistent reconciliation record
+MC-CONFLICT-009  Matched areas expose overlapping Subject/Facet ownership
 ```
 
 行为：
 
 * `CONFLICT` 或 `INVALID` 返回非零 exit。
 * `REVIEW` 在普通 inspection 中允许 exit 0，但必须清晰显示。
-* 不自动修改 entry 或 registry。
+* 不自动修改 entry、registry 或 reconciliation record。
 * 不输出“semantically consistent”。
-* `check --conflicts` 的结果模型必须供 `read --explain` 和 v0.12 audit 复用。
+* 结果模型必须供 `read --explain` 与 v0.12 unified audit 复用。
 
-### 7.5 Strict read 与 conflict status
+### 7.6 Strict read 与 conflict status
 
 普通 `read` 除 routing completeness 外，必须显示：
 
@@ -708,26 +835,19 @@ Conflict status: CLEAR / REVIEW / CONFLICT / INVALID
 要求：
 
 * 当前 context pack 命中 deterministic conflict 时，不能把两个 active owners 当作同时有效指令。
-* 普通 inspection 可以输出 metadata 和安全 baseline，但必须标记：
-  * `Context pack contains unresolved active-memory conflict`
-* `--strict-routing` 同时执行当前-memory structural conflict gate：
+* 普通 inspection 可以输出 metadata 与安全 baseline，但必须标记 `Context pack contains unresolved active-memory conflict`。
+* `--strict-routing` 同时执行 matched-context structural conflict gate：
   * CLEAR：按 routing status 处理。
-  * REVIEW：输出 warning；若是 matched project/area overlap，substantial work 应先 reconciliation。
+  * REVIEW：输出 warning；matched project/area 或 multi-area overlap 时 substantial work 应先 reconciliation。
   * CONFLICT：exit 2，`Context pack not approved for substantial work`。
   * INVALID：exit 2。
-* Explain 显示冲突 Entry IDs、Subject ID、Facet、Scope 和 finding code。
+* Explain 显示 Entry IDs、Subject ID、Facet、Scope 和 finding code。
 * 不重复 hard-forgotten topic。
-* 不根据时间戳自动选择其中一条加载。
+* 不根据时间戳自动选择 winner。
 
-### 7.6 Merge-aware audit
+### 7.7 Merge-aware read-only review
 
-Git 是可选增强。新增：
-
-```bash
-memory-custodian audit --merge-base origin/main
-```
-
-或在 v0.11 text-first 阶段：
+v0.11 不创建正式 `audit` namespace。使用：
 
 ```bash
 memory-custodian check --conflicts --merge-base origin/main
@@ -735,71 +855,40 @@ memory-custodian check --conflicts --merge-base origin/main
 
 行为：
 
-1. 若 Git 不可用或 ref 无效：
+1. Git 不可用或 ref 无效：
    * 不影响普通 `check --conflicts`。
    * 输出 `merge review unavailable`。
-   * 返回明确环境状态，不伪装为 conflict-free。
-2. 计算当前 HEAD 与目标 ref 的 merge base。
-3. 分别收集 merge base 之后两侧对以下内容的新增、修改、supersede、删除：
-   * `subjects.md`
-   * `decisions.md`
-   * `constraints.md`
-   * `do-not-use.md`
-   * `areas/*.md`
-4. 只分析完整 semantic entries 和 registry units，不做逐行语义拼接。
-5. 产生：
-   * deterministic conflicts
-   * subject registry collisions
-   * concurrent hard-memory reconciliation reviews
-   * missing relation reviews
+   * 不伪装为 conflict-free。
+2. 计算 current HEAD 与目标 ref 的 merge base。
+3. 收集 merge base 后两侧对 `subjects.md`、managed hard-memory files、`areas/*.md` 与 `reconciliations.md` 的完整 semantic-unit changes。
+4. 不做逐行语义拼接或 fuzzy text matching。
+5. 产生 deterministic conflicts、registry collisions、concurrent hard-memory REVIEW 与 missing-resolution REVIEW。
 
 Deterministic findings：
 
 * 两侧创建相同 Canonical-Ref 的不同 Subject ID。
 * 两侧创建相同 normalized alias 的不同 Subject ID。
 * 两侧为同一 Scope+Subject+Facet 创建不同 active owner。
-* 一侧 supersede 某 entry，另一侧仍基于旧 entry 创建 active relation。
-* 一侧 merge Subject，另一侧继续引用被合并 Subject。
+* 一侧 supersede 某 entry，另一侧继续建立基于旧 entry 的 active relation。
+* 一侧 merge Subject，另一侧继续以 merged Subject 建立 active identity。
 
 Review findings：
 
 * 两侧都在同一 managed hard-memory file 中新增 active entries，但 identity 不同。
-* 两侧都修改同一 Subject 的不同 Facet，且没有 `Related` 或 process acknowledgement。
+* 两侧都修改同一 Subject 的不同 Facet，且没有有效 reconciliation record。
 * 两侧创建没有 Canonical-Ref、exact alias 不同的新 custom Subjects。
 * 一侧新增 project constraint，另一侧新增可能受其覆盖的 area constraint。
-* 两侧 Evidence 指向互相变化的 authoritative files。
+* 两侧 Evidence 指向在另一侧发生变化的 authoritative files。
 
-这些 REVIEW finding 不断言内容矛盾。它们只表示：
+这些 REVIEW finding 只表示：
 
 ```text
 Concurrent hard-memory changes require semantic reconciliation.
 ```
 
-### 7.7 Reconciliation acknowledgement
+### 7.8 Subject merge inventory 与 preview
 
-Merge-aware REVIEW 不能仅靠时间流逝消失。提供显式、可审查的 resolution artifact，推荐使用：
-
-```text
-Reconciled-With: <ENTRY_ID>
-Reconciliation: distinct | superseded | exception | subject-merged
-```
-
-或独立 reconciliation record。实现时选择一种规范性表示，并满足：
-
-* 双方 Entry IDs 可追溯。
-* resolution 类型来自枚举。
-* `distinct` 表示 reviewer 明确确认两者管理不同 invariant。
-* `superseded` 必须与 Supersedes relation 一致。
-* `exception` 必须与 Exception-To 一致。
-* `subject-merged` 必须与 Subject merge 结果一致。
-* Reconciliation mutation preview-first。
-* 不能使用空字符串或任意 prose 作为唯一 acknowledgement。
-* Evidence 或 `user-confirmed` 记录 reviewer 依据。
-* 新的后续修改可以重新触发 review。
-
-### 7.8 Subject merge
-
-新增：
+新增 preview-only workflow：
 
 ```bash
 memory-custodian subject merge MC-SUBJ-source \
@@ -809,49 +898,46 @@ memory-custodian subject merge MC-SUBJ-source \
 Preview 必须列出：
 
 * source 与 target registry units
-* 所有引用 source 的 active、candidate entries
-* superseded 与 archive 中的 historical references inventory，但不计划机械重写
-* 将更新的 files
-* alias/canonical-ref collision
-* relation changes
+* 所有引用 source 的 current active 与 candidate entries
+* superseded 与 archive historical-reference inventory，但不计划机械重写
+* future current-reference mutations
+* alias/Canonical-Ref collisions
 * resulting conflict identities
+* required reconciliation records
 * blockers
 * Plan ID
 
-Apply：
+v0.11 不接受 `--apply`。输出必须明确：
 
-* 使用 mutation lock。
-* 使用 Plan ID 和 stale digest guard。
-* 将 current active 与 candidate 引用更新到 target。
-* source 标记 `Status: merged`。
-* 添加 `Merged-Into: <TARGET_ID>`。
-* target 可添加 `Merged-From: <SOURCE_ID>`。
-* 不删除 source audit history。
-* 不机械重写 superseded 或 archive historical entries；历史查询通过 source Subject 的
-  `Merged-Into` 解析 current canonical identity，并同时显示 historical identity。
-* 若合并后产生多个 active Scope+Subject+Facet owner，阻止 apply，要求先 supersede、exception 或 distinct reconciliation。
-* 不自动选择 target。
-* 不根据较早/较新时间决定 target。
-* Hard forget/purge 的 subject privacy rules 继续适用。
+```text
+Transactional Subject merge apply requires Protocol 0.8.
+```
+
+Protocol 0.8 apply 语义预先固定为：
+
+* 只更新 current active 与 candidate references。
+* source 标记 `Status: merged` 并添加 `Merged-Into`。
+* target 可添加 `Merged-From`。
+* 不机械重写 superseded 或 archive historical entries。
+* historical query 通过 source Subject 的 `Merged-Into` 解析 current canonical identity，并同时显示 historical identity。
+* 合并后若产生多个 active structural owners，阻止 apply。
 
 ### 7.9 CI 与团队工作流
 
-推荐但不强制 Git 成为运行条件：
+推荐但不强制 Git 成为核心运行条件：
 
 ```bash
 memory-custodian check --conflicts
-memory-custodian audit --merge-base origin/main
+memory-custodian check --conflicts --merge-base origin/main
 ```
 
 在启用 MemoryCustodian 的团队 CI 中：
 
-* 当前-memory deterministic `CONFLICT/INVALID` 必须失败。
+* current-memory `CONFLICT/INVALID` 必须失败。
 * merge-aware deterministic conflict 必须失败。
 * merge-aware REVIEW 是否阻止合并由项目 policy 决定；新模板 SHOULD 默认要求 reconciliation。
 * CI 输出不得声称静态检查等同完整语义证明。
-* README 必须说明短文件和时间戳只提高 reviewability，不构成矛盾检测。
-
----
+* README 必须说明短文件和时间戳只提高 reviewability，不构成 contradiction detection。
 
 ## 八、Local Overlay
 
@@ -876,7 +962,7 @@ Local overlay 不得：
 * 存储 secrets
 * 变成第二个 shared manifest
 
-### 8.2 位置
+### 8.2 位置与权限
 
 使用 v0.10 state root：
 
@@ -892,21 +978,35 @@ preferences.md
 profiles/
 ```
 
-不得放入：
+不得放入项目 repo、`docs/memory/` 或 `.git/`。
+
+要求：
+
+* Local directory 在 POSIX 上使用 `0700`。
+* Local files 使用 private atomic write 与 `0600`。
+* 不跟随 local path symlink 逃逸 state project directory。
+* Local path 由 `project_id` namespace 定位，但 `project_id` 不是 authentication secret。
+
+### 8.3 Root binding
+
+为了避免复制相同 `project_id` 的另一 repository 自动读取本机已有 overlay，增加 repo 外 binding：
 
 ```text
-项目 repo
-docs/memory/
-.git/
+<state-root>/projects/<project_id>/bindings.json
 ```
 
-Local path 由 `project_id` 绑定，不由可移动的 project path 作为唯一身份。
+要求：
 
-### 8.3 Local manifest
+* 记录用户显式批准过的 normalized project roots。
+* 新 root 首次访问已有 overlay 时状态为 `UNBOUND`，默认不加载 local content。
+* CLI 输出 `Local overlay status: UNBOUND` 并要求显式 `local link`。
+* 项目正常移动后可通过显式 link 更新 binding。
+* 同一 project_id 出现在多个 roots 时至少为 REVIEW，不静默共享。
+* Binding 不是防御同一用户账户下恶意进程的安全沙箱，只是防止意外 cross-repository reuse。
+
+### 8.4 Local manifest
 
 Local manifest 只能声明 local modules，不得重新定义 shared routes。
-
-示例：
 
 ```md
 # Local Memory Overlay
@@ -924,22 +1024,26 @@ Local manifest 只能声明 local modules，不得重新定义 shared routes。
 要求：
 
 * project_id 必须与 shared manifest 一致。
-* Local overlay 缺失时 read 正常工作。
-* Local overlay corrupt 时 shared context 仍可生成，但必须分别输出：
+* Local overlay 缺失时 shared read 正常工作。
+* Local overlay corrupt 时分别输出：
   * `Routing completeness: INCOMPLETE`
   * `Local overlay status: REVIEW`
-  * 明确的 local failure reason
+  * 明确 local failure reason
+* Local overlay unbound 时分别输出：
+  * shared routing completeness 基于 shared inputs正常计算
+  * `Local overlay status: UNBOUND`
+  * local content 不加载
 * Local modules 只能使用 `Scope: local-user` 或 `Scope: local-machine`。
 * Shared entries 不能使用 local scope。
-* Local overlay 不能引用 repo 外的任意文件作为 runtime module。
+* Local manifest 只能引用当前 overlay directory 内规范路径。
 
-### 8.4 Precedence
+### 8.5 Precedence
 
 固定优先级：
 
-1. System、current user、safety 和 permission boundaries
+1. System、current user、safety 与 permission boundaries
 2. Shared project hard constraints 与 do-not-use
-3. Shared decisions and rules
+3. Shared decisions 与 rules
 4. Local preferences/profiles
 5. Current task convenience
 
@@ -949,15 +1053,16 @@ Local manifest 只能声明 local modules，不得重新定义 shared routes。
 * Local preference 不能解除 shared constraint。
 * Local profile 与 shared rule 冲突时 shared rule 优先。
 * 冲突必须在 `read --explain` 中显示 warning。
-* `--no-local` 必须产生完全不包含 local overlay 的 shared context。
+* `--no-local` 必须产生完全不包含 local overlay 的可复现 shared context。
 
-### 8.5 CLI
+### 8.6 CLI
 
 至少支持：
 
 ```bash
 memory-custodian local status
 memory-custodian local enable
+memory-custodian local link
 memory-custodian local add "Prefer concise output." \
   --type preference \
   --evidence user-confirmed
@@ -965,20 +1070,15 @@ memory-custodian local reset
 memory-custodian read --no-local
 ```
 
-要求：
+v0.11 行为：
 
-* `local reset` preview-first。
-* 需要 v0.10 Plan ID 与 mutation lock。
-* 只能删除当前 project_id 的 local overlay。
-* 不影响 shared memory。
-* 不影响其他项目。
+* `local status`、`enable`、`link` 与 `add` 可执行，但必须使用 secure state helper 与 project mutation guard。
+* `local reset` 默认生成 preview 与 ErasureScope，不接受 `--apply`。
+* 输出明确：`Transactional local reset apply requires Protocol 0.8.`
 * Security/privacy scan 对 local 内容同样适用。
 * Local secrets 仍然拒绝或 ERROR，不因 repo 外而被视为安全。
-* `local reset` 使用统一 ErasureScope model。
-* `local reset` 必须显示：只删除当前机器、当前 project_id 的 managed overlay。
-* `local reset` 不得声称影响其他机器、同步目录、系统备份或用户自行复制的文件。
-
----
+* Local reset preview 只描述当前机器、当前 project_id 的 overlay。
+* 不得声称影响其他机器、同步目录、系统备份或用户自行复制的文件。
 
 ## 九、ID-based Operations
 
@@ -997,17 +1097,19 @@ memory-custodian promote MC-INBOX-... \
 
 要求：
 
-* ID lookup 跨 canonical shared files、areas 和 inbox。
+* ID lookup 跨 canonical shared files、areas、inbox 与 reconciliation records。
 * 默认不搜索 archive，除非 `--include-archive`。
-* 默认不搜索 local，除非 `--local`。
+* 默认不搜索 local，除非 `--local` 且 root 已绑定。
 * Duplicate ID 为 ERROR。
-* `show` 显示完整 canonical entry 与 source path。
-* `forget --id` 比 topic matching 更优先、更精确。
-* `promote` 创建新的 active ID，并更新双向 promotion relation。
-* 所有 multi-file mutation 使用 v0.10 lock、Plan ID 和 stale digest guard。
-* Hard forget/purge 的输出不得泄露敏感 topic。
-* Topic forget、`forget --id` 和 purge 必须输出统一 erasure scope。
-* Legacy unit 可列出，但没有伪造 ID；使用 file/unit reference。
+* `show` 显示完整 canonical entry、source path 与 current canonical Subject identity。
+* Historical entry 引用 merged Subject 时，同时显示 historical Subject ID 与 current target。
+* `forget --id` 比 topic matching 更优先、更精确，并复用现有 forget lock/Plan/stale guard。
+* Hard forget/purge 的 public output 与 public Plan 不得泄露敏感 topic。
+* Topic forget、`forget --id` 与 purge 输出统一 ErasureScope。
+* Legacy unit 可以列出，但没有伪造 ID；使用 stable file/unit reference。
+* `promote` 在 v0.11 只生成完整 preview：new active ID、candidate status transition、双向 relation、所有 target files 与 Plan ID。
+* `promote --apply` 推迟到 v0.12 transaction journal。
+
 ## 十、Erasure Scope 与可选 Git History Inspection
 
 v0.11 必须将 v0.10 的 `ErasureScope` contract 覆盖到所有相关删除入口：
@@ -1017,7 +1119,7 @@ memory-custodian forget <topic>
 memory-custodian forget --id <ENTRY_ID>
 memory-custodian forget ... --mode hard
 memory-custodian forget ... --mode purge
-memory-custodian local reset
+memory-custodian local reset  # preview-only in Protocol 0.7
 ```
 
 ### 10.1 统一 ErasureScope
@@ -1039,9 +1141,9 @@ history_check_status
 * 同一操作的 text output 与内部 result model 一致。
 * Topic forget 与 ID forget 不得定义不同的删除承诺。
 * `purge` 只将 `managed_archive` 设为 true；仍然保持 `git_history_modified: false`。
-* `local reset` 只将当前机器、当前 project_id 的 `local_overlay` 设为 true。
+* `local reset` preview 只将当前机器、当前 project_id 的 `local_overlay` 标记为 planned scope；apply 由 Protocol 0.8 提供。
 * 所有操作固定 `distributed_copies_revoked: false`。
-* Hard forget/purge 不在 output、plan、reconciliation log 或 subject diagnostics 中重复 forgotten topic。
+* Hard forget/purge 不在 public output、public plan、reconciliation record 或 subject diagnostics 中重复 forgotten topic；internal execution selector 不得被直接序列化为 public result。
 
 ### 10.2 可选 Git history exposure inspection
 
@@ -1116,23 +1218,21 @@ Removed from all clones and forks.
 
 ---
 
-## 十一、Reachability、Freshness 与 Conflict Audit
+## 十一、Routing、Reachability、Freshness 与 Conflict Checks
 
-v0.11 可以先通过 `check` 子命令提供，v0.12 再统一到正式 `audit`：
+v0.11 统一使用 `check` namespace；正式 `audit` namespace 由 v0.12 引入。
 
 ```bash
 memory-custodian check --routing
 memory-custodian check --reachability
 memory-custodian check --freshness
 memory-custodian check --conflicts
-memory-custodian audit --merge-base origin/main
+memory-custodian check --conflicts --merge-base origin/main
 memory-custodian subject list
-memory-custodian subject merge MC-SUBJ-old --into MC-SUBJ-new
-memory-custodian check --conflicts
-memory-custodian audit --merge-base origin/main
+memory-custodian subject merge MC-SUBJ-old --into MC-SUBJ-new  # preview-only
 ```
 
-### 11.1 Routing audit
+### 11.1 Routing check
 
 至少检测：
 
@@ -1140,18 +1240,20 @@ memory-custodian audit --merge-base origin/main
 * Duplicate module declaration
 * Unsafe module path
 * Invalid task name
-* Rule 没有 tasks 或 explicit activation
-* Profile 非 explicit activation
+* Invalid activation/metadata compatibility
+* Rule 没有 task 或 explicit-only activation
+* Profile 不是 explicit-only
 * Area 没有 paths 且不是 explicit-only
 * Invalid glob
 * Contradictory metadata
 * Required module missing
 * Root constraints 未在 substantial route 可达
-* Adapter 内置第二套路由表
 
-### 11.2 Reachability audit
+Adapter 是否内置第二套路由表属于 repository static contract check，不属于普通用户项目的 runtime `check --routing`。
 
-必须建立静态 reachability graph：
+### 11.2 Reachability check
+
+建立静态 reachability graph：
 
 ```text
 canonical tasks
@@ -1167,32 +1269,23 @@ Finding：
 * active project entry 从任何 normal route 都不可达：WARNING
 * active project-scoped constraint 不可达：ERROR
 * active area constraint 的 area 没有 path 或 explicit activation：ERROR
-* optional module enabled 但没有任何 activation path：ERROR
+* optional module enabled 但没有 activation path：ERROR
 * superseded entry 不作为 active reachability requirement
-* candidate 不属于 normal reachability
-* archive entry 不属于 active reachability
+* candidate、archive 与 historical reconciliation record 不属于 normal reachability
 
-不得：
+不得自动移动条目、添加 glob、提升为 always-load 或根据正文猜测 area。
 
-* 自动移动条目
-* 自动添加 glob
-* 自动把 module 改为 always-load
-* 根据条目文本猜测它应属于哪个 area
-
-### 11.3 Freshness audit
+### 11.3 Freshness check
 
 Evidence-aware 检查：
 
-* `repo:path@revision` 当前 Git revision 不一致时，若 Git 可用则 WARNING。
-* `repo:path`、`doc:path`、`test:path` 不存在时 ERROR 或 WARNING，按 Evidence admissibility 规则处理。
+* `repo:path@revision` 与当前 Git revision 不一致时，若 Git 可用则 WARNING。
+* `repo:path`、`doc:path`、`test:path` 不存在时按 Evidence admissibility 报 ERROR/WARNING。
 * issue/pr Evidence 不联网验证。
-* 长期未更新的 entry 可以基于记录时间提示 REVIEW，但不能仅因年龄自动判 stale。
-* Superseded relation 指向不存在 entry 时 ERROR。
-* Subject、Facet、Exception-To、Merged-Into 和 reconciliation relations 参与 conflict/freshness review。
+* 长期未更新的 entry 可以提示 REVIEW，但不能仅因年龄自动判 stale。
+* Broken Supersedes、promotion、Exception-To、Subject merge 或 reconciliation reference 为 ERROR。
 * Freshness finding 不自动改写 Evidence。
-* Git 不可用时显示 INFO，不阻塞核心功能。
-
----
+* Git 不可用时显示 INFO，不阻塞非 Git 核心功能。
 
 ## 十二、Adapters 与 Agent Workflow
 
@@ -1200,17 +1293,19 @@ Evidence-aware 检查：
 
 1. 定位 `manifest.md`。
 2. 识别 canonical task。
-3. 收集或声明 touched paths。
-4. 调用或遵循同一 shared routing implementation。
+3. 在 implementation、debugging 与 review 前收集 touched paths；高层 planning 尚无 path 时显式提供 area，或接受 INCOMPLETE inspection。
+4. 调用同一 shared routing implementation。
 5. 在 substantial work 前检查 routing completeness。
-6. INCOMPLETE 时补齐 paths/areas，或明确向用户报告 scope 不完整。
+6. INCOMPLETE 时补齐 paths/areas，或明确报告 scope 不完整；可以查看安全 baseline，但不得开始 substantive modification。
 7. 遵守 trust boundary。
 8. 不直接加载整个 `docs/memory/`。
 9. 不自行维护第二套路由表。
 10. meaningful decision 后按 Evidence admission 更新 memory。
-11. 创建 hard-memory entry 前复用现有 Subject ID，不凭自由文本创建第二个 identity。
-12. merge/rebase 前运行 current-memory conflict check；Git 可用时运行 merge-aware review。
-13. 遇到 REVIEW 时显式建立 distinct、supersede、exception 或 subject-merge resolution。
+11. 创建 hard-memory entry 前复用 existing Subject ID，不凭自由文本创建第二个 identity。
+12. merge/rebase 前运行 current-memory conflict check；Git 可用时运行 merge-aware read-only review。
+13. 遇到 REVIEW 时说明需要 `distinct`、`superseded`、`exception` 或 `subject-merged` resolution；v0.11 不伪装已自动完成 transactional reconciliation。
+14. 对 forgetting/local reset 使用统一 ErasureScope wording，不声称修改 Git history 或撤回 distributed copies。
+15. Local overlay 未绑定时不得自动读取。
 
 必须更新：
 
@@ -1227,8 +1322,7 @@ Skill 不得指示 agent：
 * 在没有 paths 时假设没有 area relevant
 * 将 partial pack 描述为完整
 * 将 local preferences 写入 shared repo
-
----
+* 在 v0.11 直接执行 Subject merge、reconciliation、Exception-To 或 promotion apply
 
 ## 十三、协议迁移
 
@@ -1237,39 +1331,33 @@ Skill 不得指示 agent：
 ### 13.1 Migration 必须做到
 
 * Preview-first。
-* 使用 v0.10 Plan ID。
-* 使用 mutation lock。
-* 保留 `project_id`。
-* 保留所有 Entry IDs、Evidence 和 relations。
-* 保留 custom task routes。
-* 保留 enabled optional modules。
-* 添加 routing schema metadata。
-* 不自动创建 local overlay。
+* 使用统一 project mutation guard、Plan ID 与 stale digest guard。
+* 保留 `project_id`、Entry IDs、Subject IDs、Evidence 与已有合法 relations。
+* 保留 custom route source text、enabled optional modules 与 human-readable descriptions。
+* 添加 routing/conflict schema metadata。
+* 不自动创建 local overlay 或 root binding。
 * 不自动添加 area globs。
-* 不自动改变 custom route semantics。
 * 不自动把 root constraints 加入 custom routes。
 * 不自动将 shared preferences 移动到 local。
-* 保留 v0.10 `subjects.md`、Subject IDs、Canonical-Refs 与 aliases。
-* 不自动合并 legacy or duplicate Subjects。
-* 不根据 entry 标题、正文或时间戳推断 Subject。
-* 添加 conflict schema metadata。
-* 对缺 Subject/Facet 的 managed legacy entries输出 manual assignment checklist。
-* 不丢失 human-readable module descriptions。
+* 不自动合并 legacy 或 duplicate Subjects。
+* 不根据 entry title、body 或 timestamp 推断 Subject/Facet。
+* 对缺 Subject/Facet 的 managed entries输出 manual assignment checklist。
+* 不声称保留旧 agent-inferred routing behavior；缺 machine route 时只能保留 source description 与 explicit reachability。
 
 ### 13.2 Optional module migration
 
 对旧 optional index：
 
 * 可识别 module path 时保留。
-* 现有自然语言 trigger 保留为 description。
-* 缺 machine-readable route metadata 时：
-  * area：`Manual path mapping required`
-  * rule：`Manual task mapping required`
-  * profile：可迁移为 `activation: explicit`
-* 缺 metadata 不阻塞 protocol migration，但：
-  * `check --routing` 报 WARNING 或 ERROR
-  * substantial read 可能为 INCOMPLETE
-* 不从文件内容、目录名称或 description 自动推断 matcher。
+* 现有 natural-language trigger 保留为 `description`。
+* 不从 description、文件内容或目录名称推断 automatic matcher。
+* 缺 machine-readable metadata 时迁移为安全合法的 explicit-only：
+  * rule：`activation: explicit-only`
+  * profile：`activation: explicit-only`
+  * area：`activation: explicit-only`
+* 输出 `Manual automatic-route mapping required.`
+* 模块仍可通过显式 `--rule`、`--profile` 或 `--area` 到达。
+* Migration 不得将 grammar-valid 项目留在 route-invalid 状态。
 
 ### 13.3 Default template migration
 
@@ -1277,9 +1365,9 @@ Skill 不得指示 agent：
 
 * global constraints safety baseline
 * canonical task routes
-* machine-readable rule tasks
-* explicit profiles
-* path-routed example areas 仅在 enable 时写入用户指定 paths，不能默认猜测项目结构
+* machine-readable rule activation
+* explicit-only profiles
+* path-routed areas only after user-supplied paths
 
 `memory-custodian enable area/frontend` 应要求：
 
@@ -1287,11 +1375,70 @@ Skill 不得指示 agent：
 --path 'frontend/**'
 ```
 
-或创建 explicit-only area，并明确提示尚未配置 automatic matching。
+或者创建 `activation: explicit-only` area，并明确提示尚未配置 automatic matching。
 
----
+## 十四、实施阶段、门槛与仓库区域
 
-## 十四、需要修改的仓库区域
+### Phase 0 — Protocol 0.6 prerequisites
+
+* unified project mutation guard
+* lock identity handoff
+* structured entry validator
+* secure state directory/file helpers
+* canonical repo-relative Plan paths and path-like arguments
+* internal execution plan / public plan separation
+* hard/purge public selector redaction
+
+### Phase 1 — Routing core
+
+* canonical task normalization
+* normative manifest module parser
+* activation compatibility validation
+* cross-platform glob matcher
+* routing result/disposition model
+* completeness calculator
+
+### Phase 2 — Read and explain
+
+* complete module enumeration
+* stable reason codes
+* entry-level budget omissions
+* strict-routing gate
+* matched-context conflict status
+
+### Phase 3 — Local overlay
+
+* secure state layout
+* local manifest
+* root binding
+* shared/local precedence
+* local status/enable/link/add
+* reset preview and ErasureScope boundary
+
+### Phase 4 — Read-only quality and conflict analysis
+
+* ID index/list/show/forget
+* reachability
+* freshness
+* current conflict graph
+* reconciliation-record validation
+* merge-aware read-only review
+* Subject merge inventory and preview
+
+### Phase 5 — Migration、adapters、docs 与 release evidence
+
+* Protocol 0.6 → 0.7 migration
+* adapter contract updates
+* templates/examples/evals/dogfood
+* release notes and version drift checks
+
+每个 phase 必须满足：
+
+* phase unit tests pass
+* all previous-phase tests remain green
+* dogfood fixture remains readable
+* no version bump or release claim before all phases pass
+* no new third-party runtime dependency
 
 至少检查并按需要修改：
 
@@ -1321,30 +1468,28 @@ adapters/
 
 建议内部职责：
 
+* Project mutation guard
+* Secure state writer
+* Public/internal Plan representations
 * Routing input normalization
 * Manifest module declaration parser
 * Cross-platform path/glob matcher
 * Routing result/disposition model
 * Routing completeness calculator
 * Explain renderer
-* Entry index
+* Entry/Subject/reconciliation indexes
 * Reachability graph
 * Freshness findings
-* Erasure scope and history-exposure findings
-* Local overlay state
+* Local overlay state and root binding
 * Shared/local precedence
 * Protocol 0.6 → 0.7 migration
-* Subject registry index
 * Structural conflict graph
 * Scope overlap evaluator
-* Exception relation validation
+* Exception/reconciliation validation
 * Merge-base change collector
-* Merge reconciliation finding model
-* Subject merge planner
+* Subject merge preview planner
 
-如现有结构已有类似模块，应扩展现有模块，不要在 adapter 或 `main.py` 中复制 routing logic。
-
----
+如现有结构已有类似模块，应扩展现有模块，不要在 adapter 或 `main.py` 中复制逻辑。
 
 ## 十五、测试要求
 
@@ -1390,12 +1535,12 @@ adapters/
 * Missing or merged Subject reference。
 * Conflict status CLEAR/REVIEW/CONFLICT/INVALID。
 * Strict read blocks deterministic conflict。
-* Subject merge updates all references atomically。
+* Subject merge preview covers current active/candidate mutations, preserves superseded/archive historical references, and resolves historical identity through `Merged-Into`。
 * Topic forget、ID forget 与 purge 生成相同 ErasureScope semantics。
 * Git history check statuses and wording。
 * Git unavailable 不显示 PASS。
 * `no-reachable-copy-detected` 不被渲染为 complete erasure。
-* Local reset 仅影响当前机器的 current-project overlay。
+* Local reset preview 仅描述当前机器的 current-project overlay；transactional apply 在 Protocol 0.8 测试。
 
 ### 15.2 Integration tests
 
@@ -1422,12 +1567,12 @@ Fixtures 至少包括：
 * Two branches create custom Subjects with different names。
 * One branch supersedes while the other extends old entry。
 * Project constraint and area exception without relation。
-* Reconciled distinct entries。
-* Subject merge creates downstream owner conflict。
+* Valid and invalid independent reconciliation records。
+* Subject merge preview detects downstream owner conflict and refuses to claim apply support。
 * Hard forget removes active memory while committed history remains detectable。
 * Purge removes managed archive but not Git history。
 * Git unavailable history-check fixture。
-* Local reset leaves a simulated second-machine overlay untouched。
+* Local root binding prevents an unbound second repository from reading the current-machine overlay。
 
 验证：
 
@@ -1457,9 +1602,9 @@ Fixtures 至少包括：
 12. Agent does not claim automatic semantic relevance.
 13. Agent reuses existing Subject ID instead of inventing a free-text key。
 14. Exact structural conflict blocks substantial work。
-15. Concurrent hard-memory changes produce reconciliation review。
+15. Concurrent hard-memory changes produce reconciliation review without automatic apply。
 16. Agent does not use timestamps to pick a winner。
-17. Subject merge is explicit and preview-first。
+17. Subject merge is explicit、preview-first and apply-deferred to Protocol 0.8。
 18. Agent accurately distinguishes managed-memory removal from Git-history erasure。
 19. Agent treats `no-reachable-copy-detected` as limited evidence, not proof。
 20. Agent does not claim local reset affects other machines or backups。
@@ -1518,7 +1663,7 @@ Fixtures 至少包括：
 * conflicting Entry IDs
 * Subject/Facet/Scope
 * merge reconciliation warnings when explicitly requested
-* erasure scope for forget/local-reset results
+* erasure scope for forget results and local-reset preview
 * history-check status and bounded interpretation when requested
 
 错误输出：
@@ -1552,7 +1697,7 @@ README 新增或更新：
 * Why short files and timestamps help review but do not resolve contradictions
 * Subject registry, aliases and canonical references
 * `check --conflicts`
-* optional `audit --merge-base`
+* optional `check --conflicts --merge-base`
 * explicit supersede、exception、distinct reconciliation 与 subject merge
 * Forgetting erasure scope and optional Git history exposure inspection
 * Local reset boundary across machines and backups
@@ -1614,7 +1759,7 @@ Release notes 必须真实描述：
 * reachability/freshness checks
 * ID operations
 * canonical Subject identity and exact structural conflict detection
-* merge-aware reconciliation review
+* merge-aware read-only reconciliation review
 
 不得描述为 automatic semantic retrieval、complete contradiction detection 或 automatic conflict resolution。
 
@@ -1626,70 +1771,66 @@ Release notes 必须真实描述：
 
 只有满足以下全部条件才算完成：
 
-### Protocol
+### Protocol prerequisites
 
-* Package version 为 0.11.0。
-* Protocol version 为 0.7。
-* Entry schema 仍为 1。
-* Subject schema version 为 1。
-* Conflict schema version 为 1。
-* Routing schema version 为 1。
-* Local overlay schema version 为 1。
-* Protocol 0.6 项目仍可安全读取并迁移。
-* 不发生 protocol downgrade。
+* Package version 为 0.11.0，Protocol version 为 0.7。
+* Entry、Subject、Conflict、Routing 与 Local Overlay schema versions 均符合本文 authority。
+* Unified project mutation guard 已覆盖 init/repair/migrate/enable 与 compatibility writes。
+* Manifest `project_id` 与 permanent lock identity 不会分叉。
+* Structured entries 拒绝 duplicate fields 与 missing typed bodies。
+* Private state permissions 与 symlink protections 有测试。
+* Public Plan 不泄露 hard/purge topic，path-like values 使用 canonical repo-relative representation。
+* Protocol 0.6 项目仍可安全读取并迁移，不发生 downgrade。
 
 ### Routing
 
-* Manifest 仍是唯一 shared routing authority。
-* CLI 不执行自由文本 semantic relevance scoring。
+* Manifest 是唯一 shared routing authority。
+* CLI 不执行 free-text semantic relevance scoring。
 * Root constraints 对新模板 substantial tasks 默认加载。
-* Area routing 仅由 path matcher 或 explicit area 决定。
-* Rules 仅由 canonical task 或 explicit rule 决定。
-* Profiles 默认仅显式加载。
-* 每个 enabled module 都有唯一 disposition。
-* `read --explain` 列出 loaded 与 skipped 原因。
-* No-path substantial task 不静默显示 complete。
-* `--strict-routing` 对 incomplete/ambiguous scope 失败。
-* 相同 task、paths 与 explicit modules 产生确定结果。
-* `check --conflicts` 确定性检测 duplicate active owner、registry collision 和 invalid exception。
-* `read` 显示 conflict status。
-* `--strict-routing` 阻止 deterministic conflict 下的 substantial work。
-* Git 可用时，merge-aware audit 能区分 deterministic conflict 与 reconciliation review。
-* 异名且无 exact canonical metadata 的 Subject 不会被错误自动合并。
+* Area routing 只由 path matcher 或 explicit area 决定。
+* Rules 只由 canonical task 或 explicit rule 决定。
+* Profiles 默认 explicit-only。
+* 每个 enabled module 有唯一 module disposition。
+* Budget omission 使用独立 entry disposition。
+* `read --explain` 列出 loaded/skipped/missing/invalid 原因与 stable reason code。
+* No-path substantial task 不静默显示 COMPLETE。
+* `--strict-routing` 对 INCOMPLETE/AMBIGUOUS/INVALID 失败。
+* 相同 task、paths、manifest 与 explicit modules 产生确定结果。
 
-### Memory quality
+### Conflict detection and quality
 
-* Unreachable active hard constraint 被报告为 ERROR。
+* `check --conflicts` 检测 duplicate owner、registry collision、invalid exception 与 invalid reconciliation record。
+* `read` 显示 matched-context conflict status。
+* Strict read 阻止 deterministic conflict 下的 substantial work。
+* Merge-aware check 区分 deterministic conflict 与 reconciliation REVIEW。
+* 异名且无 exact canonical metadata 的 Subjects 不被自动合并。
+* Unreachable active project hard constraint 为 ERROR。
 * Candidate 不进入 normal context。
-* Superseded entries 不作为 active invariant。
+* Superseded/archive entries 不作为 active owner。
 * Freshness finding 不自动改写 memory。
-* 时间戳不作为冲突 precedence。
-* Subject rename 不改变 Subject ID。
-* Subject merge preview-first，并在产生 active owner conflict 时拒绝。
-* Explicit Exception-To 与 reconciliation relation 可审计。
-* Budget omission 显示 Entry IDs 或稳定 legacy references。
+* 时间戳不作为 conflict precedence。
+* Subject merge 只提供完整 inventory/preview，不接受 apply。
+* Exception-To、reconciliation record 与 Subject merge history 可审计。
 
 ### Local overlay
 
-* Local overlay 永远在 repo 外。
+* Local overlay 永远在 repo 外并使用 private state permissions。
 * Local project_id 与 shared project_id 一致。
+* Existing overlay 只对 explicitly bound roots 加载。
 * Local preference 不能覆盖 shared hard memory。
 * `--no-local` 产生可复现 shared context。
-* Local reset 不影响 shared memory 或其他项目。
 * Local content 同样经过 privacy/security checks。
-* Local reset 只影响当前机器当前 project_id 的 overlay，并准确报告该边界。
+* Local reset 只提供准确 preview；不声称影响其他机器、备份或 distributed copies。
 
 ### Tooling and documentation
 
-* ID-based list/show/forget/promote 可用。
-* Topic forget、ID forget、purge 与 local reset 使用统一 ErasureScope result。
-* Optional `--history-check` 只提供 bounded inspection，不修改 Git history。
-* `unavailable` 不被当作 PASS，`no-reachable-copy-detected` 不被当作不存在外部副本的证明。
-* 所有 forgetting 文案明确 distributed copies remain outside protocol control。
-* 所有 adapters 使用同一 routing implementation。
-* Adapter 不包含第二套路由表。
-* README、Skill、references、templates、examples、evals 和 dogfood 同步。
-* Release notes 不夸大 semantic capability。
-* 全部 unit、integration、determinism、migration、skill eval 和 repository checks 通过。
+* ID-based list/show/forget 可用；promotion/Subject merge/reconciliation/Exception-To apply 明确推迟到 v0.12。
+* Topic forget、ID forget、purge 与 local-reset preview 使用统一 ErasureScope。
+* Optional history check 只提供 bounded inspection，不修改 Git history。
+* `unavailable` 不被当作 PASS；`no-reachable-copy-detected` 不被解释为无外部副本。
+* 所有 adapters 使用同一 routing implementation，不包含第二套路由表。
+* README、Skill、references、templates、examples、evals 与 dogfood 同步。
+* Release notes 不夸大 semantic、transaction 或 erasure capability。
+* 全部 unit、integration、determinism、migration、skill eval、CI 与 repository checks 通过。
 * 没有新增第三方 runtime dependency。
 * 没有改变 local-first、plain-text、repo-native、minimal-context 的产品定位。
