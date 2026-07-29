@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import tempfile
 import uuid
 
@@ -74,6 +75,42 @@ def pending_project_id(command: str, project_root: Path, manifest_sha256: str) -
         raise ValueError(f"Invalid pending plan seed: {path}") from exc
 
 
+def pending_entry_suffixes(
+    command: str,
+    project_root: Path,
+    source_sha256: str,
+    keys: list[str],
+) -> tuple[dict[str, str], Path | None]:
+    """Create or reuse UUIDv4-derived suffixes for a preview/apply migration pair."""
+
+    if not keys:
+        return {}, None
+    key = pending_seed_key(command, project_root, source_sha256)
+    path = _writable_plan_dir() / f"{command}-{key}.json"
+    generated = {item: uuid.uuid4().hex[:8] for item in keys}
+    payload = json.dumps({"entry_suffixes": generated}, sort_keys=True) + "\n"
+    try:
+        descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except FileExistsError:
+        descriptor = None
+    if descriptor is not None:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(payload)
+    try:
+        values = json.loads(path.read_text(encoding="utf-8")).get("entry_suffixes")
+        if not isinstance(values, dict):
+            raise ValueError
+        result = {}
+        for item in keys:
+            value = values.get(item)
+            if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{8}", value):
+                raise ValueError
+            result[item] = value
+        return result, path
+    except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"Invalid pending entry ID seed: {path}") from exc
+
+
 def discard_pending_seed(path: Path | None) -> None:
     if path is None:
         return
@@ -92,6 +129,38 @@ class MutationPlan:
     mutations: tuple[TextMutation, ...]
     warnings: tuple[str, ...] = ()
     blockers: tuple[str, ...] = ()
+    context: dict[str, object] | None = None
+    budget_results: tuple[dict[str, object], ...] = ()
+
+    def _budget_results(self) -> list[dict[str, object]]:
+        if self.budget_results:
+            return list(self.budget_results)
+        from .protocol import budget_for, budget_state, estimate_tokens
+
+        results: list[dict[str, object]] = []
+        for mutation in self.mutations:
+            parent = mutation.path.parent.name
+            name = (
+                f"{parent}/{mutation.path.name}"
+                if parent in {"rules", "profiles", "areas"}
+                else mutation.path.name
+            )
+            limit = budget_for(name)
+            if limit is None:
+                continue
+            before_text = mutation.path.read_text(encoding="utf-8") if mutation.path.exists() else ""
+            before = estimate_tokens(before_text)
+            after = estimate_tokens(mutation.text)
+            results.append(
+                {
+                    "path": name,
+                    "before": before,
+                    "after": after,
+                    "limit": limit,
+                    "state": budget_state(after, limit),
+                }
+            )
+        return results
 
     def canonical(self) -> dict[str, object]:
         operations = []
@@ -113,6 +182,8 @@ class MutationPlan:
             "operations": operations,
             "warnings": list(self.warnings),
             "blockers": list(self.blockers),
+            "context": self.context or {},
+            "budget_results": self._budget_results(),
         }
 
     @property
@@ -140,4 +211,12 @@ def print_plan(plan: MutationPlan) -> None:
         print(f"- {warning}")
     if not plan.warnings:
         print("- none")
-    print("Estimated budget result: command-specific output above, or unchanged/not applicable.")
+    print("Estimated budget result:")
+    if canonical["budget_results"]:
+        for result in canonical["budget_results"]:
+            print(
+                f"- {result['path']}: {result['before']} -> {result['after']} tokens "
+                f"(limit {result['limit']}, state {result['state']})"
+            )
+    else:
+        print("- unchanged or not applicable")

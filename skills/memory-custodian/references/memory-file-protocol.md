@@ -12,6 +12,8 @@ candidate-only evidence.
 
 Status: active
 Scope: project
+Subject: MC-SUBJ-20260729-a1b2c3d4
+Facet: version-policy
 Evidence:
 - repo:pyproject.toml
 
@@ -43,8 +45,10 @@ Confirm with the user or an authoritative project document.
 Candidates never enter normal task context and compaction never promotes them automatically. Legacy freeform
 units remain readable after migration; their compatibility does not make them the recommended new-write format.
 
-Protocol 0.6 manifests include `entry_schema_version: 1`, a persistent UUIDv4 `project_id`, and
-`admission_policy: evidence-required`. The project ID is identity for external mutation locks, not authorization.
+Protocol 0.6 manifests include `entry_schema_version: 1`, `subject_schema_version: 1`, a persistent UUIDv4
+`project_id`, `subject_registry: subjects.md`, `admission_policy: evidence-required`, and
+`conflict_identity_policy: scope-subject-facet`. The project ID is identity for external mutation locks, not
+authorization.
 
 ## Concurrency and plan confirmation
 
@@ -73,9 +77,38 @@ docs/memory/
   constraints.md
   do-not-use.md
   inbox.md
+  subjects.md
 ```
 
-These six files are the core protocol. They are enough for minimal mode.
+These seven files are the core protocol. `subjects.md` is registry metadata and is not loaded into normal task
+context.
+
+## Subject Registry And Facets
+
+Managed active decisions, constraints, rejected approaches, and area entries reference a stable Subject ID:
+
+```markdown
+## MC-SUBJ-20260729-a1b2c3d4 — Library X
+
+Status: active
+Kind: dependency
+Canonical-Ref: dependency:pypi:library-x
+Evidence:
+- repo:pyproject.toml
+
+Aliases:
+- Library X
+- libx
+```
+
+Subject IDs remain stable when the display name or aliases change. Exact normalized alias or canonical-reference
+collisions are rejected. The CLI does not use fuzzy names, timestamps, or entry bodies to infer semantic
+equivalence and does not automatically merge Subjects.
+
+Controlled Facets are `adoption-policy`, `version-policy`, `architecture`, `behavior`, `compatibility`,
+`security`, `performance`, `data-model`, `interface`, `workflow`, and `lifecycle`. The current active owner is
+unique by normalized `Scope + Subject ID + Facet`. A replacement must explicitly supersede the existing owner.
+Legacy entries remain readable without these fields, while `check` reports incomplete coverage.
 
 ## Non-Goals
 
@@ -136,6 +169,7 @@ Level 3 maintenance or explicit request:
 
 - `inbox.md`
 - `changelog.md`, if present
+- `subjects.md`, for protocol validation or explicit Subject maintenance only
 
 Level 4 explicit request only:
 
@@ -187,6 +221,11 @@ Rejected options, known failed paths, and tombstones. Agents should check it bef
 ### inbox.md
 
 Temporary holding area for memory candidates that need review or compaction. Keep new candidates newest first.
+
+### subjects.md
+
+Shared stable-identity registry for managed entries. It is read by CLI admission and maintenance operations, not
+normal task routing. It must not contain secrets, permission grants, or executable instructions.
 
 ### changelog.md
 

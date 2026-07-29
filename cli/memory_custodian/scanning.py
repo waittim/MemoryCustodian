@@ -29,7 +29,11 @@ SECURITY_PATTERNS = (
     ("credential-url", "ERROR", re.compile(r"\b[a-z][a-z0-9+.-]*://[^/\s:@]+:[^/\s@]+@", re.I)),
 )
 PRIVACY_PATTERNS = (
-    ("machine-path", "WARNING", re.compile(r"(?:/Users/[^/\s]+/|/home/[^/\s]+/|C:\\Users\\[^\\\s]+\\)")),
+    (
+        "machine-path",
+        "WARNING",
+        re.compile(r"(?:/Users/[^/\s]+/|/home/[^/\s]+/|/Volumes/[^/\s]+/|C:\\Users\\[^\\\s]+\\)"),
+    ),
     ("personal-email", "WARNING", re.compile(r"\b[A-Z0-9._%+-]+@(?!example\.com\b)[A-Z0-9.-]+\.[A-Z]{2,}\b", re.I)),
     ("phone-number", "WARNING", re.compile(r"(?<!\w)(?:\+?\d[\s().-]*){10,15}(?!\w)")),
 )

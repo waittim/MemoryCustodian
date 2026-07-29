@@ -12,8 +12,14 @@ import uuid
 from dataclasses import dataclass
 from typing import Iterable
 
-from . import __entry_schema_version__, __protocol_version__, __version__
+from . import (
+    __entry_schema_version__,
+    __protocol_version__,
+    __subject_schema_version__,
+    __version__,
+)
 from .templates import ALL_TEMPLATE_FILES, CORE_FILES, DEFAULT_MEMORY_DIR
+from .routes import RouteReason, RoutedModule, merge_routed_modules, normalize_module_identity
 
 DOCS_MEMORY_ROOT = "docs"
 CURRENT_PACKAGE_LABEL = f"memory-custodian {__version__}"
@@ -314,10 +320,13 @@ def _protocol_section_lines(
         PROTOCOL_HEADING,
         f"- protocol_version: {CURRENT_PROTOCOL_VERSION}",
         f"- entry_schema_version: {__entry_schema_version__}",
+        f"- subject_schema_version: {__subject_schema_version__}",
+        "- subject_registry: subjects.md",
         f"- initialized_with: {initialized_with}",
         f"- last_migrated_with: {last_migrated_with}",
         f"- project_id: {project_id}",
         "- admission_policy: evidence-required",
+        "- conflict_identity_policy: scope-subject-facet",
     ]
 
 
@@ -341,10 +350,13 @@ def manifest_with_protocol_metadata(manifest: str, last_migrated_with: str = CUR
             desired = {
                 "protocol_version": f"- protocol_version: {CURRENT_PROTOCOL_VERSION}",
                 "entry_schema_version": f"- entry_schema_version: {__entry_schema_version__}",
+                "subject_schema_version": f"- subject_schema_version: {__subject_schema_version__}",
+                "subject_registry": "- subject_registry: subjects.md",
                 "initialized_with": f"- initialized_with: {initialized_with}",
                 "last_migrated_with": f"- last_migrated_with: {last_migrated_with}",
                 "project_id": f"- project_id: {project_id}",
                 "admission_policy": "- admission_policy: evidence-required",
+                "conflict_identity_policy": "- conflict_identity_policy: scope-subject-facet",
             }
             body: list[str] = []
             seen: set[str] = set()
@@ -362,10 +374,13 @@ def manifest_with_protocol_metadata(manifest: str, last_migrated_with: str = CUR
                 for key in (
                     "protocol_version",
                     "entry_schema_version",
+                    "subject_schema_version",
+                    "subject_registry",
                     "initialized_with",
                     "last_migrated_with",
                     "project_id",
                     "admission_policy",
+                    "conflict_identity_policy",
                 )
                 if key not in seen
             ]
@@ -797,11 +812,12 @@ def _route_sections(manifest: str) -> dict[str, list[tuple[str, list[str]]]]:
 
 
 def _validate_route_path(name: str) -> str | None:
-    path = Path(name)
-    if not name or path.is_absolute() or "\\" in name or ":" in path.parts[0] or ".." in path.parts or path.suffix != ".md":
+    if "\\" in name:
         return f"unsafe or malformed memory path {name!r}"
-    if any(part in {"", "."} for part in path.parts):
-        return f"unsafe or malformed memory path {name!r}"
+    try:
+        normalize_module_identity(name)
+    except ValueError as exc:
+        return str(exc)
     return None
 
 
@@ -839,7 +855,7 @@ def validate_manifest_routes(manifest: str) -> list[str]:
     return issues
 
 
-def parse_manifest_task_file_specs(manifest: str, task: str) -> list[tuple[str, bool]]:
+def parse_manifest_task_modules(manifest: str, task: str) -> list[RoutedModule]:
     category = TASK_CATEGORY.get(task)
     if category is None:
         raise ValueError(f"Unsupported task route: {task}")
@@ -852,15 +868,28 @@ def parse_manifest_task_file_specs(manifest: str, task: str) -> list[tuple[str, 
     if category_issues:
         raise ValueError("Invalid manifest routing: " + "; ".join(category_issues))
     always_lines = _section_lines(manifest, "##", lambda heading: heading == "always load")
-    specs = _parse_bullets(always_lines, default_required=True)
+    specs = [
+        RoutedModule(name, required, (RouteReason.ALWAYS_LOAD,))
+        for name, required in _parse_bullets(always_lines, default_required=True)
+    ]
     if category != "general":
         match = _route_sections(manifest)[category][0]
-        specs.extend(_parse_bullets(match[1], default_required=True))
-    for name, _required in specs:
-        error = _validate_route_path(name)
+        specs.extend(
+            RoutedModule(name, required, (RouteReason.CANONICAL_TASK,))
+            for name, required in _parse_bullets(match[1], default_required=True)
+        )
+    for module in specs:
+        error = _validate_route_path(module.module_id)
         if error:
             raise ValueError(error)
-    return _dedupe_specs(specs)
+    return merge_routed_modules(specs)
+
+
+def parse_manifest_task_file_specs(manifest: str, task: str) -> list[tuple[str, bool]]:
+    return [
+        (module.module_id, module.required)
+        for module in parse_manifest_task_modules(manifest, task)
+    ]
 
 
 def manifest_task_file_specs(memory_dir: Path, task: str) -> list[tuple[str, bool]]:
@@ -872,11 +901,20 @@ def manifest_task_file_specs(memory_dir: Path, task: str) -> list[tuple[str, boo
     return parse_manifest_task_file_specs(manifest.read_text(encoding="utf-8"), task)
 
 
+def manifest_task_modules(memory_dir: Path, task: str) -> list[RoutedModule]:
+    manifest = memory_dir / "manifest.md"
+    if not manifest.exists():
+        raise ValueError(
+            "manifest.md is missing; restore it, apply an applicable migration, or carefully reinitialize the project"
+        )
+    return parse_manifest_task_modules(manifest.read_text(encoding="utf-8"), task)
+
+
 def resolve_manifest_memory_path(memory_dir: Path, name: str) -> Path:
     error = _validate_route_path(name)
     if error:
         raise ValueError(error)
-    path = memory_dir / name
+    path = memory_dir / normalize_module_identity(name)
     try:
         path.resolve().relative_to(memory_dir.resolve())
     except ValueError as exc:

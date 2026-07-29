@@ -6,15 +6,17 @@ Entries are newest first.
 
 Status: active
 Scope: project
+Subject: MC-SUBJ-20260729-7e5c3a91
+Facet: architecture
 Evidence:
 - user-confirmed
 
 Decision:
-Use Protocol 0.6 evidence admission. Persist a random legacy-migration UUIDv4 outside the repository across
-preview/apply, rebuild every preview-first plan under lock, and report deterministic budget states at the 80% threshold.
+Use Protocol 0.6 evidence admission, stable Subject/Facet conflict identity, explicit erasure boundaries,
+repo-external preview seeds, lock-time plan rebuilds, and deterministic budget states.
 
 Reason:
-This ensures auditable provenance, distinct identity, and stale-write rejection from current inputs.
+This keeps provenance, ownership, forgetting scope, and stale-write rejection deterministic and reviewable.
 
 ## MC-DEC-20260721-3578b077 — Target Python 3.10+ minimum version
 

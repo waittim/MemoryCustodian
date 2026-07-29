@@ -19,7 +19,9 @@ sys.path.insert(0, str(ROOT / "cli"))
 
 from memory_custodian.entries import generate_entry_id, validate_evidence
 from memory_custodian.locking import LockError, lock_path, mutation_lock, stale_lock
-from memory_custodian.main import main
+from tests.cli_test_support import main
+from tests.cli_test_support import _subject_for_add
+from memory_custodian.main import main as raw_main
 from memory_custodian.plans import MutationPlan
 from memory_custodian.mutations import TextMutation
 from memory_custodian.protocol import budget_state, count_inbox_items, estimate_tokens
@@ -75,11 +77,11 @@ class Protocol06Tests(unittest.TestCase):
             self.assertEqual(main(["init", "--project-root", tmp]), 0)
             before = (Path(tmp) / "docs" / "memory" / "decisions.md").read_text(encoding="utf-8")
             self.assertEqual(
-                main(["add", "Unsupported", "--type", "decision", "--project-root", tmp]),
+                raw_main(["add", "Unsupported", "--type", "decision", "--project-root", tmp]),
                 2,
             )
             self.assertEqual(
-                main([
+                raw_main([
                     "add", "Unsupported", "--type", "decision",
                     "--evidence", "agent-observed", "--project-root", tmp,
                 ]),
@@ -436,13 +438,17 @@ class Protocol06Tests(unittest.TestCase):
             self.assertEqual(main(["init", "--project-root", tmp]), 0)
             env = dict(os.environ)
             env["PYTHONPATH"] = str(ROOT / "cli")
-            command = [
-                sys.executable, "-m", "memory_custodian.main", "add",
-                "--type", "decision", "--evidence", "user-confirmed",
+            first_args = _subject_for_add([
+                "add", "Decision A", "--type", "decision", "--evidence", "user-confirmed",
                 "--project-root", tmp,
-            ]
-            first = subprocess.Popen([*command, "Decision A"], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            second = subprocess.Popen([*command, "Decision B"], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            ])
+            second_args = _subject_for_add([
+                "add", "Decision B", "--type", "decision", "--evidence", "user-confirmed",
+                "--project-root", tmp,
+            ])
+            command = [sys.executable, "-m", "memory_custodian.main"]
+            first = subprocess.Popen([*command, *first_args], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            second = subprocess.Popen([*command, *second_args], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             out_a, err_a = first.communicate(timeout=15)
             out_b, err_b = second.communicate(timeout=15)
             self.assertEqual((first.returncode, second.returncode), (0, 0), (out_a, err_a, out_b, err_b))
@@ -459,11 +465,12 @@ class Protocol06Tests(unittest.TestCase):
                 env = dict(os.environ)
                 env["PYTHONPATH"] = str(ROOT / "cli")
                 env["XDG_STATE_HOME"] = state
-                command = [
-                    sys.executable, "-m", "memory_custodian.main", "add", "Blocked",
+                add_args = _subject_for_add([
+                    "add", "Blocked",
                     "--type", "decision", "--evidence", "user-confirmed",
                     "--lock-timeout", "0", "--project-root", tmp,
-                ]
+                ])
+                command = [sys.executable, "-m", "memory_custodian.main", *add_args]
                 with mutation_lock(project_id, Path(tmp), "holder"):
                     blocked = subprocess.run(command, env=env, text=True, capture_output=True)
                 self.assertNotEqual(blocked.returncode, 0)

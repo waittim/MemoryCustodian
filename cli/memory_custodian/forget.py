@@ -6,7 +6,9 @@ from dataclasses import dataclass
 import hashlib
 from pathlib import Path
 
+from .entries import parse_structured_entries
 from .locking import mutation_lock
+from .erasure import ErasureScope, render_apply_boundary, render_scope, scope_for_forget
 from .mutations import TextMutation, apply_mutations
 from .plans import MutationPlan, print_plan
 from .protocol import (
@@ -25,6 +27,7 @@ from .protocol import (
     protocol_metadata,
     today,
 )
+from .subjects import SUBJECT_ID_RE
 
 
 @dataclass(frozen=True)
@@ -163,6 +166,45 @@ def _summary(unit: MarkdownUnit, redact: bool, number: int) -> str:
     return first[:100]
 
 
+def _subject_reference_blockers(
+    memory_dir: Path,
+    plans: list[FilePlan],
+    tombstone_updated: str | None,
+) -> list[str]:
+    registry_plan = next(
+        (plan for plan in plans if plan.path.relative_to(memory_dir).as_posix() == "subjects.md"),
+        None,
+    )
+    if registry_plan is None or not registry_plan.matches:
+        return []
+    removed_ids = {
+        match.group(0).casefold()
+        for unit in registry_plan.matches
+        for match in SUBJECT_ID_RE.finditer(unit.text)
+    }
+    if not removed_ids:
+        return []
+    planned_text = {plan.path: plan.updated for plan in plans}
+    if tombstone_updated is not None:
+        planned_text[memory_dir / "do-not-use.md"] = tombstone_updated
+    references: dict[str, list[str]] = {subject_id: [] for subject_id in removed_ids}
+    for path in iter_markdown_files(memory_dir, include_archive=True):
+        if path.name == "subjects.md":
+            continue
+        text = planned_text.get(path, read_text(path))
+        for entry in parse_structured_entries(path, text):
+            subject_id = entry.fields.get("Subject", "").casefold()
+            if subject_id in references:
+                references[subject_id].append(
+                    f"{path.relative_to(memory_dir).as_posix()}:{entry.entry_id}"
+                )
+    return [
+        f"subjects.md: cannot remove {subject_id.upper()} while referenced by {', '.join(owners)}"
+        for subject_id, owners in references.items()
+        if owners
+    ]
+
+
 def _build_forget_mutation_plan(
     args,
     memory_dir: Path,
@@ -229,6 +271,21 @@ def _build_forget_mutation_plan(
         f"{tombstone_path}: {unit.kind} contains non-removable matching content"
         for unit in tombstone_blockers
     )
+    blockers.extend(_subject_reference_blockers(memory_dir, plans, tombstone_updated))
+    active_matches = any(
+        plan.matches and not plan.path.relative_to(memory_dir).as_posix().startswith("archive/")
+        for plan in plans
+    )
+    archive_matches = any(
+        plan.matches and plan.path.relative_to(memory_dir).as_posix().startswith("archive/")
+        for plan in plans
+    )
+    scope = scope_for_forget(
+        args.mode,
+        active_matches=active_matches or bool(tombstone_updated),
+        archive_matches=archive_matches,
+        has_mutations=bool(writes),
+    )
     return MutationPlan(
         "forget",
         {"topic": topic, "mode": args.mode, "allow_broad_match": args.allow_broad_match},
@@ -242,6 +299,7 @@ def _build_forget_mutation_plan(
         if args.mode == "purge"
         else (),
         tuple(blockers),
+        context={"erasure_scope": scope.canonical()},
     )
 
 
@@ -344,14 +402,26 @@ def run(args) -> int:
         metadata.get("protocol_version", "0.5"),
     )
     mutations = list(mutation_plan.mutations)
+    scope = ErasureScope(**mutation_plan.context["erasure_scope"])
+    structural_blockers = [
+        blocker
+        for blocker in mutation_plan.blockers
+        if "cannot remove MC-SUBJ-" in blocker
+    ]
+    if structural_blockers:
+        print(f"Manual rewrite required: {len(structural_blockers)} Subject relationship blocker(s)")
+        for blocker in structural_blockers:
+            print(f"- {blocker}")
+    effective_blockers = bool(mutation_plan.blockers)
+    render_scope(scope)
     print_plan(mutation_plan)
     if not args.apply:
-        if manual_blockers:
+        if effective_blockers:
             print("Dry run only. Rewrite the listed content semantically, then preview again before applying.")
         else:
             print("Dry run only. Re-run with --apply" + (" --confirm-plan <PLAN_ID>." if protocol_06 else "."))
         return 0
-    if manual_blockers:
+    if effective_blockers:
         print("Refusing apply: rewrite the listed body/preamble content semantically, then preview again.")
         return 1
     if broad_reasons and not args.allow_broad_match:
@@ -386,4 +456,5 @@ def run(args) -> int:
     print(f"Applied forgetting plan. Written files: {len(completed)}")
     for name in completed:
         print(f"- {name}")
+    render_apply_boundary()
     return 0

@@ -22,6 +22,10 @@ before writing shared memory.
 ## Freshness
 
 - Merge duplicates and update or mark superseded decisions instead of appending contradictions.
+- Verify each managed active decision, constraint, rejected approach, and area entry has an active Subject and a
+  valid Facet.
+- Reject a second active owner for the same normalized Scope, Subject ID, and Facet.
+- Audit exact alias and canonical-reference ownership without claiming that fuzzy name similarity proves equality.
 - Refresh the brief when project direction changes or several decisions alter the system shape.
 - Archive historical rationale only after active invariants remain reachable.
 
@@ -29,6 +33,8 @@ before writing shared memory.
 
 - Separate hard constraints from soft preferences.
 - Confirm before storing personal, sensitive, credential-like, or workstation-specific information.
+- Prefer an abstract constraint and controlled Evidence reference over raw secrets, contract terms, vendor
+  identities, or unnecessary numeric limits.
 - Avoid shared absolute machine paths; prefer portable commands, conditional profiles, or user-local configuration.
 
 ## Budget

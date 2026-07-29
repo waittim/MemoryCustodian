@@ -1,5 +1,20 @@
 # Release Notes
 
+## v0.10.0 — Protocol 0.6 Subject And Erasure Alignment
+
+- Added `subjects.md` as a non-routed, plain-text registry with stable Subject IDs, exact normalized alias and
+  canonical-reference ownership, and preview-first add, rename, and alias mutations.
+- Added controlled Facets and active-owner admission based on normalized `Scope + Subject ID + Facet`, including
+  explicit supersede transitions and legacy coverage reporting.
+- Made routing provenance structured and deterministic for manifest routes and explicit profile/area inputs,
+  without hidden relevance scoring.
+- Added a unified `ErasureScope` for forget previews and apply output. Hard and purge now state that managed-memory
+  removal does not rewrite Git history or revoke distributed copies.
+- Added prevention-first sensitive-memory guidance: prefer minimal abstract constraints and controlled Evidence
+  references over copying raw secrets, contract text, or unnecessary vendor details.
+- Extended same-version migration to install Subject protocol metadata and registry scaffolding without inferring
+  semantic identity from legacy prose.
+
 ## Unreleased
 
 ## v0.10.0 - 2026-07-28

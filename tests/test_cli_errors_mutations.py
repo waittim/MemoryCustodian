@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "cli"))
 
 from tests.cli_test_support import main
+from tests.cli_test_support import _subject_for_add
 from memory_custodian.protocol import write_text as actual_write_text
 
 
@@ -51,21 +52,22 @@ class CliErrorAndMutationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             self.assertEqual(main(["init", "--project-root", tmp]), 0)
             memory = Path(tmp) / "docs" / "memory"
+            add_args = _subject_for_add(
+                [
+                    "add",
+                    "Backend candidate.",
+                    "--type",
+                    "area",
+                    "--name",
+                    "backend",
+                    "--project-root",
+                    tmp,
+                ]
+            )
             err = StringIO()
             with patch("memory_custodian.mutations.write_text", side_effect=self._fail_second_write()):
                 with redirect_stdout(StringIO()), redirect_stderr(err):
-                    code = main(
-                        [
-                            "add",
-                            "Backend candidate.",
-                            "--type",
-                            "area",
-                            "--name",
-                            "backend",
-                            "--project-root",
-                            tmp,
-                        ]
-                    )
+                    code = main(add_args)
 
             self.assertEqual(code, 1)
             self.assertTrue((memory / "areas" / "backend.md").exists())

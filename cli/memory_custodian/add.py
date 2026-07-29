@@ -40,6 +40,13 @@ from .protocol import (
     today,
 )
 from .templates import render_area_template, render_profile_template, render_rule_template, render_template
+from .subjects import (
+    SUBJECT_ID_RE,
+    load_subjects,
+    subject_indexes,
+    subject_required,
+    validate_facet,
+)
 
 TARGETS = {
     "decision": "decisions.md",
@@ -155,6 +162,74 @@ def _find_entry(memory_dir: Path, entry_id: str):
     return matches[0]
 
 
+def _validate_subject_and_conflict(
+    args,
+    memory_dir: Path,
+    *,
+    kind: str,
+    scope: str,
+    candidate: bool,
+) -> tuple[str | None, str | None]:
+    subject_id = args.subject.strip() if args.subject else None
+    facet = args.facet.strip().casefold() if args.facet else None
+    required = subject_required(kind, candidate=candidate, area=args.area)
+    if required and (not subject_id or not facet):
+        raise ValueError(
+            f"Protocol 0.6 active {kind} memory requires both --subject MC-SUBJ-... and --facet."
+        )
+    if bool(subject_id) != bool(facet):
+        raise ValueError("--subject and --facet must be supplied together.")
+    if not subject_id:
+        return None, None
+    if not SUBJECT_ID_RE.fullmatch(subject_id):
+        raise ValueError(f"Invalid Subject ID: {subject_id}")
+    subjects_by_id, _by_alias, _by_ref = subject_indexes(load_subjects(memory_dir))
+    subject = subjects_by_id.get(subject_id.casefold())
+    if subject is None:
+        raise ValueError(f"Subject does not exist or is inactive: {subject_id}")
+    normalized_facet = validate_facet("area" if args.area and kind == "decision" else kind, facet)
+    if candidate:
+        return subject.subject_id, normalized_facet
+
+    owner = None
+    for path in sorted(memory_dir.rglob("*.md")):
+        relative = path.relative_to(memory_dir).as_posix()
+        if relative.startswith("archive/") or relative in {"subjects.md", "inbox.md"}:
+            continue
+        for entry in parse_structured_entries(path, path.read_text(encoding="utf-8")):
+            if (
+                entry.status == "active"
+                and entry.scope.casefold() == scope.casefold()
+                and entry.fields.get("Subject", "").casefold() == subject.subject_id.casefold()
+                and entry.fields.get("Facet", "").casefold() == normalized_facet
+            ):
+                owner = entry
+                break
+        if owner:
+            break
+    if owner and (not args.supersedes or owner.entry_id.casefold() != args.supersedes.casefold()):
+        raise ValueError(
+            f"Active structural owner already exists: {owner.entry_id} "
+            f"for {scope} + {subject.subject_id} + {normalized_facet}. "
+            "Use --supersedes, adjust Scope, or review the Subject."
+        )
+    if args.supersedes:
+        old = _find_entry(memory_dir, args.supersedes)
+        old_subject = old.fields.get("Subject")
+        old_facet = old.fields.get("Facet")
+        if old.status != "active":
+            replacement = old.fields.get("Superseded-By")
+            raise ValueError(
+                f"Entry {old.entry_id} is already {old.status}"
+                + (f" and was replaced by {replacement}" if replacement else "")
+            )
+        if old_subject and old_subject.casefold() != subject.subject_id.casefold():
+            raise ValueError("--supersedes must retain the old entry's Subject identity.")
+        if old_facet and old_facet.casefold() != normalized_facet:
+            raise ValueError("--supersedes must retain the old entry's Facet.")
+    return subject.subject_id, normalized_facet
+
+
 def _build_mutations(
     args, project_root: Path, memory_dir: Path, protocol_06: bool, *, fixed_id: str | None = None
 ) -> tuple[list[TextMutation], str, str]:
@@ -164,6 +239,8 @@ def _build_mutations(
     candidate = args.candidate or kind == "inbox"
     if args.supersedes and candidate:
         raise ValueError("--supersedes cannot be used with candidate memory.")
+    subject_id: str | None = None
+    facet: str | None = None
     evidence = ()
     new_id = ""
     if protocol_06:
@@ -174,6 +251,13 @@ def _build_mutations(
             allow_missing=args.allow_missing_evidence,
         )
         ids = memory_entry_ids(memory_dir)
+        subject_id, facet = _validate_subject_and_conflict(
+            args,
+            memory_dir,
+            kind=kind,
+            scope=scope,
+            candidate=candidate,
+        )
         id_kind = "inbox" if candidate else ("area" if args.area else kind)
         new_id = fixed_id or generate_entry_id(id_kind, ids)
         if new_id.casefold() in {value.casefold() for value in ids}:
@@ -182,11 +266,15 @@ def _build_mutations(
             entry = render_candidate_entry(
                 new_id, _title(args.message), kind if kind != "inbox" else "note",
                 args.message, scope, evidence, args.reason,
+                subject=subject_id,
+                facet=facet,
             )
         else:
             entry = render_active_entry(
                 "area" if args.area and kind == "decision" else kind,
                 new_id, _title(args.message), args.message, args.reason, scope, evidence,
+                subject=subject_id,
+                facet=facet,
                 supersedes=args.supersedes,
             )
     else:
@@ -200,18 +288,6 @@ def _build_mutations(
 
     target_path = memory_dir / target
     original = _initial_target_text(target_path, kind, args.name, args.area)
-    if protocol_06 and not candidate and not args.supersedes:
-        for existing in parse_structured_entries(target_path, original):
-            if (
-                existing.status == "active"
-                and existing.scope == scope
-                and existing.title.casefold().removeprefix("tombstone: ").strip()
-                == _title(args.message).casefold()
-            ):
-                raise ValueError(
-                    f"Structurally duplicate active entry: {existing.entry_id}. "
-                    "Use --supersedes when replacing it."
-                )
     updated = prepended_text(
         original, entry, remove_lines=("No unprocessed memory candidates.",) if candidate else ()
     )
@@ -251,6 +327,8 @@ def _supersede_fingerprint(args, project_id: str, memory_dir: Path) -> str:
         args.message,
         args.reason or "",
         args.area or "",
+        args.subject or "",
+        args.facet or "",
         *args.evidence,
     ]
     for path in sorted(memory_dir.rglob("*.md")):
@@ -310,7 +388,13 @@ def run(args) -> int:
                 seed_path.write_text(new_id + "\n", encoding="utf-8")
             plan = MutationPlan(
                 "add --supersedes",
-                {"type": args.type, "supersedes": args.supersedes, "message": args.message},
+                {
+                    "type": args.type,
+                    "supersedes": args.supersedes,
+                    "subject": args.subject,
+                    "facet": args.facet,
+                    "message": args.message,
+                },
                 project_id,
                 CURRENT_PROTOCOL_VERSION,
                 tuple(mutations),
@@ -330,7 +414,13 @@ def run(args) -> int:
                 )
                 current_plan = MutationPlan(
                     "add --supersedes",
-                    {"type": args.type, "supersedes": args.supersedes, "message": args.message},
+                    {
+                        "type": args.type,
+                        "supersedes": args.supersedes,
+                        "subject": args.subject,
+                        "facet": args.facet,
+                        "message": args.message,
+                    },
                     project_id,
                     CURRENT_PROTOCOL_VERSION,
                     tuple(current_mutations),

@@ -48,6 +48,7 @@ already exists is never a substitute for current authorization.
 ## Memory Files
 
 - `manifest.md`: loading protocol, optional module index, file roles, and context budgets.
+- `subjects.md`: stable Subject registry used by CLI validation; protocol metadata, not normal task context.
 - `brief.md`: short current project summary; this is the default file.
 - `decisions.md`: confirmed project and architecture decisions.
 - `constraints.md`: hard requirements and limits.
@@ -64,12 +65,23 @@ already exists is never a substitute for current authorization.
 
 Classify the task into one of the supported canonical categories: general continuation, planning, implementation, artifact work, preferences, history, or maintenance. Then resolve its files exclusively from the current project manifest and use the smallest routed set that can answer the task. Any routes in generated templates or examples are defaults only; they never override a customized project manifest.
 
+Routing is deterministic for the supplied canonical task and explicit profile or area inputs. Do not perform
+hidden semantic relevance scoring. Every loaded module must be traceable to an always-load route, a canonical
+task route, or an explicit profile/area request. `subjects.md` is read by protocol operations but is not injected
+into normal context packs.
+
 ## Writing Memory
 
 Write durable memory only when it is project-level and likely to matter later.
 
 - Protocol 0.6 active entries require a stable Entry ID, `Status: active`, a valid scope, and at least one
   `user-confirmed` or source-backed Evidence item.
+- New active decisions, constraints, rejected approaches, and area entries require an active Subject ID and a
+  controlled Facet. Create or select the Subject explicitly before adding the entry.
+- Treat normalized `Scope + Subject ID + Facet` as the structural owner. If an active owner exists, supersede it,
+  change scope, or review the Subject; do not create a second owner.
+- Subject display names and aliases may change without changing identity. Exact alias and canonical-reference
+  collisions are rejected, but aliases, timestamps, similar names, and body text do not prove semantic equivalence.
 - Agent inference, code observations, possible decisions, and unconfirmed conversation content remain candidates
   in `inbox.md`; use `--candidate` and never treat them as active memory.
 - Promote a candidate only after confirmation or authoritative source evidence. Promotion creates a new formal
@@ -90,7 +102,10 @@ Keep each decision entry at or below 120 tokens, including its title, `Decision`
 
 Keep `brief.md` about the project, not MemoryCustodian. Refresh it after initialization and when the project purpose, system shape, or current direction materially changes.
 
-For sensitive, personal, credential-like, private, or machine-specific information, ask before writing. Do not commit workstation paths as shared project preferences without confirmation. When unsure whether a note is durable, propose the update instead of writing it.
+For sensitive, personal, credential-like, private, or machine-specific information, ask before writing. Prefer a
+minimal abstract constraint and Evidence reference over copying raw secrets, contract text, private identifiers,
+vendor names, or unnecessary limits into repository memory. Do not commit workstation paths as shared project
+preferences without confirmation. When unsure whether a note is durable, propose the update instead of writing it.
 
 After writing, check the target budget. When `add`, `status`, or `check` reports `NEAR LIMIT` or `OVER BUDGET`,
 immediately perform a dry-run maintenance review before adding more active memory. At 80% or above, shorten long
@@ -119,6 +134,8 @@ When the user asks to forget something:
 4. If a body or preamble matches, require a semantic manual rewrite and refuse apply until it is resolved.
 5. Add a topic-bearing tombstone only for soft mode; hard replaces prior topic-bearing tombstones with one generic guard, while purge removes them.
 6. Do not reintroduce the forgotten content during compaction.
+7. State the erasure boundary accurately: hard affects active managed memory; purge also targets managed archive;
+   neither rewrites Git history nor revokes clones, forks, backups, caches, or other distributed copies.
 
 ## References
 
@@ -139,10 +156,13 @@ If the project has the CLI installed, prefer deterministic commands for routine 
 ```bash
 memory-custodian status
 memory-custodian read --task planning
-memory-custodian add "..." --type decision --evidence user-confirmed
+memory-custodian subject list
+memory-custodian subject add "Library X" --kind dependency --canonical-ref dependency:pypi:library-x --evidence repo:pyproject.toml
+memory-custodian subject add "Library X" --kind dependency --canonical-ref dependency:pypi:library-x --evidence repo:pyproject.toml --apply --confirm-plan <PLAN_ID>
+memory-custodian add "..." --type decision --subject MC-SUBJ-... --facet version-policy --evidence user-confirmed
 memory-custodian add "..." --type constraint --candidate --evidence agent-observed
-memory-custodian add "..." --type decision --area sync --reason "..." --evidence repo:docs/architecture.md
-memory-custodian add "..." --type decision --supersedes MC-DEC-... --evidence user-confirmed
+memory-custodian add "..." --type decision --area sync --subject MC-SUBJ-... --facet behavior --reason "..." --evidence repo:docs/architecture.md
+memory-custodian add "..." --type decision --subject MC-SUBJ-... --facet behavior --supersedes MC-DEC-... --evidence user-confirmed
 # Then apply the supersede preview with --apply --confirm-plan <PLAN_ID>.
 memory-custodian enable rules/output
 memory-custodian compact

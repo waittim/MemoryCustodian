@@ -32,10 +32,8 @@ from .entries import (
     parse_structured_entries,
 )
 from .scanning import scan_text
+from .subjects import FACETS, load_subjects, subject_indexes, validate_subject_registry
 from .templates import CORE_FILES, brief_needs_curation
-
-
-LOCAL_PATH_RE = re.compile(r"(?:/Users/|/home/|/Volumes/|[A-Za-z]:[\\/])")
 
 
 def _read(path: Path) -> str:
@@ -99,10 +97,16 @@ def _check_protocol_metadata(text: str) -> list[str]:
             issues.append("manifest.md: project_id must appear exactly once")
         if metadata.get("entry_schema_version") != "1":
             issues.append("manifest.md: missing or invalid entry_schema_version (expected 1)")
+        if metadata.get("subject_schema_version") != "1":
+            issues.append("manifest.md: missing or invalid subject_schema_version (expected 1)")
+        if metadata.get("subject_registry") != "subjects.md":
+            issues.append("manifest.md: subject_registry must be subjects.md")
         if not valid_project_id(metadata.get("project_id")):
             issues.append("manifest.md: missing or invalid UUIDv4 project_id; run `memory-custodian migrate`")
         if metadata.get("admission_policy") != "evidence-required":
             issues.append("manifest.md: admission_policy must be evidence-required")
+        if metadata.get("conflict_identity_policy") != "scope-subject-facet":
+            issues.append("manifest.md: conflict_identity_policy must be scope-subject-facet")
     return issues
 
 
@@ -113,6 +117,7 @@ def run(args) -> int:
     warnings: list[str] = []
     detailed_findings = []
     structured_by_id: dict[str, list] = {}
+    active_identities: dict[tuple[str, str, str], tuple[str, str]] = {}
 
     if not memory_dir.exists():
         print(f"Memory directory missing: {memory_dir}")
@@ -126,6 +131,8 @@ def run(args) -> int:
     manifest = _read(manifest_path)
     if manifest_path.exists():
         issues.extend(_check_protocol_metadata(manifest))
+        if protocol_metadata(manifest).get("subject_schema_version") == "1":
+            issues.extend(validate_subject_registry(memory_dir, project_root))
     if manifest:
         issues.extend(_manifest_mentions_required_policy(manifest))
         issues.extend(f"manifest.md: {issue}" for issue in validate_manifest_routes(manifest))
@@ -146,6 +153,9 @@ def run(args) -> int:
                     issue = f"manifest.md: required route file is missing: {name}"
                     if issue not in issues:
                         issues.append(issue)
+
+    subjects = load_subjects(memory_dir)
+    subjects_by_id, _subjects_by_alias, _subjects_by_ref = subject_indexes(subjects)
 
     brief = _read(memory_dir / "brief.md")
     if brief and brief_needs_curation(brief):
@@ -189,6 +199,33 @@ def run(args) -> int:
                 if relative not in {expected, "inbox.md"}:
                     issues.append(f"{relative}: {entry.entry_id} area Scope does not match its file")
             code = entry.entry_id.split("-", 2)[1].upper()
+            managed_subject_type = code in {"DEC", "CON", "DNU", "AREA"}
+            subject_id = entry.fields.get("Subject", "")
+            facet = entry.fields.get("Facet", "")
+            if entry.status == "active" and managed_subject_type:
+                if not subject_id or not facet:
+                    warnings.append(
+                        f"{relative}: {entry.entry_id} legacy Subject/Facet coverage is incomplete"
+                    )
+                else:
+                    subject = subjects_by_id.get(subject_id.casefold())
+                    if subject is None:
+                        issues.append(
+                            f"{relative}: {entry.entry_id} references missing or inactive Subject {subject_id}"
+                        )
+                    if facet not in FACETS:
+                        issues.append(
+                            f"{relative}: {entry.entry_id} has invalid Facet {facet!r}"
+                        )
+                    identity = (entry.scope.casefold(), subject_id.casefold(), facet.casefold())
+                    owner = active_identities.get(identity)
+                    if owner:
+                        issues.append(
+                            f"{relative}: {entry.entry_id} duplicates active structural owner "
+                            f"{owner[0]} in {owner[1]} for Scope+Subject+Facet"
+                        )
+                    else:
+                        active_identities[identity] = (entry.entry_id, relative)
             expected_codes = {
                 "decisions.md": {"DEC"},
                 "constraints.md": {"CON"},
@@ -249,13 +286,6 @@ def run(args) -> int:
         inbox_items = count_inbox_items(_read(inbox))
         if inbox_items > 30:
             warnings.append(f"inbox.md: {inbox_items} items, compaction recommended")
-
-    preferences = memory_dir / "preferences.md"
-    if preferences.exists() and LOCAL_PATH_RE.search(_read(preferences)):
-        warnings.append(
-            "preferences.md: contains a machine-specific absolute path; "
-            "run `memory-custodian check --privacy` for redacted locations"
-        )
 
     indexed_optional_paths = optional_index_paths(manifest)
     for folder in ("rules", "profiles", "areas"):
@@ -337,6 +367,15 @@ def run(args) -> int:
                 f"{finding.path.relative_to(memory_dir)}:{finding.line}: {finding.kind}: {finding.preview}"
             )
     elif privacy:
+        if any(
+            item.kind == "machine-path"
+            and item.path.relative_to(memory_dir).as_posix() == "preferences.md"
+            for item in privacy
+        ):
+            warnings.append(
+                "preferences.md: contains a machine-specific absolute path; "
+                "run `memory-custodian check --privacy` for redacted locations"
+            )
         warnings.append(
             f"privacy scan: {len(privacy)} finding(s); "
             "run `memory-custodian check --privacy` for redacted locations"

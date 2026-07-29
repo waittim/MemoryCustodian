@@ -4,7 +4,10 @@ Loading map for local project memory. Load only the files listed for the current
 
 ## MemoryCustodian Protocol
 - entry_schema_version: 1
+- subject_schema_version: 1
+- subject_registry: subjects.md
 - admission_policy: evidence-required
+- conflict_identity_policy: scope-subject-facet
 - project_id: faac745e-206b-4a84-a4f5-e324343a4c57
 - protocol_version: 0.6
 - initialized_with: memory-custodian 0.3.0

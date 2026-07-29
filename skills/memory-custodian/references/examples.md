@@ -38,11 +38,27 @@ Loaded:
 
 ## Decision Entry
 
+Create or select the stable Subject first:
+
+```markdown
+## MC-SUBJ-20260729-a1b2c3d4 — Memory storage model
+
+Status: active
+Kind: concept
+Evidence:
+- user-confirmed
+
+Aliases:
+- Memory storage model
+```
+
 ```markdown
 ## MC-DEC-20260630-a1b2c3d4 — Use plain text memory files
 
 Status: active
 Scope: project
+Subject: MC-SUBJ-20260729-a1b2c3d4
+Facet: architecture
 Evidence:
 - user-confirmed
 
@@ -61,6 +77,8 @@ Keep the complete entry within 120 tokens. Put detailed consequences in constrai
 
 Status: active
 Scope: project
+Subject: MC-SUBJ-20260729-b2c3d4e5
+Facet: adoption-policy
 Evidence:
 - user-confirmed
 

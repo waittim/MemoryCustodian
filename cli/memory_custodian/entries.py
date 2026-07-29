@@ -157,6 +157,8 @@ def render_active_entry(
     scope: str,
     evidence: tuple[str, ...],
     *,
+    subject: str | None = None,
+    facet: str | None = None,
     supersedes: str | None = None,
 ) -> str:
     labels = {
@@ -174,9 +176,12 @@ def render_active_entry(
         "",
         "Status: active",
         f"Scope: {scope}",
-        "Evidence:",
-        *(f"- {item}" for item in evidence),
     ]
+    if subject:
+        lines.append(f"Subject: {subject}")
+    if facet:
+        lines.append(f"Facet: {facet}")
+    lines.extend(["Evidence:", *(f"- {item}" for item in evidence)])
     if supersedes:
         lines.extend([f"Supersedes: {supersedes}"])
     lines.extend(["", f"{labels[kind]}:", message])
@@ -193,6 +198,9 @@ def render_candidate_entry(
     scope: str,
     evidence: tuple[str, ...],
     note: str | None,
+    *,
+    subject: str | None = None,
+    facet: str | None = None,
 ) -> str:
     lines = [
         f"## {entry_id} — {title}",
@@ -200,6 +208,12 @@ def render_candidate_entry(
         "Status: candidate",
         f"Candidate-Type: {candidate_type}",
         f"Scope: {scope}",
+    ]
+    if subject:
+        lines.append(f"Provisional-Subject: {subject}")
+    if facet:
+        lines.append(f"Provisional-Facet: {facet}")
+    lines.extend([
         "Evidence:",
         *(f"- {item}" for item in evidence),
         "",
@@ -208,7 +222,7 @@ def render_candidate_entry(
         "",
         "Promotion-Requirement:",
         note or "Confirm with the user or an authoritative project source.",
-    ]
+    ])
     return "\n".join(lines)
 
 

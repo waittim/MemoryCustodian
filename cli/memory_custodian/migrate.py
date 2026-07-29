@@ -14,6 +14,7 @@ from .plans import (
     digest_text,
     discard_pending_seed,
     pending_project_id,
+    pending_entry_suffixes,
     print_plan,
 )
 from .protocol import (
@@ -28,28 +29,35 @@ from .protocol import (
     protocol_metadata,
     resolve_memory_dir,
     resolve_project_root,
+    today,
 )
+from .templates import render_template
 
 
-def _legacy_id(project_id: str, relative: str, section: str, index: int, code: str) -> str:
-    digest = hashlib.sha256(f"{project_id}\0{relative}\0{index}\0{section}".encode("utf-8")).hexdigest()[:8]
+def _legacy_key(relative: str, section: str, index: int) -> str:
+    return hashlib.sha256(f"{relative}\0{index}\0{section}".encode("utf-8")).hexdigest()
+
+
+def _legacy_id(relative: str, section: str, index: int, code: str, suffixes: dict[str, str]) -> str:
+    suffix = suffixes[_legacy_key(relative, section, index)]
     date_match = re.search(r"\b(\d{4})-(\d{2})-(\d{2})\b", section.splitlines()[0])
     stamp = "".join(date_match.groups()) if date_match else "19700101"
-    return f"MC-{code}-{stamp}-{digest}"
+    return f"MC-{code}-{stamp}-{suffix}"
 
 
 def _migrate_decisions(
     text: str,
-    project_id: str,
+    suffixes: dict[str, str],
     relative: str = "decisions.md",
     *,
     scope: str = "project",
     code: str = "DEC",
-) -> tuple[str, int, int]:
+) -> tuple[str, int, int, tuple[str, ...]]:
     preamble, sections = split_h2(text)
     changed = 0
     manual = 0
     updated = []
+    generated_ids: list[str] = []
     for index, section in enumerate(sections):
         if ENTRY_ID_RE.search(section.splitlines()[0]):
             updated.append(section)
@@ -58,7 +66,8 @@ def _migrate_decisions(
             manual += 1
             updated.append(section)
             continue
-        entry_id = _legacy_id(project_id, relative, section, index, code)
+        entry_id = _legacy_id(relative, section, index, code, suffixes)
+        generated_ids.append(entry_id)
         lines = section.splitlines()
         title = re.sub(r"^##\s+(?:\d{4}-\d{2}-\d{2}\s+-\s+)?", "", lines[0]).strip()
         migrated = "\n".join(
@@ -76,10 +85,43 @@ def _migrate_decisions(
         updated.append(migrated)
         changed += 1
     parts = [preamble, *updated] if preamble else updated
-    return "\n\n".join(part for part in parts if part).rstrip() + "\n", changed, manual
+    return (
+        "\n\n".join(part for part in parts if part).rstrip() + "\n",
+        changed,
+        manual,
+        tuple(generated_ids),
+    )
 
 
-def _build_plan(project_root: Path, memory_dir: Path) -> tuple[MutationPlan, list[str], Path | None]:
+def _migration_entry_seed(
+    project_root: Path,
+    memory_dir: Path,
+    manifest: str,
+) -> tuple[dict[str, str], Path | None]:
+    sources: list[tuple[str, str]] = []
+    decisions = memory_dir / "decisions.md"
+    if decisions.exists():
+        sources.append(("decisions.md", decisions.read_text(encoding="utf-8")))
+    for relative in sorted(
+        path for path in optional_index_paths(manifest)
+        if path.startswith("areas/") and path.endswith(".md")
+    ):
+        path = memory_dir.joinpath(*Path(relative).parts)
+        if path.exists():
+            sources.append((relative, path.read_text(encoding="utf-8")))
+    keys: list[str] = []
+    fingerprint_parts = [digest_text(manifest)]
+    for relative, text in sources:
+        fingerprint_parts.extend([relative, digest_text(text)])
+        _preamble, sections = split_h2(text)
+        for index, section in enumerate(sections):
+            if not ENTRY_ID_RE.search(section.splitlines()[0]) and "Decision:" in section:
+                keys.append(_legacy_key(relative, section, index))
+    source_sha = digest_text("\0".join(fingerprint_parts))
+    return pending_entry_suffixes("migrate-entries", project_root, source_sha, keys)
+
+
+def _build_plan(project_root: Path, memory_dir: Path) -> tuple[MutationPlan, list[str], tuple[Path, ...]]:
     manifest_path = memory_dir / "manifest.md"
     original = manifest_path.read_text(encoding="utf-8")
     metadata = protocol_metadata(original)
@@ -100,6 +142,7 @@ def _build_plan(project_root: Path, memory_dir: Path) -> tuple[MutationPlan, lis
             project_root,
             digest_text(original),
         )
+    suffixes, entry_seed_path = _migration_entry_seed(project_root, memory_dir, original)
     # Supply the stable preview seed through metadata; the protocol helper preserves it.
     seeded = original
     if "project_id" not in metadata:
@@ -132,15 +175,21 @@ def _build_plan(project_root: Path, memory_dir: Path) -> tuple[MutationPlan, lis
     if index_changed:
         changes.append("manifest.md: add optional module index")
 
+    subjects_path = memory_dir / "subjects.md"
+    if not subjects_path.exists():
+        mutations.append(TextMutation(subjects_path, render_template("subjects.md", today())))
+        changes.append("subjects.md: create managed Subject registry scaffold")
+
     decisions_path = memory_dir / "decisions.md"
     manual_reports: list[str] = []
     migrated_count = 0
     if decisions_path.exists():
         decisions = decisions_path.read_text(encoding="utf-8")
-        migrated, migrated_count, manual = _migrate_decisions(decisions, project_id)
+        migrated, migrated_count, manual, generated = _migrate_decisions(decisions, suffixes)
         if migrated != decisions:
             mutations.append(TextMutation(decisions_path, migrated))
             changes.append(f"decisions.md: add stable IDs and legacy-unverified Evidence to {migrated_count} structured entries")
+            changes.extend(f"decisions.md: generated Entry ID {entry_id}" for entry_id in generated)
         if manual:
             manual_reports.append(f"{manual} ambiguous decisions.md H2 section(s)")
 
@@ -153,9 +202,9 @@ def _build_plan(project_root: Path, memory_dir: Path) -> tuple[MutationPlan, lis
             continue
         slug = Path(relative).stem
         area_original = area_path.read_text(encoding="utf-8")
-        area_updated, area_count, area_manual = _migrate_decisions(
+        area_updated, area_count, area_manual, area_generated = _migrate_decisions(
             area_original,
-            project_id,
+            suffixes,
             relative,
             scope=f"area:{slug}",
             code="AREA",
@@ -165,6 +214,7 @@ def _build_plan(project_root: Path, memory_dir: Path) -> tuple[MutationPlan, lis
             changes.append(
                 f"{relative}: add stable area IDs and legacy-unverified Evidence to {area_count} structured entries"
             )
+            changes.extend(f"{relative}: generated Entry ID {entry_id}" for entry_id in area_generated)
         if area_manual:
             manual_reports.append(f"{area_manual} ambiguous {relative} H2 section(s)")
 
@@ -183,6 +233,11 @@ def _build_plan(project_root: Path, memory_dir: Path) -> tuple[MutationPlan, lis
     for report in manual_reports:
         warnings.append(f"Manual migration recommended for {report}.")
     warnings.append("Legacy top-level bullets remain readable and are not mechanically rewritten.")
+    if migrated_count or any("stable area IDs" in change for change in changes):
+        warnings.append(
+            "Manual Subject assignment required: review migrated managed entries, create explicit Subjects, "
+            "and assign controlled Facets without inferring equivalence from titles."
+        )
     return (
         MutationPlan(
             "migrate",
@@ -193,7 +248,7 @@ def _build_plan(project_root: Path, memory_dir: Path) -> tuple[MutationPlan, lis
             tuple(warnings),
         ),
         changes,
-        seed_path,
+        tuple(path for path in (seed_path, entry_seed_path) if path is not None),
     )
 
 
@@ -206,7 +261,7 @@ def run(args) -> int:
     if not manifest_path.exists():
         raise ValueError(f"manifest.md missing: {manifest_path}")
 
-    plan, changes, seed_path = _build_plan(project_root, memory_dir)
+    plan, changes, seed_paths = _build_plan(project_root, memory_dir)
     if not plan.mutations:
         print("MemoryCustodian migrate: no changes needed")
         return 0
@@ -224,14 +279,15 @@ def run(args) -> int:
         plan.project_id, project_root, "migrate",
         timeout=args.lock_timeout, break_stale=args.break_stale_lock,
     ):
-        current, _changes, current_seed_path = _build_plan(project_root, memory_dir)
+        current, _changes, current_seed_paths = _build_plan(project_root, memory_dir)
         if current.plan_id != args.confirm_plan:
             print_plan(current)
             raise ValueError(
                 f"Stale or mismatched plan: confirmed {args.confirm_plan}, current Plan ID is {current.plan_id}. No files written."
             )
         apply_mutations(list(current.mutations))
-    discard_pending_seed(current_seed_path or seed_path)
+    for path in {*seed_paths, *current_seed_paths}:
+        discard_pending_seed(path)
     print("Applied migration. Written files:")
     for mutation in current.mutations:
         print(f"- {mutation.path}")

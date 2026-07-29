@@ -15,6 +15,7 @@ from . import init as init_cmd
 from . import migrate as migrate_cmd
 from . import read as read_cmd
 from . import status as status_cmd
+from . import subject as subject_cmd
 from .protocol import TASK_CATEGORY
 from .mutations import PartialMutationError
 from .templates import DEFAULT_MEMORY_DIR
@@ -84,6 +85,8 @@ def build_parser() -> argparse.ArgumentParser:
     add_parser.add_argument("--allow-missing-evidence", action="store_true", help="Retain a source evidence path that does not exist.")
     add_parser.add_argument("--candidate", action="store_true", help="Store unconfirmed information as an inbox candidate.")
     add_parser.add_argument("--supersedes", help="Active Entry ID replaced by this new entry.")
+    add_parser.add_argument("--subject", help="Stable MC-SUBJ ID for a managed active entry.")
+    add_parser.add_argument("--facet", help="Controlled conflict facet for a managed active entry.")
     add_parser.add_argument("--apply", action="store_true", help="Apply a previewed multi-entry supersede plan.")
     add_parser.add_argument("--confirm-plan", help="Plan ID printed by a supersede preview.")
     add_parser.add_argument("--lock-timeout", type=float, default=10.0, help="Seconds to wait for the project mutation lock.")
@@ -141,6 +144,51 @@ def build_parser() -> argparse.ArgumentParser:
     migrate_parser.add_argument("--lock-timeout", type=float, default=10.0)
     migrate_parser.add_argument("--break-stale-lock", action="store_true")
     migrate_parser.set_defaults(func=migrate_cmd.run)
+
+    subject_parser = sub.add_parser("subject", help="Inspect or mutate the shared Subject registry.")
+    subject_sub = subject_parser.add_subparsers(dest="subject_command", required=True)
+
+    subject_list = subject_sub.add_parser("list", help="List active shared Subjects.")
+    _add_common(subject_list)
+    subject_list.set_defaults(func=subject_cmd.run)
+
+    subject_show = subject_sub.add_parser("show", help="Show one Subject and its entry references.")
+    _add_common(subject_show)
+    subject_show.add_argument("subject_id")
+    subject_show.set_defaults(func=subject_cmd.run)
+
+    subject_add = subject_sub.add_parser("add", help="Preview creation of a shared Subject.")
+    _add_common(subject_add)
+    subject_add.add_argument("title")
+    subject_add.add_argument("--kind", required=True)
+    subject_add.add_argument("--canonical-ref")
+    subject_add.add_argument("--alias", action="append", default=[])
+    subject_add.add_argument("--evidence", action="append", required=True)
+    subject_add.add_argument("--apply", action="store_true")
+    subject_add.add_argument("--confirm-plan")
+    subject_add.add_argument("--lock-timeout", type=float, default=10.0)
+    subject_add.add_argument("--break-stale-lock", action="store_true")
+    subject_add.set_defaults(func=subject_cmd.run)
+
+    subject_rename = subject_sub.add_parser("rename", help="Preview a Subject display-name change.")
+    _add_common(subject_rename)
+    subject_rename.add_argument("subject_id")
+    subject_rename.add_argument("title")
+    subject_rename.add_argument("--apply", action="store_true")
+    subject_rename.add_argument("--confirm-plan")
+    subject_rename.add_argument("--lock-timeout", type=float, default=10.0)
+    subject_rename.add_argument("--break-stale-lock", action="store_true")
+    subject_rename.set_defaults(func=subject_cmd.run)
+
+    subject_alias = subject_sub.add_parser("add-alias", help="Preview addition of an exact Subject alias.")
+    _add_common(subject_alias)
+    subject_alias.add_argument("subject_id")
+    subject_alias.add_argument("alias_value")
+    subject_alias.add_argument("--apply", action="store_true")
+    subject_alias.add_argument("--confirm-plan")
+    subject_alias.add_argument("--lock-timeout", type=float, default=10.0)
+    subject_alias.add_argument("--break-stale-lock", action="store_true")
+    subject_alias.set_defaults(func=subject_cmd.run)
 
     return parser
 

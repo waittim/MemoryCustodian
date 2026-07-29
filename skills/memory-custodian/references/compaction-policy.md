@@ -35,6 +35,7 @@ Do not read `archive/` unless the user asks.
 - Do not erase uncertain information silently.
 - Do not resurrect topics listed in `do-not-use.md`.
 - Preserve the decision, not the full conversation.
+- Preserve Subject IDs, Facets, Evidence, and supersede relationships when semantically rewriting entries.
 - Shorten entries over 120 tokens semantically before archiving other decisions; never truncate mechanically.
 - Prefer short bullets over narrative history.
 - Keep tombstones active; do not archive `do-not-use.md` entries merely to meet a budget.

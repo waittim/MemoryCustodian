@@ -20,6 +20,7 @@ Use when the user wants the content gone from memory files.
 - Replace matching topic-bearing soft tombstones with one generic redacted guard.
 - Never persist the topic in new tombstones or changelog entries.
 - Avoid preserving the removed content in summaries.
+- Do not describe the result as Git-history erasure or revocation of distributed copies.
 
 ### Purge
 
@@ -29,6 +30,17 @@ Use only on explicit request.
 - Remove matching complete semantic units from active files and `archive/`.
 - Remove matching topic-bearing soft tombstones and do not add a replacement.
 - Keep any operation record generic.
+- Do not claim repository-wide or permanent erasure.
+
+## Erasure Boundary
+
+Forgetting controls what remains available to future agents through MemoryCustodian. Soft removes matching active
+managed units and may retain a topic-bearing guard. Hard removes matching active units without retaining the topic
+in new logs or tombstones. Purge additionally searches the managed `archive/`.
+
+All modes leave Git history and reachable objects unchanged. They do not revoke existing clones, forks, backups,
+caches, or external copies, and they do not commit working-tree changes. Preview and apply output must be rendered
+from the same `ErasureScope` result and state these boundaries explicitly.
 
 ## Preview and broad-match safety
 
@@ -62,4 +74,7 @@ Before compacting or updating memory, check `do-not-use.md`. If an inbox or arch
 
 ## Sensitive Data
 
-If forgotten content may contain secrets, credentials, personal data, or private identifiers, ask whether the user wants a hard forget or purge. Do not repeat the sensitive value in the tombstone.
+If forgotten content may contain secrets, credentials, personal data, contract parties or identifiers, or private
+vendor limits, ask whether the user wants a hard forget or purge. Do not repeat the sensitive value in the
+tombstone. Prevention is stronger than cleanup: store a minimal abstract constraint plus an Evidence reference
+instead of copying unnecessary sensitive source text into repository memory.

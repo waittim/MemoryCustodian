@@ -2,16 +2,13 @@
 
 Entries are newest first.
 
+## 2026-07-29
+- Aligned Protocol 0.6 with stable Subject/Facet governance, deterministic routing provenance, and explicit managed-memory erasure boundaries.
+
 ## 2026-07-28
 - Closed the v0.10 release audit gaps, added deterministic maintenance previews, and made archives idempotent.
-
-## 2026-07-28
 - Compacted decisions.md: archived 4 old entries.
-
-## 2026-07-28
 - Added decision memory to decisions.md.
-
-## 2026-07-28
 - Migrated project memory to Protocol 0.6 without rewriting legacy freeform units.
 
 ## 2026-07-21
