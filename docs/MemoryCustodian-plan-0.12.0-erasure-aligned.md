@@ -1,6 +1,6 @@
 # MemoryCustodian v0.12.0 实施指南
 
-## Protocol 0.8：事务恢复、统一审计、冲突治理与跨 Agent 一致性
+## Protocol 0.8：事务恢复、统一审计、冲突治理、Erasure Contract 与跨 Agent 一致性
 
 你正在继续修改已经完成以下版本的 MemoryCustodian：
 
@@ -23,6 +23,8 @@
   * Structural conflict detection
   * Merge-aware reconciliation review
   * Explicit exception and Subject merge workflows
+  * Unified ErasureScope and optional Git history exposure inspection
+  * Accurate local-reset and distributed-copy boundaries
 
 本阶段的目标不是发布 MemoryCustodian 1.0，而是在进入 1.0 之前，对现有能力进行生产化加固和系统性验证。重点是事务恢复、统一审计、跨平台确定性与跨 Agent 一致性；本阶段仍允许在未来通过显式迁移继续调整协议，不作长期冻结承诺。
 
@@ -65,6 +67,10 @@ MemoryCustodian v0.12 必须实现并通过仓库内测试、fixtures、audit �
 21. Git 可用时，merge-aware audit 能将确定冲突与需要语义复核的并发 hard-memory changes 分开报告。
 22. 无法自动判定的异名同义问题不会被描述为已解决，而会产生显式 reconciliation requirement。
 23. Subject merge、supersede、exception 和 reconciliation mutation 具备 crash-safe transaction protection。
+24. Soft/hard/purge、ID forget 和 local reset 具有统一、可机器读取的 erasure-scope contract。
+25. Git-history exposure inspection 的结果有稳定 status，但任何结果都不会被表述为对 forks、clones、backups 或 caches 的全局擦除证明。
+26. Transaction journal、prepared outputs、backups、JSON、audit 和 error paths 不泄露 hard-forgotten topic。
+27. 所有 adapters 对 forgetting boundary 使用相同语义和用户承诺。
 
 不得宣称：
 
@@ -81,6 +87,10 @@ MemoryCustodian v0.12 必须实现并通过仓库内测试、fixtures、audit �
 * v0.12 自动满足未来 1.0 的兼容性要求。
 * Entry schema、JSON schema 或 CLI contract 已获得长期 1.x 稳定性承诺。
 * 本版本本身等同于 1.0 release candidate，除非另有单独评估和决策。
+* Hard forget 或 purge 等同 complete erasure。
+* MemoryCustodian 会重写 Git history 或从 clones、forks、backups、caches 撤回内容。
+* `no-reachable-copy-detected` 证明不存在其他副本。
+* Local reset 会删除其他机器、同步目录或系统备份中的 local overlay。
 
 v0.12 应被描述为：
 
@@ -463,10 +473,128 @@ after-committed-before-cleanup
 * Committed 但未清理的 transaction 可以安全 finalize。
 
 Failpoint 只能用于测试或显式开发环境，不能成为普通 CLI 公共功能。
+## 四、Unified Erasure Contract
+
+Protocol 0.8 将 v0.10–v0.11 的 deletion boundary 固化为统一 public contract。该 contract 适用于：
+
+```text
+soft forget
+hard forget
+purge
+forget --id
+local reset
+recovery of an interrupted forgetting transaction
+```
+
+### 4.1 Canonical ErasureScope model
+
+固定字段：
+
+```json
+{
+  "active_memory": true,
+  "managed_archive": false,
+  "local_overlay": false,
+  "git_worktree_modified": true,
+  "git_history_modified": false,
+  "distributed_copies_revoked": false,
+  "history_check_status": "not-requested"
+}
+```
+
+要求：
+
+* 字段不得省略；不适用时使用 documented enum，而不是模糊 null。
+* `active_memory`、`managed_archive`、`local_overlay` 只表示 MemoryCustodian 本次管理和修改的 scope。
+* `git_worktree_modified` 表示 managed files 在 working tree 中发生变化，不表示已 commit。
+* `git_history_modified` 在 v0.12 所有正常 forgetting/local-reset 操作中固定为 false。
+* `distributed_copies_revoked` 固定为 false。
+* CLI 不提供绕过 preview 的 history-rewrite shortcut。
+* 对 hard forget/purge，result 不包含原始敏感 topic；使用 Entry ID、generic unit reference、counts 或 redacted operation type。
+
+### 4.2 History check status
+
+固定 enum：
+
+```text
+not-requested
+unavailable
+reachable-copy-detected
+no-reachable-copy-detected
+```
+
+要求：
+
+* `unavailable` 不等于 PASS。
+* `reachable-copy-detected` 表示当前可检查 repository history 中仍存在先前 committed copy。
+* `no-reachable-copy-detected` 只描述本次 bounded inspection；不得推断 dangling objects、other refs、remote copies、clones、forks、backups、caches 或 exported artifacts 不存在副本。
+* Git-derived path、ref 和 digest 可以输出，但不得为了报告 hard-forgotten content 而重复敏感 topic。
+* 相同 Git graph 和 parameters 必须产生确定 status。
+* Git 不可用时核心 forgetting 仍可工作，但 output 必须明确 history 未检查。
+
+### 4.3 Transaction-state privacy
+
+Forgetting transaction 的 journal、prepared output、backup 与 recovery 必须满足：
+
+* Journal 只记录 generic operation type、target path、digests、Entry ID 或 redacted unit reference。
+* Journal 不保存 topic string、完整 removed body、secret preview 或可逆编码的敏感内容。
+* Prepared output 与 rollback backup 只在受控 state transaction directory 中存在。
+* Recovery complete/rollback 后必须按 transaction policy 清理 temporary prepared files 与 backups。
+* Crash 后遗留的 transaction state 必须由 `audit --transactions` 检测；不得静默长期保留。
+* Backup 是 crash recovery mechanism，不是 archive；不能被 reader 或 agent context loading 使用。
+* 即使 managed transaction state 被清理，也不得声称 Git history 或 distributed copies 已被清除。
+
+### 4.4 Erasure audit findings
+
+统一 audit 增加：
+
+```text
+MC-ERASURE-001  Output claims broader erasure than performed
+MC-ERASURE-002  Git history inspection unavailable
+MC-ERASURE-003  Reachable historical copy detected
+MC-ERASURE-004  No reachable copy detected; external copies unverified
+MC-ERASURE-005  Forgotten topic leaked into journal, backup metadata, JSON or error output
+MC-ERASURE-006  Local reset scope exceeds current machine/project overlay
+MC-ERASURE-007  Sensitive repo memory should be minimized or moved to a controlled source
+```
+
+Severity：
+
+* broader-erasure false claim：ERROR。
+* forgotten topic leakage：BLOCKER。
+* unsafe local reset scope：BLOCKER。
+* reachable historical copy：WARNING/REVIEW；不阻止 managed-memory removal，但要求准确提示。
+* inspection unavailable：INFO/REVIEW，不能显示 PASS。
+* sensitive raw content finding：WARNING/ERROR，按 security pattern 与 policy 决定。
+
+### 4.5 Documentation language
+
+规范性定义固定为：
+
+> Forgetting controls what remains available to future agents through MemoryCustodian. It is not a guarantee of erasure from Git history or previously distributed copies.
+
+允许：
+
+```text
+Removed from managed active memory.
+Purged from managed active memory and managed archive.
+Git history was not modified.
+Previously distributed copies remain outside MemoryCustodian control.
+```
+
+禁止：
+
+```text
+Permanently deleted everywhere.
+Completely erased from the repository.
+No copies remain.
+Removed from all clones and forks.
+```
+
 
 ---
 
-## 四、统一 Audit 命令
+## 五、统一 Audit 命令
 
 实现正式：
 
@@ -490,6 +618,8 @@ memory-custodian audit
 --budgets
 --local
 --transactions
+--erasure
+--history-exposure
 --completeness
 --all
 --format text
@@ -506,13 +636,14 @@ evidence
 relations
 subjects
 conflicts
+erasure
 budgets
 transactions
 ```
 
 `audit --all` 额外包含 privacy、security、freshness 和 local。
 
-### 4.1 Audit 结果模型
+### 5.1 Audit 结果模型
 
 固定 severity：
 
@@ -551,13 +682,15 @@ FAIL
 * Text output 来自同一内部 finding model。
 * 不在 JSON 中泄露 secret。
 * Hard forget/purge finding 不包含被删除 topic。
+* Erasure findings 使用同一 Canonical ErasureScope model。
+* History inspection unavailable 不得被渲染为 PASS。
 * Exit code：
 
   * 0：没有 ERROR/BLOCKER
   * 1：存在 ERROR
   * 2：存在 BLOCKER 或运行环境错误
 
-### 4.2 Audit summary
+### 5.2 Audit summary
 
 输出：
 
@@ -588,9 +721,14 @@ Budgets:
 - ...
 Transactions:
 - clean / recovery required
+Erasure:
+- managed scope: ...
+- history check: not-requested / unavailable / reachable-copy-detected / no-reachable-copy-detected
+- git history modified: no
+- distributed copies revoked: no
 ```
 
-### 4.3 Routing completeness findings
+### 5.3 Routing completeness findings
 
 统一 audit 必须吸收 v0.11 的 routing result model，而不是重新实现第二套逻辑。
 
@@ -617,7 +755,7 @@ MC-ROUTING-008  Adapter omitted required scope input
 * Audit 不自动添加 paths、改变 routes 或移动 entries。
 
 
-### 4.4 Subject and conflict findings
+### 5.4 Subject and conflict findings
 
 统一 audit 必须复用 v0.11 的 Subject index、scope overlap、conflict result 和 merge-base change collector。
 
@@ -663,7 +801,7 @@ Severity：
 
 ---
 
-## 五、统一 Machine-readable CLI 输出
+## 六、统一 Machine-readable CLI 输出
 
 为主要只读命令增加：
 
@@ -712,14 +850,16 @@ Severity：
   * structural conflict identities
   * conflict/reconciliation finding codes
   * merge-aware review status when requested
+  * canonical `erasure_scope` object for forgetting/local-reset/recovery results
+  * bounded `history_check_status` and explicit external-copy disclaimer
 
 不得为写命令加入绕过 preview 的 JSON shortcut。
 
 ---
 
-## 六、跨 Agent 一致性
+## 七、跨 Agent 一致性
 
-### 6.1 Shared context contract
+### 7.1 Shared context contract
 
 相同输入：
 
@@ -752,6 +892,8 @@ CLI version
 * 相同 current-memory conflict status
 * 相同 structural conflict findings
 * 相同 merge-aware findings when the same merge base and Git graph are supplied
+* 相同 ErasureScope values and history-status interpretation for the same operation
+* 相同 forgetting boundary language across adapters
 
 要求：
 
@@ -769,7 +911,7 @@ CLI version
 * 不得使用 “no semantic conflicts” 描述仅通过 structural checks 的 memory set。
 * Subject display-name changes不得改变 context identity、finding identity 或 order。
 
-### 6.2 Adapters
+### 7.2 Adapters
 
 检查并统一：
 
@@ -789,6 +931,8 @@ CLI version
 7. 遵守 trust boundary。
 8. 在 meaningful decision 后提出或执行 memory update。
 9. 不直接把全部 `docs/memory/` 注入 context。
+10. 对 forgetting/local reset 使用 canonical ErasureScope，不声称修改 Git history 或撤回 distributed copies。
+11. History-check unavailable 或 bounded no-match 时使用准确 caveat。
 10. 创建 managed hard memory 前复用 Subject ID。
 11. 在 substantial work 前阻止 current-memory deterministic conflict。
 12. merge/rebase workflow 中显式运行 merge-aware audit 或等价 contract。
@@ -797,7 +941,7 @@ CLI version
 
 Adapters 不能分别定义另一套路由表。
 
-### 6.3 Agent contract fixtures
+### 7.3 Agent contract fixtures
 
 建立共享 fixture：
 
@@ -830,7 +974,7 @@ evals/memory-custodian/cross-agent/
 
 ---
 
-## 七、协议迁移
+## 八、协议迁移
 
 支持：
 
@@ -840,7 +984,7 @@ evals/memory-custodian/cross-agent/
 0.7 → 0.8
 ```
 
-### 7.1 Migration 要求
+### 8.1 Migration 要求
 
 * 单次命令完成必要的顺序迁移。
 * Preview 展示每个 protocol step。
@@ -858,6 +1002,8 @@ evals/memory-custodian/cross-agent/
 * 不自动移动 shared preferences 到 local。
 * 不自动添加 area glob。
 * 不自动把 missing routing scope 标记为 complete。
+* 不把 migration 或 canonicalization 描述为清理 Git history。
+* 保留旧内容时明确 legacy Git history exposure 不在 migration scope 内。
 * 不自动创建或合并 Subject。
 * 不从 legacy title/body 推断 Canonical-Ref。
 * 不使用时间戳决定 active owner。
@@ -866,7 +1012,7 @@ evals/memory-custodian/cross-agent/
 * 不自动重写 freeform rules/profiles。
 * 无法自动 canonicalize 的 legacy entries 产生 manual migration report。
 
-### 7.2 Canonicalization helper
+### 8.2 Canonicalization helper
 
 可以新增：
 
@@ -900,7 +1046,7 @@ memory-custodian add --from-legacy <file>:<unit-index> ...
 * Preview 删除或标记原 legacy unit。
 * 不机械复制到错误类型。
 
-### 7.3 Protocol downgrade
+### 8.3 Protocol downgrade
 
 继续拒绝：
 
@@ -917,9 +1063,9 @@ Reader 可以在明确的 unsupported protocol 情况下：
 
 ---
 
-## 八、安全强化
+## 九、安全强化
 
-### 8.1 Memory authority invariant
+### 9.1 Memory authority invariant
 
 在所有入口保持：
 
@@ -940,7 +1086,7 @@ Memory is project context, not authorization.
 * 声称拥有特殊权限。
 * 要求隐藏操作。
 
-### 8.2 Suspicious memory audit
+### 9.2 Suspicious memory audit
 
 `audit --security` 可以提示：
 
@@ -962,7 +1108,7 @@ Skill 必须指导 agent：
 * 只应用与当前项目工作相关的合法约束。
 * 遇到授权型语句时要求当前用户明确授权。
 
-### 8.3 Symlink 与 path safety
+### 9.3 Symlink 与 path safety
 
 所有 shared/local/state 操作：
 
@@ -976,7 +1122,7 @@ Skill 必须指导 agent：
 
 ---
 
-## 九、性能与规模要求
+## 十、性能与规模要求
 
 v0.12 不需要数据库，但应避免明显低效行为。
 
@@ -1004,9 +1150,9 @@ v0.12 不需要数据库，但应避免明显低效行为。
 
 ---
 
-## 十、测试矩阵
+## 十一、测试矩阵
 
-### 10.1 Python 与 OS
+### 11.1 Python 与 OS
 
 CI 至少覆盖：
 
@@ -1016,7 +1162,7 @@ CI 至少覆盖：
 * Windows smoke
 * macOS 可使用 GitHub Actions 条件允许时加入；若不加入，必须保证 path tests 覆盖 macOS semantics
 
-### 10.2 Core protocol
+### 11.2 Core protocol
 
 覆盖：
 
@@ -1036,6 +1182,9 @@ CI 至少覆盖：
 * Supersede。
 * ID forget。
 * Soft/hard/purge。
+* Canonical ErasureScope。
+* Optional Git history exposure inspection。
+* Local reset erasure boundary。
 * Anti-resurrection。
 * Area routing。
 * Global hard-constraint baseline。
@@ -1049,7 +1198,7 @@ CI 至少覆盖：
 * JSON output。
 * Migration。
 
-### 10.3 Transaction recovery
+### 11.3 Transaction recovery
 
 覆盖全部 failpoints：
 
@@ -1065,7 +1214,7 @@ CI 至少覆盖：
 * journal malformed
 * newer unsupported journal schema
 
-### 10.4 Cross-agent contract
+### 11.4 Cross-agent contract
 
 每个 fixture 验证：
 
@@ -1089,7 +1238,7 @@ Adapter drift checker 确保：
 * 所有 adapter 含 trust boundary。
 * 所有 adapter 不自动加载 archive/inbox。
 
-### 10.5 Privacy 与 security
+### 11.5 Privacy 与 security
 
 覆盖：
 
@@ -1105,8 +1254,15 @@ Adapter drift checker 确保：
 * transaction target replacement attack
 * hard-forget subject metadata leakage
 * merge-base output privacy
+* committed historical copy remains detectable after hard forget
+* purge removes managed archive but not Git history
+* Git unavailable produces `unavailable`, not PASS
+* `no-reachable-copy-detected` retains external-copy disclaimer
+* local reset does not affect another-machine fixture
+* false complete-erasure wording is rejected
+* transaction backup metadata does not leak forgotten topic
 
-### 10.6 Migration fixtures
+### 11.6 Migration fixtures
 
 至少：
 
@@ -1126,7 +1282,7 @@ Adapter drift checker 确保：
 
 ---
 
-## 十一、v0.12 文档结构
+## 十二、v0.12 文档结构
 
 README 应保持产品导向和简洁，不把所有协议细节堆入首页。
 
@@ -1139,6 +1295,7 @@ README 包含：
 * Evidence-backed memory
 * Shared vs local
 * Safe update and forgetting
+* Erasure boundary: managed memory vs Git history and distributed copies
 * Core CLI recipes
 * Supported agents
 * v0.12 verified capabilities
@@ -1160,6 +1317,7 @@ routing-policy.md
 subject-identity-policy.md
 conflict-reconciliation-policy.md
 transaction-policy.md
+erasure-boundary.md
 quality-audit.md
 forgetting-policy.md
 security-boundary.md
@@ -1174,7 +1332,7 @@ examples.md
 * 明确哪个文件是规范性定义。
 * README、Skill 和 examples 不得形成冲突的第二协议。
 
-### 11.1 Normative language
+### 12.1 Normative language
 
 协议文档使用：
 
@@ -1189,9 +1347,9 @@ README 使用产品语言，不重复全部 MUST 级规则。
 
 ---
 
-## 十二、Release 准备
+## 十三、Release 准备
 
-### 12.1 版本一致性
+### 13.1 版本一致性
 
 检查并统一：
 
@@ -1207,7 +1365,7 @@ README 使用产品语言，不重复全部 MUST 级规则。
 
 增加 automated version drift check。
 
-### 12.2 v0.12 Release Notes
+### 13.2 v0.12 Release Notes
 
 按以下类别记录：
 
@@ -1218,6 +1376,7 @@ README 使用产品语言，不重复全部 MUST 级规则。
 * Safe concurrency and recovery
 * Explainability and audit
 * Forgetting and privacy
+* Erasure scope and Git-history boundary
 * Migration
 * Cross-agent support
 * Subject identity and conflict governance
@@ -1230,8 +1389,11 @@ README 使用产品语言，不重复全部 MUST 级规则。
 * semantic correctness
 * security completeness
 * transaction guarantees
+* complete erasure
+* removal from Git history
+* revocation from clones, forks, backups or caches
 
-### 12.3 Dogfood
+### 13.3 Dogfood
 
 仓库自身 `docs/memory/` 必须：
 
@@ -1256,10 +1418,12 @@ README 使用产品语言，不重复全部 MUST 级规则。
 * `read --strict-routing --explain` 对 dogfood fixtures 不产生未解释的 INCOMPLETE。
 * brief 仍是项目内容，不是 protocol boilerplate。
 * budgets 健康。
+* forgetting fixtures 的 output 与 JSON 都包含 canonical erasure scope。
+* dogfood docs 不使用 complete-erasure language。
 
 ---
 
-## 十三、后续 1.0 决策边界
+## 十四、后续 1.0 决策边界
 
 完成 v0.12 不代表自动进入 `1.0.0 / Protocol 1.0`。
 
@@ -1271,13 +1435,14 @@ README 使用产品语言，不重复全部 MUST 级规则。
 * Protocol 0.8 schema 是否仍需要调整。
 * JSON 与 CLI contract 是否具备长期维护条件。
 * Local overlay、Evidence、relations 和 forgetting 的真实使用反馈。
+* Erasure-scope wording、history-inspection usefulness 与用户对边界的理解。
 * 是否存在阻碍长期兼容承诺的已知问题。
 
 后续 1.0 应作为单独版本规划，不在本指南中预先冻结 schema，也不在 v0.12 release notes 中承诺 1.x 长期兼容。
 
 ---
 
-## 十四、v0.12 Definition of Done
+## 十五、v0.12 Definition of Done
 
 只有满足以下全部条件才可标记 v0.12 完成：
 
@@ -1341,6 +1506,11 @@ README 使用产品语言，不重复全部 MUST 级规则。
 * Memory 不能授予权限。
 * Security scan 不泄露 secret。
 * Hard forget/purge 的 preview、journal、JSON 和 error 不泄露 topic。
+* Forget、purge、local reset 和 recovery 使用统一 canonical ErasureScope。
+* `git_history_modified` 与 `distributed_copies_revoked` 在正常操作中固定为 false。
+* `unavailable` 不显示 PASS；`no-reachable-copy-detected` 不被描述为无外部副本。
+* Transaction backup/prepared state 不进入 agent context，并在安全恢复后清理。
+* CLI、README、Skill 与 adapters 不使用 complete-erasure wording。
 * Shared/local/state path 都防止 traversal 与 symlink escape。
 * Local overlay 永远在 repo 外。
 * Local reset 不影响其他项目。
@@ -1350,6 +1520,8 @@ README 使用产品语言，不重复全部 MUST 级规则。
 * `audit` 具有稳定 finding model。
 * `audit --subjects`、`--conflicts` 与 optional `--merge-base` 使用同一 finding model。
 * JSON 包含 Subject、Facet、conflict identity、conflict status 和 reconciliation findings。
+* JSON 包含 canonical `erasure_scope` 和 bounded `history_check_status`。
+* `audit --erasure` 与 `--history-exposure` 使用稳定 finding model。
 * 主要只读命令支持稳定 JSON。
 * Exit codes 文档化。
 * Error output 与 stdout 分离。
@@ -1362,6 +1534,7 @@ README 使用产品语言，不重复全部 MUST 级规则。
 * Adapter 不包含第二套路由表。
 * Cross-agent contract fixtures 通过。
 * Cross-agent conflict fixtures 产生相同 Subject identity、finding codes 和 conflict status。
+* Cross-agent forgetting fixtures 产生相同 ErasureScope、history status 和 boundary wording。
 * Adapter 不自行实现另一套 Subject 或 conflict logic。
 * Static checker 不冒充 live runtime benchmark。
 * 至少保留一个明确标注为 live evaluation 的可复现示例。

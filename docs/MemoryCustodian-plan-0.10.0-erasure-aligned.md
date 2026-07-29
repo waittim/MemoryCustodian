@@ -1,6 +1,6 @@
 # MemoryCustodian v0.10 实施指南
 
-## Protocol 0.6：Evidence、Entry Identity、Subject Identity 与并发安全
+## Protocol 0.6：Evidence、Entry Identity、Subject Identity、并发安全与 Erasure Boundary
 
 你正在修改仓库：
 
@@ -44,6 +44,9 @@
 13. CLI 在当前 memory set 内阻止相同 Scope、Subject 与 Facet 同时存在多个 active owner。
 14. Subject 名称与 aliases 可以变化，但 entry 始终引用稳定 Subject ID；CLI 不声称能够自动发现两个异名 Subject 实际语义相同。
 15. 为 v0.11 的 merge-aware conflict review 保留 Subject registry、canonical reference、alias ownership 和 structural conflict identity。
+16. Forgetting 具有明确、结构化的 erasure scope：区分 active managed memory、managed archive、local overlay、Git history 与已分发副本。
+17. `hard forget` 与 `purge` 不得被描述为 Git history rewrite、repository-wide erasure 或对 clones、forks、backups 的撤回。
+18. Forget preview 与 apply 输出必须准确说明本次操作覆盖和未覆盖的存储边界。
 
 目标版本：
 
@@ -73,6 +76,9 @@
 * 通过 embedding、LLM 或模糊相似度自动合并 Subject
 * 使用“较新条目自动获胜”解决矛盾
 * 仅根据时间戳自动 supersede、删除或降级 active memory
+* 自动执行 `git filter-repo`、`git filter-branch`、force push、删除远程 branches/tags 或其他 history rewrite
+* 声称 MemoryCustodian 能从 clones、forks、backups、caches 或其他已分发副本撤回内容
+* 将 repo memory 描述为适合存放 secrets、credentials、完整合同条款或原始敏感供应商数据的 secret store
 
 Git 可以作为可选增强，用于检查 evidence revision，但不能成为核心命令的必要条件。
 
@@ -882,6 +888,86 @@ memory-custodian check --security
 * `preferences.md` 中本机路径保持现有 warning，并提升为带位置的结构化输出。
 * 不尝试识别健康、政治、移民等复杂语义内容。
 * Skill 中继续要求 agent 在写入 shared memory 前进行语义隐私判断。
+### 10.3 Forgetting 与 Erasure Boundary
+
+Protocol 0.6 必须正式区分：
+
+```text
+1. Active managed memory
+2. Managed archive
+3. Local overlay
+4. Git working tree and index
+5. Git history and reachable objects
+6. Existing clones, forks, backups, caches and external copies
+```
+
+MemoryCustodian 的 forgetting contract 是：
+
+> Forgetting controls what remains available to future agents through MemoryCustodian. It is not a guarantee of erasure from Git history or previously distributed copies.
+
+模式边界：
+
+| Mode | Active managed memory | Managed archive | New topic-bearing tombstone/log | Git history | Existing clones/forks/backups |
+| --- | --- | --- | --- | --- | --- |
+| soft | remove matching active units | no | generic/topic-bearing soft guard allowed by policy | unchanged | outside protocol control |
+| hard | remove matching active units | no unless separately targeted | MUST NOT retain forgotten topic | unchanged | outside protocol control |
+| purge | remove matching active units | remove matching managed archive units | MUST NOT retain forgotten topic | unchanged | outside protocol control |
+
+要求：
+
+* `hard` 表示从 MemoryCustodian 管理的 active files 中移除，不表示从 Git 历史中擦除。
+* `purge` 表示从 active files 与 MemoryCustodian 管理的 `archive/` 中移除，不表示 repository-wide history rewrite。
+* 工作树、index 或未来 commit 是否包含修改后的文件由正常 Git workflow 决定；forget 命令不得自动 commit。
+* 已经 commit 的旧版本可能继续存在于 reachable or dangling Git objects、remote refs、clones、forks、backups 和 caches 中。
+* CLI 不得将任何模式输出为 `permanently deleted everywhere`、`fully erased` 或等价承诺。
+* 对 secrets、credentials、个人数据、合同方、合同编号、供应商额度等敏感信息，应优先阻止写入，而不是依赖事后 forget。
+* 必须鼓励最小化记录和抽象化约束，例如记录“受外部 vendor policy 限制”，而不是复制完整合同条款或敏感数值。
+* Evidence 可以引用受控内部文档，但 repo memory 不应复制不必要的敏感原文。
+
+内部必须建立统一 `ErasureScope` 结果模型，至少包含：
+
+```text
+active_memory
+managed_archive
+local_overlay
+git_worktree_modified
+git_history_modified
+distributed_copies_revoked
+history_check_status
+```
+
+v0.10 中固定值或行为：
+
+* `git_history_modified: false`
+* `distributed_copies_revoked: false`
+* `history_check_status: not-requested`
+* `local_overlay` 在 v0.10 尚未实现时为 `not-applicable`
+
+Forget preview 必须显示：
+
+```text
+Removal scope:
+- Active managed memory: yes/no
+- Managed archive: yes/no
+- New tombstones/logs retain topic: yes/no
+- Git history modified: no
+- Existing clones, forks and backups revoked: no
+- History inspection: not requested
+```
+
+Apply 成功必须使用准确措辞，例如：
+
+```text
+Removed from the selected managed memory scope.
+Git history and previously distributed copies were not modified.
+```
+
+不得仅输出：
+
+```text
+Permanently deleted.
+```
+
 
 ---
 
@@ -993,6 +1079,7 @@ AGENTS.md / CLAUDE.md / GEMINI.md managed bootstrap templates
 * Canonical plan serialization
 * Plan ID calculation
 * Privacy/security scanning
+* Erasure scope modeling and rendering
 * Migration 0.5 → 0.6
 * Subject registry parsing and validation
 * Subject ID generation and indexing
@@ -1034,6 +1121,11 @@ AGENTS.md / CLAUDE.md / GEMINI.md managed bootstrap templates
 * `--confirm-plan` mismatch 零写入。
 * Secret scan 脱敏。
 * Machine path scan。
+* Soft/hard/purge erasure-scope matrix。
+* Forget preview 明确 `git_history_modified: false`。
+* Forget apply 不使用 complete/permanent erasure wording。
+* Purge 覆盖 managed archive，但不声称覆盖 Git history。
+* Forgotten topic 不进入新的 tombstone、changelog、plan diagnostics 或 error output。
 * Legacy entry compatibility。
 * Protocol downgrade guard 保持正常。
 * Subject ID 格式与唯一性。
@@ -1104,6 +1196,8 @@ Fixtures：
 13. Stable Subject ID survives display-name changes。
 14. Duplicate exact structural owner is rejected。
 15. Agent does not claim that aliases or timestamps prove semantic equivalence。
+16. Agent explains that hard forget/purge affect managed memory, not Git history or distributed copies。
+17. Agent avoids storing raw secrets, contract details and unnecessary vendor limits in repo memory。
 
 静态 checker 不要声称执行真实 agent runtime。
 
@@ -1116,6 +1210,8 @@ Fixtures：
 * 非预期编程错误保留 traceback。
 * 所有错误返回非零 exit code。
 * 不输出 secret 全文。
+* Forgetting preview/apply 必须从统一 `ErasureScope` model 渲染。
+* Forgetting 输出必须明确 Git history 与 distributed copies 未被修改或撤回。
 * Preview 必须明确列出：
 
   * Plan ID
@@ -1146,6 +1242,8 @@ README 新增或更新：
 * Facet taxonomy
 * Structural conflict identity
 * Current limitation：异名同义 Subject 仍需要后续 merge-aware review
+* Forgetting erasure boundary：managed memory removal vs Git history and distributed copies
+* Sensitive-memory minimization：不要把 repo memory 当作 secret store
 * Routing boundary：canonical task、manifest route 与显式 optional inputs
 * 当前版本不保证 agent 选择了正确 task category
 * 当前版本不提供完整 excluded-module explanation trace；该能力属于 v0.11
@@ -1189,6 +1287,10 @@ Release notes 必须真实描述实现内容，不得宣称：
 * cryptographic authorization
 * transactional database semantics
 * live cross-agent benchmark
+* complete erasure
+* repository-wide erasure
+* removal from Git history
+* revocation from clones, forks or backups
 
 ---
 
@@ -1220,6 +1322,10 @@ Release notes 必须真实描述实现内容，不得宣称：
 * Subject registry mutation preview-first，并受 Plan ID 与 stale digest guard 保护。
 * v0.10 文档明确不保证发现两个异名但同义的 Subject。
 * 时间戳不用于自动决定冲突 winner。
+* Soft/hard/purge 的 managed scope 被结构化定义并在 preview/apply 中展示。
+* Hard forget/purge 不修改 Git history，也不声称撤回 clones、forks、backups 或 caches。
+* Forgetting 输出不使用 `permanently deleted everywhere` 或等价措辞。
+* Privacy/security guidance 要求最小化、抽象化敏感约束，并明确 repo memory 不是 secret store。
 * 文档不把 canonical task classification 描述为自动解决的 relevance problem。
 * 全部 unit、integration、skill eval 和 repository checks 通过。
 * README、references、templates、examples、dogfood memory 和 release notes 同步更新。

@@ -1,6 +1,6 @@
 # MemoryCustodian v0.11.0 实施指南
 
-## Protocol 0.7：Local Overlay、确定性路由、冲突审计与完整解释
+## Protocol 0.7：Local Overlay、确定性路由、冲突审计、Erasure Scope 与完整解释
 
 你正在继续修改已经完成 v0.10 / Protocol 0.6 的 MemoryCustodian。
 
@@ -18,6 +18,8 @@ v0.10 已提供：
 * Stable Subject registry、Canonical-Ref、aliases 与 controlled Facet
 * Structural conflict identity：Scope + Subject ID + Facet
 * Current-memory mutation preflight prevents a second exact active owner
+* Structured `ErasureScope` contract for soft, hard and purge operations
+* Forgetting output explicitly excludes Git-history rewrite and revocation of distributed copies
 
 当前阶段要解决的核心问题是：
 
@@ -65,6 +67,9 @@ MemoryCustodian v0.11 必须实现以下保障：
 16. Git 可用时，`audit --merge-base <ref>` 能发现两个分支并发修改 hard memory 的 reconciliation risk。
 17. 两个分支分别创建不同 Subject ID 时，exact Canonical-Ref 或 alias collision 被确定性发现；无法证明同义的异名 Subject 被标记为 review，而不是静默视为无冲突。
 18. Subject merge、scope exception 和 supersede 使用显式关系与 preview-first multi-file mutation。
+19. Topic-based forget、`forget --id`、purge 和 local reset 使用同一 erasure-scope model，且不会以不同措辞产生误导。
+20. Git 可用时，用户可以显式请求 best-effort history exposure inspection；不可用或未检查时不得被解释为安全擦除证明。
+21. Local reset 只影响当前机器上当前 `project_id` 的 overlay，不声称删除其他机器或备份中的 local copies。
 
 v0.11 解决的是：
 
@@ -105,6 +110,9 @@ v0.11 不声称解决：
 * 根据编辑距离、关键词或正文相似度自动合并 Subject
 * 自动判断两个任意自然语言 constraints 是否语义矛盾
 * 在 merge-aware review 未完成时静默声明 hard-memory conflict-free
+* 自动运行 Git history rewrite、force push、删除远程 refs 或清理其他 clones/forks
+* 将 `no reachable copy detected` 表述为不存在外部副本的证明
+* 将 local overlay 当作 secret store，或声称 `local reset` 能清除其他机器上的副本
 
 文件系统和 manifest 仍是唯一 shared source of truth。
 
@@ -824,7 +832,7 @@ memory-custodian audit --merge-base origin/main
 
 ## 八、Local Overlay
 
-### 7.1 目标
+### 8.1 目标
 
 允许以下内容保持在 repo 外：
 
@@ -845,7 +853,7 @@ Local overlay 不得：
 * 存储 secrets
 * 变成第二个 shared manifest
 
-### 7.2 位置
+### 8.2 位置
 
 使用 v0.10 state root：
 
@@ -871,7 +879,7 @@ docs/memory/
 
 Local path 由 `project_id` 绑定，不由可移动的 project path 作为唯一身份。
 
-### 7.3 Local manifest
+### 8.3 Local manifest
 
 Local manifest 只能声明 local modules，不得重新定义 shared routes。
 
@@ -899,7 +907,7 @@ Local manifest 只能声明 local modules，不得重新定义 shared routes。
 * Shared entries 不能使用 local scope。
 * Local overlay 不能引用 repo 外的任意文件作为 runtime module。
 
-### 7.4 Precedence
+### 8.4 Precedence
 
 固定优先级：
 
@@ -917,7 +925,7 @@ Local manifest 只能声明 local modules，不得重新定义 shared routes。
 * 冲突必须在 `read --explain` 中显示 warning。
 * `--no-local` 必须产生完全不包含 local overlay 的 shared context。
 
-### 7.5 CLI
+### 8.5 CLI
 
 至少支持：
 
@@ -940,6 +948,9 @@ memory-custodian read --no-local
 * 不影响其他项目。
 * Security/privacy scan 对 local 内容同样适用。
 * Local secrets 仍然拒绝或 ERROR，不因 repo 外而被视为安全。
+* `local reset` 使用统一 ErasureScope model。
+* `local reset` 必须显示：只删除当前机器、当前 project_id 的 managed overlay。
+* `local reset` 不得声称影响其他机器、同步目录、系统备份或用户自行复制的文件。
 
 ---
 
@@ -969,11 +980,117 @@ memory-custodian promote MC-INBOX-... \
 * `promote` 创建新的 active ID，并更新双向 promotion relation。
 * 所有 multi-file mutation 使用 v0.10 lock、Plan ID 和 stale digest guard。
 * Hard forget/purge 的输出不得泄露敏感 topic。
+* Topic forget、`forget --id` 和 purge 必须输出统一 erasure scope。
 * Legacy unit 可列出，但没有伪造 ID；使用 file/unit reference。
+## 十、Erasure Scope 与可选 Git History Inspection
+
+v0.11 必须将 v0.10 的 `ErasureScope` contract 覆盖到所有相关删除入口：
+
+```text
+memory-custodian forget <topic>
+memory-custodian forget --id <ENTRY_ID>
+memory-custodian forget ... --mode hard
+memory-custodian forget ... --mode purge
+memory-custodian local reset
+```
+
+### 10.1 统一 ErasureScope
+
+每个 preview/apply result 至少包含：
+
+```text
+active_memory
+managed_archive
+local_overlay
+git_worktree_modified
+git_history_modified
+distributed_copies_revoked
+history_check_status
+```
+
+要求：
+
+* 同一操作的 text output 与内部 result model 一致。
+* Topic forget 与 ID forget 不得定义不同的删除承诺。
+* `purge` 只将 `managed_archive` 设为 true；仍然保持 `git_history_modified: false`。
+* `local reset` 只将当前机器、当前 project_id 的 `local_overlay` 设为 true。
+* 所有操作固定 `distributed_copies_revoked: false`。
+* Hard forget/purge 不在 output、plan、reconciliation log 或 subject diagnostics 中重复 forgotten topic。
+
+### 10.2 可选 Git history exposure inspection
+
+增加显式参数：
+
+```bash
+memory-custodian forget --id MC-CON-... \
+  --mode hard \
+  --history-check
+```
+
+或者等价地允许 topic forget 与 purge 使用同一参数。
+
+该检查是 best-effort、read-only、optional：
+
+* Git 不是核心运行依赖。
+* 不修改 commits、refs、index、remotes 或 working tree 之外的内容。
+* 不自动运行 `git filter-repo`、`git filter-branch`、rebase、gc、force push 或 remote deletion。
+* 只检查当前可访问 repository 中的 reachable history；不得扫描网络、forks 或其他 clones。
+* 对 hard-forgotten sensitive topic，history check 不得把原始 topic 输出到日志；应使用 Entry ID、file/unit reference 或 generic match count。
+
+固定 `history_check_status`：
+
+```text
+not-requested
+unavailable
+reachable-copy-detected
+no-reachable-copy-detected
+```
+
+语义：
+
+* `not-requested`：未执行 history inspection。
+* `unavailable`：Git 不可用、项目非 Git repo 或检查失败；不得解释为 PASS。
+* `reachable-copy-detected`：当前可访问 Git history 中存在先前 committed copy。
+* `no-reachable-copy-detected`：在本次有限检查范围内未发现；不证明 dangling objects、other refs、remotes、clones、forks、backups 或 caches 中不存在副本。
+
+示例输出：
+
+```text
+History inspection: reachable-copy-detected
+Git history was not modified.
+Existing clones, forks and backups remain outside MemoryCustodian control.
+```
+
+或：
+
+```text
+History inspection: no-reachable-copy-detected
+No reachable copy was found in the inspected repository history.
+This is not proof that no external or previously distributed copy exists.
+```
+
+### 10.3 Sensitive-memory guidance
+
+README、Skill 与 policy 必须指导 agent：
+
+* 在写入前优先 redaction、abstraction 和 minimization。
+* 不复制 credentials、private keys、完整合同条款、合同编号、个人身份信息或不必要的供应商限额。
+* 对必要约束，优先写入抽象、可执行规则，并用 Evidence 指向受控来源。
+* 如果必须记录敏感事实，应先获得用户确认，并明确 Git history/distribution 风险。
+* Forgetting 是 active-memory governance，不是对已分发信息的撤回机制。
+
+所有删除入口禁止输出：
+
+```text
+Permanently deleted everywhere.
+Completely erased from the repository.
+No copies remain.
+Removed from all clones and forks.
+```
 
 ---
 
-## 十、Reachability、Freshness 与 Conflict Audit
+## 十一、Reachability、Freshness 与 Conflict Audit
 
 v0.11 可以先通过 `check` 子命令提供，v0.12 再统一到正式 `audit`：
 
@@ -989,7 +1106,7 @@ memory-custodian check --conflicts
 memory-custodian audit --merge-base origin/main
 ```
 
-### 9.1 Routing audit
+### 11.1 Routing audit
 
 至少检测：
 
@@ -1006,7 +1123,7 @@ memory-custodian audit --merge-base origin/main
 * Root constraints 未在 substantial route 可达
 * Adapter 内置第二套路由表
 
-### 9.2 Reachability audit
+### 11.2 Reachability audit
 
 必须建立静态 reachability graph：
 
@@ -1036,7 +1153,7 @@ Finding：
 * 自动把 module 改为 always-load
 * 根据条目文本猜测它应属于哪个 area
 
-### 9.3 Freshness audit
+### 11.3 Freshness audit
 
 Evidence-aware 检查：
 
@@ -1051,7 +1168,7 @@ Evidence-aware 检查：
 
 ---
 
-## 十一、Adapters 与 Agent Workflow
+## 十二、Adapters 与 Agent Workflow
 
 所有 adapters 必须统一为：
 
@@ -1087,11 +1204,11 @@ Skill 不得指示 agent：
 
 ---
 
-## 十二、协议迁移
+## 十三、协议迁移
 
 实现 Protocol 0.6 → 0.7 migration。
 
-### 11.1 Migration 必须做到
+### 13.1 Migration 必须做到
 
 * Preview-first。
 * 使用 v0.10 Plan ID。
@@ -1113,7 +1230,7 @@ Skill 不得指示 agent：
 * 对缺 Subject/Facet 的 managed legacy entries输出 manual assignment checklist。
 * 不丢失 human-readable module descriptions。
 
-### 11.2 Optional module migration
+### 13.2 Optional module migration
 
 对旧 optional index：
 
@@ -1128,7 +1245,7 @@ Skill 不得指示 agent：
   * substantial read 可能为 INCOMPLETE
 * 不从文件内容、目录名称或 description 自动推断 matcher。
 
-### 11.3 Default template migration
+### 13.3 Default template migration
 
 新项目模板必须使用：
 
@@ -1148,7 +1265,7 @@ Skill 不得指示 agent：
 
 ---
 
-## 十三、需要修改的仓库区域
+## 十四、需要修改的仓库区域
 
 至少检查并按需要修改：
 
@@ -1187,6 +1304,7 @@ adapters/
 * Entry index
 * Reachability graph
 * Freshness findings
+* Erasure scope and history-exposure findings
 * Local overlay state
 * Shared/local precedence
 * Protocol 0.6 → 0.7 migration
@@ -1202,9 +1320,9 @@ adapters/
 
 ---
 
-## 十四、测试要求
+## 十五、测试要求
 
-### 13.1 Unit tests
+### 15.1 Unit tests
 
 必须覆盖：
 
@@ -1247,8 +1365,13 @@ adapters/
 * Conflict status CLEAR/REVIEW/CONFLICT/INVALID。
 * Strict read blocks deterministic conflict。
 * Subject merge updates all references atomically。
+* Topic forget、ID forget 与 purge 生成相同 ErasureScope semantics。
+* Git history check statuses and wording。
+* Git unavailable 不显示 PASS。
+* `no-reachable-copy-detected` 不被渲染为 complete erasure。
+* Local reset 仅影响当前机器的 current-project overlay。
 
-### 13.2 Integration tests
+### 15.2 Integration tests
 
 Fixtures 至少包括：
 
@@ -1275,6 +1398,10 @@ Fixtures 至少包括：
 * Project constraint and area exception without relation。
 * Reconciled distinct entries。
 * Subject merge creates downstream owner conflict。
+* Hard forget removes active memory while committed history remains detectable。
+* Purge removes managed archive but not Git history。
+* Git unavailable history-check fixture。
+* Local reset leaves a simulated second-machine overlay untouched。
 
 验证：
 
@@ -1286,7 +1413,7 @@ Fixtures 至少包括：
 * `--no-local` hash 或 text 可复现。
 * Migration 不丢 custom route。
 
-### 13.3 Skill evals
+### 15.3 Skill evals
 
 新增场景：
 
@@ -1307,10 +1434,13 @@ Fixtures 至少包括：
 15. Concurrent hard-memory changes produce reconciliation review。
 16. Agent does not use timestamps to pick a winner。
 17. Subject merge is explicit and preview-first。
+18. Agent accurately distinguishes managed-memory removal from Git-history erasure。
+19. Agent treats `no-reachable-copy-detected` as limited evidence, not proof。
+20. Agent does not claim local reset affects other machines or backups。
 
 静态 checker 不得声称验证真实 agent runtime compliance。
 
-### 13.4 Determinism tests
+### 15.4 Determinism tests
 
 至少在不同：
 
@@ -1334,7 +1464,7 @@ Fixtures 至少包括：
 
 ---
 
-## 十五、CLI 输出规范
+## 十六、CLI 输出规范
 
 普通 `read` 必须显示：
 
@@ -1362,6 +1492,8 @@ Fixtures 至少包括：
 * conflicting Entry IDs
 * Subject/Facet/Scope
 * merge reconciliation warnings when explicitly requested
+* erasure scope for forget/local-reset results
+* history-check status and bounded interpretation when requested
 
 错误输出：
 
@@ -1375,7 +1507,7 @@ v0.11 可以保持 text-first；v0.12 再提供稳定 machine-readable JSON cont
 
 ---
 
-## 十六、文档要求
+## 十七、文档要求
 
 README 新增或更新：
 
@@ -1396,6 +1528,9 @@ README 新增或更新：
 * `check --conflicts`
 * optional `audit --merge-base`
 * explicit supersede、exception、distinct reconciliation 与 subject merge
+* Forgetting erasure scope and optional Git history exposure inspection
+* Local reset boundary across machines and backups
+* Sensitive-memory minimization before content enters Git
 
 README 应使用准确表述：
 
@@ -1457,9 +1592,11 @@ Release notes 必须真实描述：
 
 不得描述为 automatic semantic retrieval、complete contradiction detection 或 automatic conflict resolution。
 
+同样不得描述为 complete erasure、Git-history removal、clone/fork revocation 或 guaranteed deletion from backups。
+
 ---
 
-## 十七、完成标准
+## 十八、完成标准
 
 只有满足以下全部条件才算完成：
 
@@ -1514,10 +1651,15 @@ Release notes 必须真实描述：
 * `--no-local` 产生可复现 shared context。
 * Local reset 不影响 shared memory 或其他项目。
 * Local content 同样经过 privacy/security checks。
+* Local reset 只影响当前机器当前 project_id 的 overlay，并准确报告该边界。
 
 ### Tooling and documentation
 
 * ID-based list/show/forget/promote 可用。
+* Topic forget、ID forget、purge 与 local reset 使用统一 ErasureScope result。
+* Optional `--history-check` 只提供 bounded inspection，不修改 Git history。
+* `unavailable` 不被当作 PASS，`no-reachable-copy-detected` 不被当作不存在外部副本的证明。
+* 所有 forgetting 文案明确 distributed copies remain outside protocol control。
 * 所有 adapters 使用同一 routing implementation。
 * Adapter 不包含第二套路由表。
 * README、Skill、references、templates、examples、evals 和 dogfood 同步。
