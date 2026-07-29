@@ -107,7 +107,7 @@ MemoryCustodian turns project memory into a small, explicit workflow:
 4. **Updates are scoped.** Cross-cutting decisions stay at root; subsystem knowledge lives in matched `areas/` files and loads only for relevant work.
 5. **Maintenance is guarded.** The CLI checks budgets and structure deterministically, while semantic review preserves active invariants before decision history is archived.
 6. **Active memory is evidence-backed.** Protocol 0.6 gives formal entries stable IDs and requires user confirmation or a project source; unconfirmed agent observations stay candidates in `inbox.md`.
-7. **Concurrent mutation is explicit.** A project lock outside the repository prevents silent lost updates, and preview-first commands reject stale Plan IDs.
+7. **Concurrent mutation is explicit.** Every writer uses one bootstrap-to-project guard outside the repository; Protocol 0.5 compatibility writes remain format-compatible but are serialized, and preview-first Protocol 0.6 commands reject stale Plan IDs.
 8. **Conflict identity is structural.** Managed decisions, constraints, and rejected approaches reference a stable Subject ID and controlled Facet; display names and aliases are not conflict keys.
 
 The result is project memory that is inspectable, diffable, portable across agents, and small enough to use in normal coding loops.
@@ -315,10 +315,16 @@ Legacy 0.5 prose and bullets remain readable after conservative migration and ar
 than silently rewritten. Migration assigns a random UUIDv4 once, persists it outside the repository between preview
 and apply, and also upgrades clearly structured decisions in enabled `areas/*.md` files.
 
-`forget`, `compact`, `migrate`, and destructive replacement are preview-first. The preview prints target files,
-base/output digests, operations, warnings, blockers, and a Plan ID. Protocol 0.6 apply requires
+`forget`, `compact`, `migrate`, and destructive replacement are preview-first. The preview prints repo-relative
+target files, operations, warnings, blockers, and a Plan ID. Ordinary plans include base/output digests; hard and
+purge plans keep raw arguments, paths, blockers, and digests in the private execution representation and redact
+matching sensitive topic text from public output. Protocol 0.6 apply requires
 `--confirm-plan <PLAN_ID>` and rechecks the plan under the project mutation lock; an intervening edit refuses all
 writes. Short topics and plans matching multiple semantic units additionally require `forget --allow-broad-match`.
+
+Private locks and preview seeds live outside the repository in directories restricted to the current user. State
+directories are forced to mode `0700` and regular files to `0600` on POSIX; symlink or non-regular state targets are
+rejected. Pending seeds contain random identifiers, not raw memory messages or forget topics.
 
 Inbox compaction does not infer decisions, constraints, preferences, or rejected approaches from keywords. The CLI reports candidates and can apply only exact duplicate top-level bullet-unit removal and exact tombstone filtering. Each unit includes its continuation and nested lines; nested bullets are never cleaned up independently. An Agent reviews each remaining candidate's scope, type, confidence, and existing overlap, then edits Markdown or calls `add`; `check` validates the result.
 

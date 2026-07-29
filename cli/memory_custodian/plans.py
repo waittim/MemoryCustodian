@@ -5,13 +5,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 import json
-import os
 from pathlib import Path
 import re
-import tempfile
 import uuid
 
-from .locking import state_root
+from .locking import (
+    create_private_file,
+    discard_private_file,
+    private_state_directory,
+    read_private_file,
+)
 from .mutations import TextMutation
 
 
@@ -24,18 +27,7 @@ def digest_path(path: Path) -> str:
 
 
 def _writable_plan_dir() -> Path:
-    primary = state_root() / "plans"
-    try:
-        primary.mkdir(parents=True, exist_ok=True)
-        probe = primary / f".write-probe-{os.getpid()}-{uuid.uuid4().hex}"
-        descriptor = os.open(probe, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-        os.close(descriptor)
-        probe.unlink()
-        return primary
-    except OSError:
-        fallback = Path(tempfile.gettempdir()) / "memory-custodian-state" / "plans"
-        fallback.mkdir(parents=True, exist_ok=True)
-        return fallback
+    return private_state_directory("plans")
 
 
 def pending_seed_key(command: str, project_root: Path, manifest_sha256: str) -> str:
@@ -58,15 +50,9 @@ def pending_project_id(command: str, project_root: Path, manifest_sha256: str) -
     path = _writable_plan_dir() / f"{command}-{key}.json"
     generated = str(uuid.uuid4())
     payload = json.dumps({"project_id": generated}, sort_keys=True) + "\n"
+    create_private_file(path, payload)
     try:
-        descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-    except FileExistsError:
-        descriptor = None
-    if descriptor is not None:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            handle.write(payload)
-    try:
-        value = json.loads(path.read_text(encoding="utf-8")).get("project_id")
+        value = json.loads(read_private_file(path)).get("project_id")
         parsed = uuid.UUID(str(value))
         if parsed.version != 4:
             raise ValueError
@@ -89,15 +75,9 @@ def pending_entry_suffixes(
     path = _writable_plan_dir() / f"{command}-{key}.json"
     generated = {item: uuid.uuid4().hex[:8] for item in keys}
     payload = json.dumps({"entry_suffixes": generated}, sort_keys=True) + "\n"
+    create_private_file(path, payload)
     try:
-        descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-    except FileExistsError:
-        descriptor = None
-    if descriptor is not None:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            handle.write(payload)
-    try:
-        values = json.loads(path.read_text(encoding="utf-8")).get("entry_suffixes")
+        values = json.loads(read_private_file(path)).get("entry_suffixes")
         if not isinstance(values, dict):
             raise ValueError
         result = {}
@@ -111,13 +91,29 @@ def pending_entry_suffixes(
         raise ValueError(f"Invalid pending entry ID seed: {path}") from exc
 
 
-def discard_pending_seed(path: Path | None) -> None:
-    if path is None:
-        return
+def pending_plan_nonce(
+    command: str,
+    project_root: Path,
+    source_sha256: str,
+) -> tuple[str, Path]:
+    """Create or reuse a full-width random nonce for a sensitive private plan."""
+
+    key = pending_seed_key(command, project_root, source_sha256)
+    path = _writable_plan_dir() / f"{command}-{key}.json"
+    generated = uuid.uuid4().hex
+    payload = json.dumps({"plan_nonce": generated}, sort_keys=True) + "\n"
+    create_private_file(path, payload)
     try:
-        path.unlink()
-    except FileNotFoundError:
-        pass
+        value = json.loads(read_private_file(path)).get("plan_nonce")
+        if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{32}", value):
+            raise ValueError
+        return value, path
+    except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"Invalid pending private plan nonce: {path}") from exc
+
+
+def discard_pending_seed(path: Path | None) -> None:
+    discard_private_file(path)
 
 
 @dataclass(frozen=True)
@@ -131,6 +127,50 @@ class MutationPlan:
     blockers: tuple[str, ...] = ()
     context: dict[str, object] | None = None
     budget_results: tuple[dict[str, object], ...] = ()
+    project_root: Path | None = None
+    public_arguments: dict[str, object] | None = None
+    private_context: dict[str, object] | None = None
+    sensitive: bool = False
+    public_redactions: tuple[str, ...] = ()
+
+    def _canonical_path(self, path: Path) -> str:
+        if self.project_root is None:
+            return path.as_posix()
+        root = self.project_root.resolve()
+        resolved = path.resolve()
+        try:
+            return resolved.relative_to(root).as_posix()
+        except ValueError as exc:
+            raise ValueError(
+                f"Mutation target must be inside the project root: {path}"
+            ) from exc
+
+    def _public_string(self, value: str) -> str:
+        redacted = value
+        for secret in self.public_redactions:
+            if secret:
+                redacted = re.sub(
+                    re.escape(secret),
+                    "[redacted]",
+                    redacted,
+                    flags=re.IGNORECASE,
+                )
+        return redacted
+
+    def _json_value(self, value, *, public: bool = False):
+        if isinstance(value, Path):
+            canonical = self._canonical_path(value)
+            return self._public_string(canonical) if public else canonical
+        if isinstance(value, dict):
+            return {
+                str(key): self._json_value(item, public=public)
+                for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))
+            }
+        if isinstance(value, (list, tuple)):
+            return [self._json_value(item, public=public) for item in value]
+        if public and isinstance(value, str):
+            return self._public_string(value)
+        return value
 
     def _budget_results(self) -> list[dict[str, object]]:
         if self.budget_results:
@@ -162,33 +202,86 @@ class MutationPlan:
             )
         return results
 
-    def canonical(self) -> dict[str, object]:
+    def _operations(
+        self,
+        *,
+        include_digests: bool,
+        public: bool = False,
+    ) -> list[dict[str, object]]:
         operations = []
-        for mutation in sorted(self.mutations, key=lambda item: str(item.path)):
-            operations.append(
-                {
-                    "path": str(mutation.path),
-                    "base_sha256": digest_path(mutation.path),
-                    "operation": "replace" if mutation.path.exists() else "create",
-                    "expected_output_sha256": digest_text(mutation.text if mutation.text.endswith("\n") else mutation.text + "\n"),
-                }
-            )
+        for mutation in sorted(
+            self.mutations,
+            key=lambda item: self._canonical_path(item.path),
+        ):
+            canonical_path = self._canonical_path(mutation.path)
+            operation: dict[str, object] = {
+                "path": (
+                    self._public_string(canonical_path)
+                    if public
+                    else canonical_path
+                ),
+                "operation": "replace" if mutation.path.exists() else "create",
+            }
+            if include_digests:
+                operation["base_sha256"] = digest_path(mutation.path)
+                operation["expected_output_sha256"] = digest_text(
+                    mutation.text
+                    if mutation.text.endswith("\n")
+                    else mutation.text + "\n"
+                )
+            operations.append(operation)
+        return operations
+
+    def private_canonical(self) -> dict[str, object]:
+        operations = self._operations(include_digests=True)
         return {
             "command": self.command,
-            "arguments": self.arguments,
+            "arguments": self._json_value(self.arguments),
             "project_id": self.project_id,
             "protocol_version": self.protocol_version,
             "target_paths": [item["path"] for item in operations],
             "operations": operations,
             "warnings": list(self.warnings),
             "blockers": list(self.blockers),
-            "context": self.context or {},
+            "context": self._json_value(self.context or {}),
+            "private_context": self._json_value(self.private_context or {}),
             "budget_results": self._budget_results(),
+        }
+
+    def canonical(self) -> dict[str, object]:
+        operations = self._operations(
+            include_digests=not self.sensitive,
+            public=True,
+        )
+        return {
+            "command": self.command,
+            "arguments": self._json_value(
+                self.public_arguments
+                if self.public_arguments is not None
+                else self.arguments,
+                public=True,
+            ),
+            "project_id": self.project_id,
+            "protocol_version": self.protocol_version,
+            "target_paths": [item["path"] for item in operations],
+            "operations": operations,
+            "warnings": self._json_value(self.warnings, public=True),
+            "blockers": self._json_value(self.blockers, public=True),
+            "context": self._json_value(self.context or {}, public=True),
+            "budget_results": self._json_value(
+                self._budget_results(),
+                public=True,
+            ),
         }
 
     @property
     def plan_id(self) -> str:
-        encoded = json.dumps(self.canonical(), ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        encoded = json.dumps(
+            self.private_canonical(),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
         return hashlib.sha256(encoded).hexdigest()[:16]
 
 
@@ -198,18 +291,21 @@ def print_plan(plan: MutationPlan) -> None:
     print("Target files:")
     for operation in canonical["operations"]:
         print(f"- {operation['path']}")
-        print(f"  Base SHA-256: {operation['base_sha256']}")
         print(f"  Operation: {operation['operation']}")
-        print(f"  Expected SHA-256: {operation['expected_output_sha256']}")
+        if "base_sha256" in operation:
+            print(f"  Base SHA-256: {operation['base_sha256']}")
+            print(f"  Expected SHA-256: {operation['expected_output_sha256']}")
+        else:
+            print("  Digests: redacted for sensitive operation")
     print("Blockers:")
-    for blocker in plan.blockers:
+    for blocker in canonical["blockers"]:
         print(f"- {blocker}")
-    if not plan.blockers:
+    if not canonical["blockers"]:
         print("- none")
     print("Warnings:")
-    for warning in plan.warnings:
+    for warning in canonical["warnings"]:
         print(f"- {warning}")
-    if not plan.warnings:
+    if not canonical["warnings"]:
         print("- none")
     print("Estimated budget result:")
     if canonical["budget_results"]:

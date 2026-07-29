@@ -30,6 +30,7 @@ from .entries import (
     VALID_SCOPES_RE,
     heading_entry_ids,
     parse_structured_entries,
+    structured_entry_schema_issues,
     validate_evidence,
 )
 from .scanning import scan_text
@@ -169,6 +170,7 @@ def run(args) -> int:
         parsed_entries = parse_structured_entries(path, text)
         for entry in parsed_entries:
             structured_by_id.setdefault(entry.entry_id.casefold(), []).append(entry)
+            issues.extend(structured_entry_schema_issues(entry, relative))
         if relative.startswith("archive/"):
             continue
         for entry in parsed_entries:

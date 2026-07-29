@@ -52,14 +52,20 @@ authorization.
 
 ## Concurrency and plan confirmation
 
-Mutation locks live in the platform state directory, outside the repository. Writers acquire the project lock,
-re-read targets, and release the lock in `finally`. Preview-first commands hash a canonical plan containing base
-and expected output digests. Protocol 0.6 apply requires the matching Plan ID and refuses every write if any target
-changed.
+Mutation locks live in private platform state outside the repository. Every writer first acquires a bootstrap lock
+derived from the normalized project path, re-reads the manifest, and then—while still holding the bootstrap
+lock—acquires the permanent project lock when a valid `project_id` exists or is being installed. Protocol 0.5
+compatibility writes keep their legacy format and confirmation behavior but remain serialized under the bootstrap
+guard. Every mutation is rebuilt while the applicable guard is held.
 
-Before a project has a permanent ID, initialization uses a bootstrap lock derived from the normalized project path.
-Repair holds that bootstrap lock while acquiring the permanent project lock. Optional-module enablement also
-rebuilds its complete multi-file mutation under the project lock.
+Preview-first commands hash a repo-relative private execution plan containing base and expected output digests.
+Public previews are a separate representation. Hard and purge previews omit raw topic arguments and file digests,
+and redact matching topic text from public path and blocker metadata; their private confirmation plan is salted
+with a repo-external random nonce. Protocol 0.6 apply requires the matching Plan ID and refuses every write if any
+target changed.
+
+Private state directories use mode `0700` and state files use `0600` on POSIX. State reads and writes reject
+symlinks, non-regular files, and files owned by another user.
 
 ## Trust boundary
 

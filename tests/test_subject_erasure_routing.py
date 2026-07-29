@@ -23,6 +23,7 @@ from memory_custodian.protocol import parse_manifest_task_modules
 from memory_custodian.read import _optional_requested
 from memory_custodian.routes import RouteReason, merge_routed_modules
 from memory_custodian.scanning import scan_text
+from memory_custodian import enable as enable_module
 from memory_custodian import init as init_module
 from memory_custodian.subjects import (
     generate_subject_id,
@@ -392,6 +393,76 @@ Load:
 
 
 class AuditGapRegressionTests(unittest.TestCase):
+    def test_repair_installs_the_guard_project_identity_exactly_once(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as state:
+            self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            manifest_path = Path(tmp) / "docs" / "memory" / "manifest.md"
+            manifest_path.write_text(
+                re.sub(
+                    r"(?m)^- project_id: [0-9a-f-]+\n",
+                    "",
+                    manifest_path.read_text(encoding="utf-8"),
+                ),
+                encoding="utf-8",
+            )
+            guard_id = uuid.UUID("12345678-1234-4234-8234-123456789abc")
+            real_manifest_repair = init_module.manifest_with_current_protocol_metadata
+            observed_ids = []
+
+            def verify_guard_identity(text, *, project_id):
+                observed_ids.append(project_id)
+                self.assertTrue(
+                    lock_path(bootstrap_lock_id(Path(tmp))).exists()
+                )
+                self.assertTrue(lock_path(project_id).exists())
+                return real_manifest_repair(text, project_id=project_id)
+
+            with patch.dict(os.environ, {"XDG_STATE_HOME": state}), patch(
+                "memory_custodian.locking.uuid.uuid4",
+                return_value=guard_id,
+            ), patch(
+                "memory_custodian.init.manifest_with_current_protocol_metadata",
+                side_effect=verify_guard_identity,
+            ):
+                self.assertEqual(
+                    main(["init", "--repair", "--project-root", tmp]),
+                    0,
+                )
+            self.assertEqual(observed_ids, [str(guard_id)])
+            repaired = manifest_path.read_text(encoding="utf-8")
+            self.assertEqual(
+                re.findall(r"(?m)^- project_id: ([0-9a-f-]+)$", repaired),
+                [str(guard_id)],
+            )
+
+    def test_enable_holds_bootstrap_and_permanent_project_locks(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as state:
+            with patch.dict(os.environ, {"XDG_STATE_HOME": state}):
+                self.assertEqual(main(["init", "--project-root", tmp]), 0)
+                root = Path(tmp)
+                manifest = (
+                    root / "docs" / "memory" / "manifest.md"
+                ).read_text(encoding="utf-8")
+                project_id = re.search(
+                    r"(?m)^- project_id: ([0-9a-f-]+)$",
+                    manifest,
+                ).group(1)
+                real_apply = enable_module.apply_mutations
+
+                def verify_locks(mutations):
+                    self.assertTrue(lock_path(bootstrap_lock_id(root)).exists())
+                    self.assertTrue(lock_path(project_id).exists())
+                    return real_apply(mutations)
+
+                with patch(
+                    "memory_custodian.enable.apply_mutations",
+                    side_effect=verify_locks,
+                ):
+                    self.assertEqual(
+                        main(["enable", "preferences", "--project-root", tmp]),
+                        0,
+                    )
+
     def test_enable_concurrency_preserves_both_index_updates(self):
         with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as state:
             self.assertEqual(main(["init", "--project-root", tmp]), 0)
@@ -546,7 +617,18 @@ class AuditGapRegressionTests(unittest.TestCase):
                 "memory_custodian.plans.uuid.uuid4",
                 return_value=uuid.UUID("12345678-1234-4234-8234-123456789abc"),
             ):
-                apply_preview(args)
+                plan_id, preview_text = preview(args)
+                self.assertNotIn(topic, preview_text)
+                self.assertNotIn(tmp, preview_text)
+                self.assertNotIn("Base SHA-256", preview_text)
+                self.assertIn("Digests: redacted for sensitive operation", preview_text)
+                applied = StringIO()
+                with redirect_stdout(applied):
+                    self.assertEqual(
+                        main([*args, "--apply", "--confirm-plan", plan_id]),
+                        0,
+                    )
+                self.assertNotIn(topic, applied.getvalue())
             tombstones = (memory / "do-not-use.md").read_text(encoding="utf-8")
             self.assertIn("MC-TOMB-20260729-12345678", tombstones)
             self.assertNotIn(f"MC-TOMB-20260729-{old_suffix}", tombstones)

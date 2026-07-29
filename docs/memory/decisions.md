@@ -2,9 +2,26 @@
 
 Entries are newest first.
 
-## MC-DEC-20260728-5ea0e265 — Adopt Protocol 0.6 evidence admission and mutation safety.
+## MC-DEC-20260729-ef44900b — Use one mutation guard and separate private execution plans from public
 
 Status: active
+Scope: project
+Subject: MC-SUBJ-20260729-7e5c3a91
+Facet: architecture
+Evidence:
+- user-confirmed
+Supersedes: MC-DEC-20260728-5ea0e265
+
+Decision:
+Use one mutation guard and separate private execution plans from public previews.
+
+Reason:
+A single bootstrap-to-project lock handoff prevents identity races across every writer; private state permissions and redacted public plans preserve concurrency and erasure boundaries.
+
+## MC-DEC-20260728-5ea0e265 — Adopt Protocol 0.6 evidence admission and mutation safety.
+
+Status: superseded
+Superseded-By: MC-DEC-20260729-ef44900b
 Scope: project
 Subject: MC-SUBJ-20260729-7e5c3a91
 Facet: architecture

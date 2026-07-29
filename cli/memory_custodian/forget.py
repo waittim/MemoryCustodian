@@ -5,10 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 from pathlib import Path
+import re
 import uuid
 
 from .entries import parse_structured_entries
-from .locking import mutation_lock
+from .locking import project_mutation_guard
 from .erasure import ErasureScope, render_apply_boundary, render_scope, scope_for_forget
 from .mutations import TextMutation, apply_mutations
 from .plans import (
@@ -16,6 +17,7 @@ from .plans import (
     digest_text,
     discard_pending_seed,
     pending_entry_suffixes,
+    pending_plan_nonce,
     print_plan,
 )
 from .protocol import (
@@ -192,6 +194,17 @@ def _summary(unit: MarkdownUnit, redact: bool, number: int) -> str:
     return first[:100]
 
 
+def _public_text(value: str, topic: str, redact: bool) -> str:
+    if not redact:
+        return value
+    return re.sub(
+        re.escape(topic),
+        "[redacted]",
+        value,
+        flags=re.IGNORECASE,
+    )
+
+
 def _subject_reference_blockers(
     memory_dir: Path,
     plans: list[FilePlan],
@@ -238,6 +251,7 @@ def _build_forget_mutation_plan(
     project_id: str | None,
     protocol_version: str,
     tombstone_suffix: str | None = None,
+    privacy_nonce: str | None = None,
 ) -> MutationPlan:
     topic = args.topic.strip()
     targets = _target_files(memory_dir, args.mode)
@@ -292,12 +306,13 @@ def _build_forget_mutation_plan(
     if changelog_updated is not None:
         writes.append((changelog_path, changelog_updated))
     blockers = [
-        f"{plan.path}: {unit.kind} contains non-removable matching content"
+        f"{plan.path.relative_to(memory_dir).as_posix()}: "
+        f"{unit.kind} contains non-removable matching content"
         for plan in plans
         for unit in plan.blockers
     ]
     blockers.extend(
-        f"{tombstone_path}: {unit.kind} contains non-removable matching content"
+        f"do-not-use.md: {unit.kind} contains non-removable matching content"
         for unit in tombstone_blockers
     )
     blockers.extend(_subject_reference_blockers(memory_dir, plans, tombstone_updated))
@@ -329,6 +344,19 @@ def _build_forget_mutation_plan(
         else (),
         tuple(blockers),
         context={"erasure_scope": scope.canonical()},
+        project_root=memory_dir.parents[1],
+        public_arguments={
+            "topic": "[redacted]",
+            "mode": args.mode,
+            "allow_broad_match": args.allow_broad_match,
+        }
+        if args.mode in {"hard", "purge"}
+        else None,
+        private_context={"privacy_nonce": privacy_nonce}
+        if privacy_nonce is not None
+        else None,
+        sensitive=args.mode in {"hard", "purge"},
+        public_redactions=(topic,) if args.mode in {"hard", "purge"} else (),
     )
 
 
@@ -346,21 +374,43 @@ def run(args) -> int:
         raise ValueError("do-not-use.md is missing; forgetting cannot safely record removal guards")
     manifest_text = read_text(memory_dir / "manifest.md")
     metadata = protocol_metadata(manifest_text)
-    protocol_06 = compare_versions(metadata.get("protocol_version", "0.5"), CURRENT_PROTOCOL_VERSION) == 0
+    comparison = compare_versions(
+        metadata.get("protocol_version", "0.5"),
+        CURRENT_PROTOCOL_VERSION,
+    )
+    if comparison is None:
+        raise ValueError("Project manifest has an invalid protocol version.")
+    if comparison > 0:
+        raise ValueError("Project protocol is newer than this CLI supports.")
+    protocol_06 = comparison == 0
     project_id = project_id_from_manifest(manifest_text) if protocol_06 else None
     tombstone_suffix: str | None = None
     tombstone_seed_path: Path | None = None
-    if args.mode == "hard":
+    privacy_seed_path: Path | None = None
+    privacy_nonce: str | None = None
+    if args.mode in {"hard", "purge"}:
         if protocol_06:
-            suffixes, tombstone_seed_path = pending_entry_suffixes(
-                "forget-tombstone",
-                project_root,
-                digest_text(f"{project_id}\0hard\0{topic}"),
-                ["hard-tombstone"],
+            source_digest = digest_text(
+                f"{project_id}\0{args.mode}\0{topic}"
             )
-            tombstone_suffix = suffixes["hard-tombstone"]
-        else:
+            if args.mode == "hard":
+                suffixes, tombstone_seed_path = pending_entry_suffixes(
+                    "forget-tombstone",
+                    project_root,
+                    source_digest,
+                    ["hard-tombstone"],
+                )
+                tombstone_suffix = suffixes["hard-tombstone"]
+            privacy_nonce, privacy_seed_path = pending_plan_nonce(
+                "forget-private",
+                project_root,
+                source_digest,
+            )
+        elif args.mode == "hard":
             tombstone_suffix = uuid.uuid4().hex[:8]
+            privacy_nonce = uuid.uuid4().hex
+        else:
+            privacy_nonce = uuid.uuid4().hex
 
     targets = _target_files(memory_dir, args.mode)
     plans: list[FilePlan] = []
@@ -411,7 +461,10 @@ def run(args) -> int:
     for plan in matched_plans:
         relative = plan.path.relative_to(memory_dir).as_posix()
         for number, unit in enumerate(plan.matches, start=1):
-            print(f"- {relative}: {_summary(unit, redact, number)}")
+            print(
+                f"- {_public_text(relative, topic, redact)}: "
+                f"{_summary(unit, redact, number)}"
+            )
     if tombstone_matches:
         print(f"Matched tombstones: {len(tombstone_matches)}")
     if args.mode == "hard" and tombstone_matches:
@@ -429,7 +482,10 @@ def run(args) -> int:
         for plan in blocker_plans:
             relative = plan.path.relative_to(memory_dir).as_posix()
             for unit in plan.blockers:
-                print(f"- {relative}: {unit.kind} contains matching content")
+                print(
+                    f"- {_public_text(relative, topic, redact)}: "
+                    f"{unit.kind} contains matching content"
+                )
         for unit in tombstone_blockers:
             print(f"- do-not-use.md: {unit.kind} contains matching content")
     if args.mode == "purge":
@@ -447,12 +503,13 @@ def run(args) -> int:
         project_id,
         metadata.get("protocol_version", "0.5"),
         tombstone_suffix,
+        privacy_nonce,
     )
-    mutations = list(mutation_plan.mutations)
     scope = ErasureScope(**mutation_plan.context["erasure_scope"])
+    public_blockers = mutation_plan.canonical()["blockers"]
     structural_blockers = [
         blocker
-        for blocker in mutation_plan.blockers
+        for blocker in public_blockers
         if "cannot remove MC-SUBJ-" in blocker
     ]
     if structural_blockers:
@@ -475,19 +532,38 @@ def run(args) -> int:
         print("Refusing broad-risk apply: " + "; ".join(broad_reasons) + ". Re-run with --allow-broad-match after review.")
         return 1
 
-    if protocol_06:
-        if not args.confirm_plan:
-            raise ValueError("Protocol 0.6 forget apply requires --confirm-plan <PLAN_ID>.")
-        with mutation_lock(
-            project_id, project_root, "forget",
-            timeout=args.lock_timeout, break_stale=args.break_stale_lock,
-        ):
+    if protocol_06 and not args.confirm_plan:
+        raise ValueError("Protocol 0.6 forget apply requires --confirm-plan <PLAN_ID>.")
+    with project_mutation_guard(
+        project_root,
+        memory_dir / "manifest.md",
+        "forget",
+        timeout=args.lock_timeout,
+        break_stale=args.break_stale_lock,
+        allow_legacy=True,
+    ) as guard:
+        current_metadata = protocol_metadata(guard.manifest_text or "")
+        current_comparison = compare_versions(
+            current_metadata.get("protocol_version", "0.5"),
+            CURRENT_PROTOCOL_VERSION,
+        )
+        if current_comparison is None:
+            raise ValueError(
+                "Project protocol became invalid before forget apply."
+            )
+        current_protocol_06 = current_comparison == 0
+        if protocol_06:
+            if guard.project_id != project_id:
+                raise ValueError(
+                    "Project identity changed before forget apply; preview again."
+                )
             current_plan = _build_forget_mutation_plan(
                 args,
                 memory_dir,
                 project_id,
-                metadata.get("protocol_version", "0.5"),
+                current_metadata.get("protocol_version", "0.5"),
                 tombstone_suffix,
+                privacy_nonce,
             )
             if current_plan.plan_id != args.confirm_plan:
                 print_plan(current_plan)
@@ -495,15 +571,36 @@ def run(args) -> int:
                     f"Stale or mismatched plan: confirmed {args.confirm_plan}, "
                     f"current Plan ID is {current_plan.plan_id}. No files written."
                 )
-            completed_paths = apply_mutations(list(current_plan.mutations))
-    else:
-        print("Migration available: Protocol 0.5 apply keeps legacy confirmation behavior.")
-        completed_paths = apply_mutations(mutations)
+        elif current_protocol_06:
+            raise ValueError(
+                "Project migrated to Protocol 0.6 before compatibility forget apply; "
+                "preview again and confirm the new Plan ID."
+            )
+        elif current_comparison > 0:
+            raise ValueError(
+                "Project protocol became newer than this CLI supports before "
+                "compatibility forget apply; update MemoryCustodian."
+            )
+        else:
+            print(
+                "Migration available: Protocol 0.5 apply keeps legacy confirmation "
+                "behavior under the bootstrap mutation guard."
+            )
+            current_plan = _build_forget_mutation_plan(
+                args,
+                memory_dir,
+                None,
+                current_metadata.get("protocol_version", "0.5"),
+                tombstone_suffix,
+                privacy_nonce,
+            )
+        completed_paths = apply_mutations(list(current_plan.mutations))
     completed = [path.relative_to(memory_dir).as_posix() for path in completed_paths]
 
     print(f"Applied forgetting plan. Written files: {len(completed)}")
     for name in completed:
-        print(f"- {name}")
+        print(f"- {_public_text(name, topic, redact)}")
     discard_pending_seed(tombstone_seed_path)
+    discard_pending_seed(privacy_seed_path)
     render_apply_boundary()
     return 0

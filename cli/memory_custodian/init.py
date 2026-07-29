@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 from pathlib import Path
-import uuid
 
-from .locking import bootstrap_lock_id, mutation_lock
+from .locking import project_mutation_guard
 from .mutations import TextMutation, apply_mutations
 from .plans import MutationPlan, print_plan
 from .protocol import (
@@ -94,7 +93,7 @@ def _snippet_update(path: Path, snippet: str, force: bool) -> tuple[str, str | N
     return "written", text
 
 
-def _repair_manifest(text: str) -> tuple[str, bool]:
+def _repair_manifest(text: str, project_id: str) -> tuple[str, bool]:
     version = protocol_metadata(text).get("protocol_version")
     if version:
         comparison = compare_versions(version, CURRENT_PROTOCOL_VERSION)
@@ -103,7 +102,10 @@ def _repair_manifest(text: str) -> tuple[str, bool]:
                 f"Project protocol {version} requires preview-first migration to {CURRENT_PROTOCOL_VERSION}; "
                 "run `memory-custodian migrate` instead of init --repair."
             )
-    updated, metadata_changed = manifest_with_current_protocol_metadata(text)
+    updated, metadata_changed = manifest_with_current_protocol_metadata(
+        text,
+        project_id=project_id,
+    )
     updated, routing_changed = manifest_with_current_task_routing(updated)
     updated, index_changed = manifest_with_optional_index(updated)
     return updated, metadata_changed or routing_changed or index_changed
@@ -221,7 +223,10 @@ def _initialization_state(
             result = "written"
             mutations.append(TextMutation(path, rendered))
         elif args.repair and name == "manifest.md":
-            repaired, changed = _repair_manifest(path.read_text(encoding="utf-8"))
+            repaired, changed = _repair_manifest(
+                path.read_text(encoding="utf-8"),
+                project_id,
+            )
             repaired, indexed = _index_existing_optional(memory_dir, repaired)
             changed = changed or indexed
             result = "repaired" if changed else "kept"
@@ -273,6 +278,21 @@ def run(args) -> int:
     if existing_manifest.exists():
         existing_metadata = protocol_metadata(existing_manifest.read_text(encoding="utf-8"))
         existing_protocol_version = existing_metadata.get("protocol_version")
+        if existing_protocol_version is not None:
+            existing_comparison = compare_versions(
+                existing_protocol_version,
+                CURRENT_PROTOCOL_VERSION,
+            )
+            if existing_comparison is None:
+                raise ValueError(
+                    f"Invalid protocol version {existing_protocol_version!r}; "
+                    "review manifest.md manually before running init."
+                )
+            if existing_comparison > 0:
+                raise ValueError(
+                    "Project protocol is newer than this CLI supports; "
+                    "update MemoryCustodian before running init."
+                )
         existing_project_id = project_id_from_manifest(
             existing_manifest.read_text(encoding="utf-8"), required=False
         )
@@ -299,11 +319,15 @@ def run(args) -> int:
                 print(f"- {name}")
         plan = MutationPlan(
             "init --replace-existing",
-            {"extended": args.extended, "memory_dir": str(memory_dir)},
+            {
+                "extended": args.extended,
+                "memory_dir": memory_dir.relative_to(project_root).as_posix(),
+            },
             existing_project_id,
             CURRENT_PROTOCOL_VERSION,
             tuple(mutations),
             tuple(f"overwrite non-template content: {name}" for name in replacement_warnings),
+            project_root=project_root,
         )
         print_plan(plan)
         if not args.apply:
@@ -311,13 +335,17 @@ def run(args) -> int:
             return 0
         if not args.confirm_plan:
             raise ValueError("Protocol 0.6 replacement apply requires --confirm-plan <PLAN_ID>.")
-        with mutation_lock(
-            existing_project_id,
+        with project_mutation_guard(
             project_root,
+            existing_manifest,
             "init --replace-existing",
             timeout=args.lock_timeout,
             break_stale=args.break_stale_lock,
-        ):
+        ) as guard:
+            if guard.project_id != existing_project_id:
+                raise ValueError(
+                    "Project identity changed before replacement apply; preview again."
+                )
             current_results, current_mutations, current_warnings = _replacement_state(
                 args,
                 project_root,
@@ -328,11 +356,15 @@ def run(args) -> int:
             )
             current_plan = MutationPlan(
                 "init --replace-existing",
-                {"extended": args.extended, "memory_dir": str(memory_dir)},
+                {
+                    "extended": args.extended,
+                    "memory_dir": memory_dir.relative_to(project_root).as_posix(),
+                },
                 existing_project_id,
                 CURRENT_PROTOCOL_VERSION,
                 tuple(current_mutations),
                 tuple(f"overwrite non-template content: {name}" for name in current_warnings),
+                project_root=project_root,
             )
             if current_plan.plan_id != args.confirm_plan:
                 print_plan(current_plan)
@@ -345,44 +377,25 @@ def run(args) -> int:
         for item in current_results:
             print(f"- {item}")
         return 0
-    bootstrap_id = bootstrap_lock_id(project_root)
-    with mutation_lock(
-        bootstrap_id,
+    with project_mutation_guard(
         project_root,
-        "init bootstrap",
+        existing_manifest,
+        "init repair" if args.repair else "init",
         timeout=args.lock_timeout,
         break_stale=args.break_stale_lock,
-    ):
-        current_manifest = memory_dir / "manifest.md"
-        current_project_id = None
-        if current_manifest.exists():
-            current_project_id = project_id_from_manifest(
-                current_manifest.read_text(encoding="utf-8"),
-                required=False,
-            )
-        init_project_id = current_project_id or str(uuid.uuid4())
-
-        def build_and_apply() -> tuple[list[str], list[TextMutation]]:
-            current_results, current_mutations = _initialization_state(
-                args,
-                project_root,
-                memory_dir,
-                memory_label,
-                init_project_id,
-                current_date,
-            )
-            if current_mutations:
-                apply_mutations(current_mutations)
-            return current_results, current_mutations
-
-        with mutation_lock(
-            init_project_id,
+        create_project_id=True,
+    ) as guard:
+        assert guard.project_id is not None
+        results, mutations = _initialization_state(
+            args,
             project_root,
-            "init repair" if args.repair else "init",
-            timeout=args.lock_timeout,
-            break_stale=args.break_stale_lock,
-        ):
-            results, mutations = build_and_apply()
+            memory_dir,
+            memory_label,
+            guard.project_id,
+            current_date,
+        )
+        if mutations:
+            apply_mutations(mutations)
 
     action = "Repaired" if args.repair else "Initialized"
     print(f"{action} MemoryCustodian at {memory_dir}")

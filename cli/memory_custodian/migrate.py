@@ -7,7 +7,7 @@ from pathlib import Path
 import re
 
 from .entries import ENTRY_ID_RE, split_h2
-from .locking import mutation_lock
+from .locking import project_mutation_guard
 from .mutations import TextMutation, apply_mutations
 from .plans import (
     MutationPlan,
@@ -241,11 +241,12 @@ def _build_plan(project_root: Path, memory_dir: Path) -> tuple[MutationPlan, lis
     return (
         MutationPlan(
             "migrate",
-            {"memory_dir": str(memory_dir)},
+            {"memory_dir": memory_dir.relative_to(project_root).as_posix()},
             project_id,
             CURRENT_PROTOCOL_VERSION,
             tuple(mutations),
             tuple(warnings),
+            project_root=project_root,
         ),
         changes,
         tuple(path for path in (seed_path, entry_seed_path) if path is not None),
@@ -275,11 +276,20 @@ def run(args) -> int:
     if not args.confirm_plan:
         raise ValueError("Protocol 0.6 migration apply requires --confirm-plan <PLAN_ID>.")
 
-    with mutation_lock(
-        plan.project_id, project_root, "migrate",
-        timeout=args.lock_timeout, break_stale=args.break_stale_lock,
-    ):
+    with project_mutation_guard(
+        project_root,
+        manifest_path,
+        "migrate",
+        timeout=args.lock_timeout,
+        break_stale=args.break_stale_lock,
+        project_id_hint=plan.project_id,
+    ) as guard:
         current, _changes, current_seed_paths = _build_plan(project_root, memory_dir)
+        if guard.project_id != current.project_id:
+            print_plan(current)
+            raise ValueError(
+                "Project identity changed before migration apply; preview again."
+            )
         if current.plan_id != args.confirm_plan:
             print_plan(current)
             raise ValueError(

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path, PurePosixPath
 import re
@@ -41,6 +41,25 @@ class StructuredEntry:
     text: str
     path: Path
     fields: dict[str, str]
+    field_counts: dict[str, int] = field(default_factory=dict)
+    field_bodies: dict[str, str] = field(default_factory=dict)
+
+
+TYPED_BODY_FIELDS = {
+    "Decision",
+    "Constraint",
+    "Rejected",
+    "Preference",
+    "Rule",
+    "Profile",
+    "Statement",
+}
+LIFECYCLE_FIELDS = {
+    "Supersedes",
+    "Superseded-By",
+    "Promoted-From",
+    "Promoted-To",
+}
 
 
 def generate_entry_id(kind: str, existing_ids: set[str] | None = None, *, day: date | None = None) -> str:
@@ -247,19 +266,44 @@ def parse_structured_entries(path: Path, text: str) -> list[StructuredEntry]:
         if not heading:
             continue
         fields: dict[str, str] = {}
+        field_counts: dict[str, int] = {}
+        occurrence_bodies: dict[str, list[list[str]]] = {}
         evidence: list[str] = []
-        in_evidence = False
+        current_field: str | None = None
+        current_body: list[str] = []
+
+        def flush_field() -> None:
+            nonlocal current_field, current_body
+            if current_field is not None:
+                occurrence_bodies.setdefault(current_field, []).append(current_body)
+            current_field = None
+            current_body = []
+
         for line in lines[1:]:
-            field = FIELD_RE.match(line)
-            if field:
-                key, value = field.group(1), field.group(2) or ""
+            matched_field = FIELD_RE.match(line)
+            if matched_field:
+                flush_field()
+                key, value = matched_field.group(1), matched_field.group(2) or ""
                 fields[key] = value
-                in_evidence = key == "Evidence"
+                field_counts[key] = field_counts.get(key, 0) + 1
+                current_field = key
+                current_body = [value] if value.strip() else []
                 continue
-            if in_evidence and line.startswith("- "):
+            if current_field == "Evidence" and line.startswith("- "):
                 evidence.append(line[2:].strip())
-            elif line.strip():
-                in_evidence = False
+                current_body.append(line[2:].strip())
+            elif current_field is not None and line.strip():
+                current_body.append(line.strip())
+        flush_field()
+        field_bodies = {
+            key: "\n".join(
+                line
+                for occurrence in occurrences
+                for line in occurrence
+                if line.strip()
+            ).strip()
+            for key, occurrences in occurrence_bodies.items()
+        }
         title = re.sub(r"^.*?\s+—\s+", "", lines[0]).strip()
         parsed.append(
             StructuredEntry(
@@ -271,9 +315,97 @@ def parse_structured_entries(path: Path, text: str) -> list[StructuredEntry]:
                 section,
                 path,
                 fields,
+                field_counts,
+                field_bodies,
             )
         )
     return parsed
+
+
+def expected_typed_body(entry: StructuredEntry, relative_path: str) -> str | None:
+    code = entry.entry_id.split("-", 2)[1].upper()
+    if code == "DEC":
+        return "Decision"
+    if code == "CON":
+        return "Constraint"
+    if code in {"DNU", "TOMB"}:
+        return "Rejected"
+    if code == "PREF":
+        return "Preference"
+    if code == "INBOX":
+        return "Statement"
+    if code == "AREA":
+        if relative_path.startswith("rules/"):
+            return "Rule"
+        if relative_path.startswith("profiles/"):
+            return "Profile"
+        return "Decision"
+    return None
+
+
+def structured_entry_schema_issues(
+    entry: StructuredEntry,
+    relative_path: str,
+) -> list[str]:
+    """Validate the declared Protocol 0.6 structure of one formal entry."""
+
+    issues: list[str] = []
+    prefix = f"{relative_path}: {entry.entry_id}"
+    for name in ("Status", "Scope", "Evidence"):
+        count = entry.field_counts.get(name, 0)
+        if count != 1:
+            issues.append(f"{prefix} must declare exactly one {name} field (found {count})")
+
+    for name, count in sorted(entry.field_counts.items()):
+        if count > 1:
+            issues.append(f"{prefix} has duplicate {name} fields")
+
+    expected_body = expected_typed_body(entry, relative_path)
+    if expected_body is not None:
+        count = entry.field_counts.get(expected_body, 0)
+        if count != 1:
+            issues.append(
+                f"{prefix} must declare exactly one {expected_body} typed body "
+                f"(found {count})"
+            )
+        elif not entry.field_bodies.get(expected_body, "").strip():
+            issues.append(f"{prefix} has an empty {expected_body} typed body")
+        for body_name in sorted(TYPED_BODY_FIELDS - {expected_body}):
+            if entry.field_counts.get(body_name, 0):
+                issues.append(
+                    f"{prefix} uses {body_name} body but its Entry ID/storage "
+                    f"requires {expected_body}"
+                )
+
+    superseded_by = bool(entry.fields.get("Superseded-By"))
+    promoted_to = bool(entry.fields.get("Promoted-To"))
+    if superseded_by and promoted_to:
+        issues.append(
+            f"{prefix} cannot declare both Superseded-By and Promoted-To"
+        )
+    if entry.status == "active" and (superseded_by or promoted_to):
+        issues.append(f"{prefix} active lifecycle conflicts with terminal relation fields")
+    if entry.status == "candidate" and any(
+        entry.fields.get(name) for name in LIFECYCLE_FIELDS
+    ):
+        issues.append(f"{prefix} candidate lifecycle cannot declare transition relations")
+    if entry.status == "superseded" and promoted_to:
+        issues.append(f"{prefix} superseded lifecycle cannot declare Promoted-To")
+    if entry.status == "promoted" and superseded_by:
+        issues.append(f"{prefix} promoted lifecycle cannot declare Superseded-By")
+
+    if entry.status in {"candidate", "promoted"}:
+        candidate_type_count = entry.field_counts.get("Candidate-Type", 0)
+        if candidate_type_count != 1:
+            issues.append(
+                f"{prefix} must declare exactly one Candidate-Type field "
+                f"(found {candidate_type_count})"
+            )
+    elif entry.field_counts.get("Candidate-Type", 0):
+        issues.append(
+            f"{prefix} non-candidate lifecycle cannot declare Candidate-Type"
+        )
+    return issues
 
 
 def supersede_entry(text: str, old_id: str, new_id: str) -> str:

@@ -18,7 +18,7 @@ from .protocol import (
     today,
 )
 from .mutations import TextMutation, apply_mutations
-from .locking import mutation_lock
+from .locking import project_mutation_guard
 from .plans import MutationPlan, print_plan
 from .templates import render_template
 from .entries import parse_structured_entries
@@ -40,7 +40,15 @@ MANUAL_TARGET_REASONS = {
 def _compact_plan(args, memory_dir: Path, mutations: list[TextMutation]) -> MutationPlan:
     manifest = (memory_dir / "manifest.md").read_text(encoding="utf-8")
     metadata = protocol_metadata(manifest)
-    protocol_06 = compare_versions(metadata.get("protocol_version", "0.5"), CURRENT_PROTOCOL_VERSION) == 0
+    comparison = compare_versions(
+        metadata.get("protocol_version", "0.5"),
+        CURRENT_PROTOCOL_VERSION,
+    )
+    if comparison is None:
+        raise ValueError("Project manifest has an invalid protocol version.")
+    if comparison > 0:
+        raise ValueError("Project protocol is newer than this CLI supports.")
+    protocol_06 = comparison == 0
     project_id = project_id_from_manifest(manifest) if protocol_06 else "legacy-protocol-0.5"
     return MutationPlan(
         "compact",
@@ -48,6 +56,7 @@ def _compact_plan(args, memory_dir: Path, mutations: list[TextMutation]) -> Muta
         project_id or "legacy-protocol-0.5",
         metadata.get("protocol_version", "0.5"),
         tuple(mutations),
+        project_root=memory_dir.parents[1],
     )
 
 
@@ -65,26 +74,54 @@ def _execute_plan(
     if not args.apply:
         print("Dry run only. Re-run with --apply" + (" --confirm-plan <PLAN_ID>." if protocol_06 else "."))
         return False
-    if protocol_06:
-        if not args.confirm_plan:
-            raise ValueError("Protocol 0.6 compact apply requires --confirm-plan <PLAN_ID>.")
-        with mutation_lock(
-            project_id, project_root, "compact",
-            timeout=args.lock_timeout, break_stale=args.break_stale_lock,
-        ):
-            current_mutations = rebuild()
-            current_plan = _compact_plan(args, memory_dir, current_mutations)
+    if protocol_06 and not args.confirm_plan:
+        raise ValueError("Protocol 0.6 compact apply requires --confirm-plan <PLAN_ID>.")
+    with project_mutation_guard(
+        project_root,
+        memory_dir / "manifest.md",
+        "compact",
+        timeout=args.lock_timeout,
+        break_stale=args.break_stale_lock,
+        allow_legacy=True,
+    ) as guard:
+        current_mutations = rebuild()
+        current_plan = _compact_plan(args, memory_dir, current_mutations)
+        current_comparison = compare_versions(
+            current_plan.protocol_version,
+            CURRENT_PROTOCOL_VERSION,
+        )
+        if current_comparison is None:
+            raise ValueError(
+                "Project protocol became invalid before compact apply."
+            )
+        if protocol_06:
+            if guard.project_id != project_id:
+                raise ValueError(
+                    "Project identity changed before compact apply; preview again."
+                )
             if current_plan.plan_id != args.confirm_plan:
                 print_plan(current_plan)
                 raise ValueError(
                     f"Stale or mismatched plan: confirmed {args.confirm_plan}, "
                     f"current Plan ID is {current_plan.plan_id}. No files written."
                 )
-            apply_mutations(current_mutations)
-            mutations = current_mutations
-    else:
-        print("Migration available: Protocol 0.5 apply keeps legacy confirmation behavior.")
-        apply_mutations(mutations)
+        elif current_comparison == 0:
+            raise ValueError(
+                "Project migrated to Protocol 0.6 before compatibility compact apply; "
+                "preview again and confirm the new Plan ID."
+            )
+        elif current_comparison > 0:
+            raise ValueError(
+                "Project protocol became newer than this CLI supports before "
+                "compatibility compact apply; update MemoryCustodian."
+            )
+        else:
+            print(
+                "Migration available: Protocol 0.5 apply keeps legacy confirmation "
+                "behavior under the bootstrap mutation guard."
+            )
+        apply_mutations(current_mutations)
+        mutations = current_mutations
     print("Written files:")
     for mutation in mutations:
         print(f"- {mutation.path}")

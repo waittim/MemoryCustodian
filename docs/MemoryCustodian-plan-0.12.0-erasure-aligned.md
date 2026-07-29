@@ -37,6 +37,12 @@
 * Entry schema version：`1`
 * Subject schema version：`1`
 * Conflict schema version：`1`
+* Routing schema version：`1`（继承 Protocol 0.7）
+* Local overlay schema version：`1`（仅 local manifest）
+* Transaction schema version：`1`
+* Audit schema version：`1`
+* Output schema version：`1`
+* Erasure scope schema version：`1`
 
 ---
 
@@ -69,7 +75,9 @@ MemoryCustodian v0.12 必须实现并通过仓库内测试、fixtures、audit �
 23. Subject merge、supersede、exception 和 reconciliation mutation 具备 crash-safe transaction protection。
 24. Soft/hard/purge、ID forget 和 local reset 具有统一、可机器读取的 erasure-scope contract。
 25. Git-history exposure inspection 的结果有稳定 status，但任何结果都不会被表述为对 forks、clones、backups 或 caches 的全局擦除证明。
-26. Transaction journal、prepared outputs、backups、JSON、audit 和 error paths 不泄露 hard-forgotten topic。
+26. Transaction journal metadata、filenames、JSON、audit 和 error paths 不泄露 hard-forgotten topic；
+    protected rollback backup bytes 可以短暂包含 pre-operation content，必须受限、不可进入 agent context，
+    并在 commit/rollback 后清理。
 27. 所有 adapters 对 forgetting boundary 使用相同语义和用户承诺。
 
 不得宣称：
@@ -147,15 +155,19 @@ Subject（managed decision/constraint/do-not-use/area hard memory）
 Facet（managed decision/constraint/do-not-use/area hard memory）
 ```
 
-允许的 Status：
+Active managed files 允许的 Status：
 
 ```text
 active
 superseded
-promoted
 ```
 
-`candidate` 只能在 `inbox.md`。
+`inbox.md` 允许的 Status：
+
+```text
+candidate
+promoted
+```
 
 允许的 Scope：
 
@@ -241,12 +253,17 @@ Project 与 area 对同一 Subject/Facet 的重叠必须：
 
 ### 2.4 Conflict and reconciliation relations
 
-除原 relations 外，支持：
+Entry conflict/reconciliation relations 支持：
 
 ```text
 Exception-To
 Reconciled-With
 Reconciliation
+```
+
+Subject registry relations 独立为：
+
+```text
 Merged-Into
 Merged-From
 ```
@@ -284,8 +301,6 @@ Promoted-To
 Related
 Exception-To
 Reconciled-With
-Merged-Into
-Merged-From
 ```
 
 要求：
@@ -294,7 +309,8 @@ Merged-From
 * Supersedes 与 Superseded-By 必须双向一致。
 * Promoted relations 必须双向一致。
 * 不允许 relation cycle。
-* Exception-To、reconciliation 与 Subject merge relation 必须满足 Canonical Subject Contract。
+* Exception-To 与 reconciliation relations 必须满足 entry relation contract。
+* Subject merge relations 只解析 Subject ID，不得作为 Entry relation 接受。
 * `check` 将断裂 relation 报 ERROR。
 * `migrate` 不自动猜测 relation。
 * `forget` preview 必须显示受影响 relation，但 hard/purge 输出不得泄露敏感 topic。
@@ -370,6 +386,7 @@ Journal 至少包含：
 
 ```json
 {
+  "transaction_schema_version": 1,
   "transaction_id": "...",
   "project_id": "...",
   "command": "...",
@@ -396,12 +413,13 @@ Journal 至少包含：
 3. 重新计算并验证 Plan ID。
 4. 读取全部 target。
 5. 验证 base digest。
-6. 在 state transaction 目录写入 prepared outputs。
+6. 在 state transaction 目录写入 prepared outputs，作为 digest/recovery 副本。
 7. 写入 backups。
 8. flush 和 best-effort fsync。
 9. 写 journal `prepared`。
 10. 更新 journal 为 `committing`。
-11. 以稳定顺序执行 replace。
+11. 以稳定顺序提交每个 target：在 target parent 创建 same-filesystem temp、写入 prepared bytes、
+    flush/fsync，并以 `os.replace()` 原子替换；不得直接把 state-root prepared file rename 到 target。
 12. 每替换一个 target，更新 journal。
 13. 所有替换完成后验证 output digest。
 14. 更新 journal 为 `committed`。
@@ -538,7 +556,11 @@ Forgetting transaction 的 journal、prepared output、backup 与 recovery 必�
 
 * Journal 只记录 generic operation type、target path、digests、Entry ID 或 redacted unit reference。
 * Journal 不保存 topic string、完整 removed body、secret preview 或可逆编码的敏感内容。
-* Prepared output 与 rollback backup 只在受控 state transaction directory 中存在。
+* Prepared output 与 rollback backup 只在 `0700` 的受控 state transaction directory 中存在，文件使用
+  `0600`，filename 不包含 topic。
+* Rollback backup 必然可能包含完整 pre-operation bytes，包括被忘记的 topic；这是恢复能力与
+  pre-state confidentiality 的物理边界，不得声称 backup content 不含 topic。
+* Backup 不进入 reader、audit payload、JSON、error output 或 agent context。
 * Recovery complete/rollback 后必须按 transaction policy 清理 temporary prepared files 与 backups。
 * Crash 后遗留的 transaction state 必须由 `audit --transactions` 检测；不得静默长期保留。
 * Backup 是 crash recovery mechanism，不是 archive；不能被 reader 或 agent context loading 使用。
@@ -806,8 +828,12 @@ Severity：
 为主要只读命令增加：
 
 ```bash
---json
+--format text
+--format json
 ```
+
+`--json` 可以作为 `--format json` 的非规范性 convenience alias，但 public contract、帮助文本、
+fixtures 与文档统一以 `--format` 为准。
 
 至少覆盖：
 
@@ -825,7 +851,7 @@ Severity：
 要求：
 
 * JSON schema 稳定。
-* `--json` 时 stdout 仅输出 JSON。
+* `--format json`（或 alias `--json`）时 stdout 仅输出 JSON。
 * stderr 仍用于环境错误。
 * 不在 JSON 后附加普通文本。
 * Exit code 语义稳定。
@@ -986,11 +1012,32 @@ evals/memory-custodian/cross-agent/
 
 ### 8.1 Migration 要求
 
-* 单次命令完成必要的顺序迁移。
+Protocol 0.8 strict canonicalization 使用 staged migration：
+
+```bash
+memory-custodian migrate --prepare
+memory-custodian migrate --finalize
+```
+
+`--prepare`：
+
+* 单次命令完成可机械验证的顺序准备，但保留原 protocol version，或写入不代表 Protocol 0.8
+  compliance 的 `migration_state: canonicalization-required` transitional metadata。
+* 生成逐 entry canonicalization、Evidence、Subject、Facet 与 relation checklist。
+* 不把仍含 legacy active memory 的项目标记为 fully compliant Protocol 0.8。
+
+`--finalize`：
+
+* 只有 managed active entries 全部 canonical、Subject/Facet/relations 完整且 audit 无 blocker 时，
+  才写入 `protocol_version: 0.8` 并清除 transitional state。
+* finalize 本身仍是 preview-first transaction。
+
+共同要求：
+
 * Preview 展示每个 protocol step。
 * 使用一个总 Plan ID。
 * 使用一个 transaction journal。
-* 不要求用户逐版本运行。
+* 不要求用户逐 protocol version 运行，但 prepare 后的语义修订与 finalize 是两个明确阶段。
 * 不丢失 custom manifest route。
 * 不丢失 optional module index。
 * 不更换 project_id。
@@ -1452,11 +1499,12 @@ README 使用产品语言，不重复全部 MUST 级规则。
 * Canonical managed entry contract 已定义并验证。
 * Subject schema version 为 1。
 * Conflict schema version 为 1。
+* Routing、local overlay、transaction、audit、output 与 erasure scope contracts 均携带 schema version 1。
 * Managed active decision、constraint、do-not-use 和 area hard-memory entries 具有合法 Subject 与 Facet。
 * `subjects.md` 是规范性 shared registry，且不进入普通 context pack。
 * Active legacy entry 在 Protocol 0.8 项目中被检查为错误。
 * Reader 仍能安全读取 legacy projects。
-* 0.5、0.6、0.7 可单步迁移至 0.8。
+* 0.5、0.6、0.7 可直接进入 staged prepare；只有 canonical audit 通过后 finalize 为 0.8。
 * 不发生 protocol downgrade。
 
 ### Reliability
@@ -1493,7 +1541,8 @@ README 使用产品语言，不重复全部 MUST 级规则。
 * Manifest 仍是唯一 shared routing authority。
 * Path-to-area matching 确定且跨平台一致。
 * Root project constraints 对 substantial routes 保持可达。
-* 每个 enabled module 都有唯一 loaded、skipped、missing、omitted 或 invalid disposition。
+* 每个 enabled module 都有唯一 loaded、skipped、missing-required、missing-optional 或 invalid disposition；
+  budget omission 属于独立 entry disposition。
 * `read --explain` 完整说明加载与跳过原因，并使用稳定 reason code。
 * Missing scope 不得静默显示 COMPLETE。
 * `--strict-routing` 对 INCOMPLETE、AMBIGUOUS 和 INVALID 返回非零 exit code。
@@ -1506,6 +1555,8 @@ README 使用产品语言，不重复全部 MUST 级规则。
 * Memory 不能授予权限。
 * Security scan 不泄露 secret。
 * Hard forget/purge 的 preview、journal、JSON 和 error 不泄露 topic。
+* Rollback backup bytes 可能包含 pre-operation topic，但 metadata/filename 不泄露，文件受 `0700/0600`
+  权限保护、永不进入 agent context，并在 commit/rollback 后清理。
 * Forget、purge、local reset 和 recovery 使用统一 canonical ErasureScope。
 * `git_history_modified` 与 `distributed_copies_revoked` 在正常操作中固定为 false。
 * `unavailable` 不显示 PASS；`no-reachable-copy-detected` 不被描述为无外部副本。

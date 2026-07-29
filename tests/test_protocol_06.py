@@ -18,16 +18,28 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "cli"))
 
 from memory_custodian.entries import generate_entry_id, validate_evidence
-from memory_custodian.locking import LockError, lock_path, mutation_lock, stale_lock
+from memory_custodian.locking import (
+    LockError,
+    PrivateStateError,
+    lock_path,
+    mutation_lock,
+    read_private_file,
+    stale_lock,
+)
 from tests.cli_test_support import main
 from tests.cli_test_support import _subject_for_add
 from memory_custodian.main import main as raw_main
-from memory_custodian.plans import MutationPlan
+from memory_custodian.plans import (
+    MutationPlan,
+    discard_pending_seed,
+    pending_entry_suffixes,
+)
 from memory_custodian.mutations import TextMutation
 from memory_custodian.protocol import budget_state, count_inbox_items, estimate_tokens
 from memory_custodian.scanning import scan_text
 from memory_custodian import compact as compact_module
 from memory_custodian import forget as forget_module
+from memory_custodian.add import _title
 
 
 def preview_id(argv: list[str]) -> str:
@@ -45,6 +57,149 @@ class Protocol06Tests(unittest.TestCase):
         self.assertEqual(budget_state(640, 800), "NEAR LIMIT")
         self.assertEqual(budget_state(800, 800), "NEAR LIMIT")
         self.assertEqual(budget_state(801, 800), "OVER BUDGET")
+
+    def test_generated_title_truncation_does_not_leave_trailing_whitespace(self):
+        title = _title(
+            "Use one mutation guard and separate private execution plans from public previews."
+        )
+        self.assertEqual(title, title.rstrip())
+        self.assertLessEqual(len(title), 72)
+
+    def test_plan_is_repo_relative_portable_and_has_separate_public_shape(self):
+        with tempfile.TemporaryDirectory() as first_tmp, tempfile.TemporaryDirectory() as second_tmp:
+            roots = (Path(first_tmp), Path(second_tmp))
+            plans = []
+            for root in roots:
+                target = root / "docs" / "memory" / "decisions.md"
+                target.parent.mkdir(parents=True)
+                target.write_text("before\n", encoding="utf-8")
+                plans.append(
+                    MutationPlan(
+                        "forget",
+                        {"topic": "PrivateMarker", "mode": "hard"},
+                        "12345678-1234-4234-8234-123456789abc",
+                        "0.6",
+                        (TextMutation(target, "after\n"),),
+                        project_root=root,
+                        public_arguments={"topic": "[redacted]", "mode": "hard"},
+                        private_context={
+                            "privacy_nonce": "89abcdef89abcdef89abcdef89abcdef"
+                        },
+                        sensitive=True,
+                    )
+                )
+
+            self.assertEqual(plans[0].plan_id, plans[1].plan_id)
+            public = json.dumps(plans[0].canonical(), sort_keys=True)
+            private = json.dumps(plans[0].private_canonical(), sort_keys=True)
+            self.assertIn("docs/memory/decisions.md", public)
+            self.assertNotIn(str(roots[0]), public)
+            self.assertNotIn("PrivateMarker", public)
+            self.assertNotIn("base_sha256", public)
+            self.assertIn("PrivateMarker", private)
+            self.assertIn("base_sha256", private)
+
+    def test_plan_canonicalizes_nested_path_values(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "docs" / "memory" / "decisions.md"
+            target.parent.mkdir(parents=True)
+            plan = MutationPlan(
+                "test",
+                {"nested": {"path": target}},
+                "12345678-1234-4234-8234-123456789abc",
+                "0.6",
+                (TextMutation(target, "after\n"),),
+                context={"paths": [target]},
+                project_root=root,
+            )
+            canonical = json.dumps(plan.private_canonical(), sort_keys=True)
+            self.assertNotIn(str(root), canonical)
+            self.assertEqual(
+                plan.private_canonical()["arguments"]["nested"]["path"],
+                "docs/memory/decisions.md",
+            )
+
+    def test_sensitive_plan_redacts_topic_from_public_paths_and_blockers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "docs" / "memory" / "areas" / "PrivateMarker.md"
+            target.parent.mkdir(parents=True)
+            plan = MutationPlan(
+                "forget",
+                {"topic": "PrivateMarker", "mode": "hard"},
+                "12345678-1234-4234-8234-123456789abc",
+                "0.6",
+                (TextMutation(target, "after\n"),),
+                blockers=("areas/PrivateMarker.md: requires review",),
+                project_root=root,
+                public_arguments={"topic": "[redacted]", "mode": "hard"},
+                private_context={
+                    "privacy_nonce": "89abcdef89abcdef89abcdef89abcdef"
+                },
+                sensitive=True,
+                public_redactions=("PrivateMarker",),
+            )
+            public = json.dumps(plan.canonical(), sort_keys=True)
+            private = json.dumps(plan.private_canonical(), sort_keys=True)
+            self.assertNotIn("PrivateMarker", public)
+            self.assertIn("areas/[redacted].md", public)
+            self.assertIn("PrivateMarker", private)
+
+    @unittest.skipIf(os.name == "nt", "POSIX permission and symlink semantics")
+    def test_private_plan_state_is_0700_0600_and_rejects_symlink_files(self):
+        with tempfile.TemporaryDirectory() as state, tempfile.TemporaryDirectory() as project:
+            with patch.dict(os.environ, {"XDG_STATE_HOME": state}):
+                _values, seed = pending_entry_suffixes(
+                    "permission-test",
+                    Path(project),
+                    "source-digest",
+                    ["one"],
+                )
+                assert seed is not None
+                plan_dir = Path(state) / "memory-custodian" / "plans"
+                self.assertEqual(plan_dir.stat().st_mode & 0o777, 0o700)
+                self.assertEqual(seed.stat().st_mode & 0o777, 0o600)
+                discard_pending_seed(seed)
+
+                outside = Path(state) / "outside"
+                outside.write_text("do not read\n", encoding="utf-8")
+                malicious = plan_dir / "permission-test-malicious.json"
+                malicious.symlink_to(outside)
+                with self.assertRaises(PrivateStateError):
+                    read_private_file(malicious)
+
+    def test_check_rejects_duplicate_fields_wrong_body_and_lifecycle_collision(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            constraint = Path(tmp) / "docs" / "memory" / "constraints.md"
+            constraint.write_text(
+                "# Constraints\n\n"
+                "## MC-CON-20260729-a1b2c3d4 — Malformed structured entry\n\n"
+                "Status: active\n"
+                "Status: superseded\n"
+                "Scope: project\n"
+                "Evidence:\n"
+                "- user-confirmed\n"
+                "Evidence:\n"
+                "- user-confirmed\n"
+                "Superseded-By: MC-CON-20260729-b2c3d4e5\n"
+                "Superseded-By: MC-CON-20260729-b2c3d4e5\n"
+                "Promoted-To: MC-CON-20260729-c3d4e5f6\n\n"
+                "Decision:\n"
+                "This body has the wrong type.\n",
+                encoding="utf-8",
+            )
+            output = StringIO()
+            with redirect_stdout(output):
+                self.assertEqual(main(["check", "--project-root", tmp]), 1)
+            text = output.getvalue()
+            self.assertIn("must declare exactly one Status field", text)
+            self.assertIn("has duplicate Evidence fields", text)
+            self.assertIn("has duplicate Superseded-By fields", text)
+            self.assertIn("must declare exactly one Constraint typed body", text)
+            self.assertIn("uses Decision body", text)
+            self.assertIn("cannot declare both Superseded-By and Promoted-To", text)
 
     def test_entry_id_format_and_collision_retry(self):
         with patch("memory_custodian.entries.uuid.uuid4") as generated:
@@ -455,6 +610,65 @@ class Protocol06Tests(unittest.TestCase):
             decisions = (Path(tmp) / "docs" / "memory" / "decisions.md").read_text(encoding="utf-8")
             self.assertIn("Decision A", decisions)
             self.assertIn("Decision B", decisions)
+
+    def test_real_concurrent_protocol_05_add_uses_bootstrap_guard(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as state:
+            self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            manifest_path = Path(tmp) / "docs" / "memory" / "manifest.md"
+            legacy_manifest = manifest_path.read_text(encoding="utf-8")
+            legacy_manifest = legacy_manifest.replace(
+                "- protocol_version: 0.6",
+                "- protocol_version: 0.5",
+            )
+            legacy_manifest = re.sub(
+                r"(?m)^- project_id: [0-9a-f-]+\n",
+                "",
+                legacy_manifest,
+            )
+            manifest_path.write_text(legacy_manifest, encoding="utf-8")
+
+            env = dict(os.environ)
+            env["PYTHONPATH"] = str(ROOT / "cli")
+            env["XDG_STATE_HOME"] = state
+            command = [sys.executable, "-m", "memory_custodian.main", "add"]
+            first = subprocess.Popen(
+                [
+                    *command,
+                    "Legacy concurrent A",
+                    "--type",
+                    "decision",
+                    "--project-root",
+                    tmp,
+                ],
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            second = subprocess.Popen(
+                [
+                    *command,
+                    "Legacy concurrent B",
+                    "--type",
+                    "decision",
+                    "--project-root",
+                    tmp,
+                ],
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            output_a = first.communicate(timeout=15)
+            output_b = second.communicate(timeout=15)
+            self.assertEqual(
+                (first.returncode, second.returncode),
+                (0, 0),
+                (output_a, output_b),
+            )
+            decisions = (
+                Path(tmp) / "docs" / "memory" / "decisions.md"
+            ).read_text(encoding="utf-8")
+            self.assertIn("Legacy concurrent A", decisions)
+            self.assertIn("Legacy concurrent B", decisions)
 
     def test_real_lock_timeout_and_guarded_stale_break(self):
         with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as state:

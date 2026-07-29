@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 import hashlib
-import tempfile
 
 from .entries import (
     generate_entry_id,
@@ -16,8 +15,13 @@ from .entries import (
     validate_evidence,
     validate_scope,
 )
-from .locking import mutation_lock
-from .locking import state_root
+from .locking import (
+    create_private_file,
+    discard_private_file,
+    private_state_directory,
+    project_mutation_guard,
+    read_private_file,
+)
 from .mutations import TextMutation, apply_mutations
 from .plans import MutationPlan, digest_path, print_plan
 from .protocol import (
@@ -65,7 +69,7 @@ class DecisionBudgetError(ValueError):
 
 def _title(message: str) -> str:
     clean = " ".join(message.strip().split())
-    return clean[:72] if clean else "Untitled memory"
+    return clean[:72].rstrip() if clean else "Untitled memory"
 
 
 def _legacy_entry(kind: str, message: str, reason: str | None) -> str:
@@ -338,18 +342,7 @@ def _supersede_fingerprint(args, project_id: str, memory_dir: Path) -> str:
 
 
 def _seed_path(fingerprint: str) -> Path:
-    primary = state_root() / "plans"
-    try:
-        primary.mkdir(parents=True, exist_ok=True)
-        probe = primary / f"supersede-{fingerprint}.id"
-        if not probe.exists():
-            probe.touch(exist_ok=True)
-            probe.unlink()
-        return probe
-    except OSError:
-        fallback = Path(tempfile.gettempdir()) / "memory-custodian-state" / "plans"
-        fallback.mkdir(parents=True, exist_ok=True)
-        return fallback / f"supersede-{fingerprint}.id"
+    return private_state_directory("plans") / f"supersede-{fingerprint}.id"
 
 
 def run(args) -> int:
@@ -362,30 +355,64 @@ def run(args) -> int:
         raise ValueError("manifest.md is missing; the MemoryCustodian setup is incomplete or corrupted")
     metadata = protocol_metadata(manifest_path.read_text(encoding="utf-8"))
     comparison = compare_versions(metadata.get("protocol_version", "0.5"), CURRENT_PROTOCOL_VERSION)
+    if comparison is None:
+        raise ValueError("Project manifest has an invalid protocol version.")
     protocol_06 = comparison == 0
-    if comparison is not None and comparison > 0:
+    if comparison > 0:
         raise ValueError("Project protocol is newer than this CLI supports.")
     if not protocol_06:
         print("Migration available: Protocol 0.5 compatibility write; migrate to 0.6 for evidence admission and locking.")
-        try:
-            mutations, target, new_id = _build_mutations(args, project_root, memory_dir, False)
-        except DecisionBudgetError as exc:
-            print(f"Decision entry budget: over/{DECISION_ENTRY_BUDGET} tokens")
-            print(f"Not added: {exc}")
-            return 1
-        apply_mutations(mutations)
+        with project_mutation_guard(
+            project_root,
+            manifest_path,
+            "add compatibility",
+            timeout=args.lock_timeout,
+            break_stale=args.break_stale_lock,
+            allow_legacy=True,
+        ) as guard:
+            current_metadata = protocol_metadata(guard.manifest_text or "")
+            current_comparison = compare_versions(
+                current_metadata.get("protocol_version", "0.5"),
+                CURRENT_PROTOCOL_VERSION,
+            )
+            if current_comparison is None:
+                raise ValueError(
+                    "Project protocol became invalid before the compatibility write."
+                )
+            if current_comparison == 0:
+                raise ValueError(
+                    "Project migrated to Protocol 0.6 before the compatibility write; "
+                    "re-run add with Protocol 0.6 Evidence."
+                )
+            if current_comparison > 0:
+                raise ValueError(
+                    "Project protocol became newer than this CLI supports before "
+                    "the compatibility write; update MemoryCustodian."
+                )
+            try:
+                mutations, target, new_id = _build_mutations(
+                    args,
+                    project_root,
+                    memory_dir,
+                    False,
+                )
+            except DecisionBudgetError as exc:
+                print(f"Decision entry budget: over/{DECISION_ENTRY_BUDGET} tokens")
+                print(f"Not added: {exc}")
+                return 1
+            apply_mutations(mutations)
     else:
         project_id = project_id_from_manifest(manifest_path.read_text(encoding="utf-8"))
         assert project_id is not None
         if args.supersedes:
             fingerprint = _supersede_fingerprint(args, project_id, memory_dir)
             seed_path = _seed_path(fingerprint)
-            fixed_id = seed_path.read_text(encoding="utf-8").strip() if seed_path.exists() else None
+            fixed_id = read_private_file(seed_path).strip() if seed_path.exists() else None
             mutations, target, new_id = _build_mutations(
                 args, project_root, memory_dir, True, fixed_id=fixed_id or None
             )
             if not fixed_id:
-                seed_path.write_text(new_id + "\n", encoding="utf-8")
+                create_private_file(seed_path, new_id + "\n")
             plan = MutationPlan(
                 "add --supersedes",
                 {
@@ -398,6 +425,7 @@ def run(args) -> int:
                 project_id,
                 CURRENT_PROTOCOL_VERSION,
                 tuple(mutations),
+                project_root=project_root,
             )
             print_plan(plan)
             if not args.apply:
@@ -405,10 +433,16 @@ def run(args) -> int:
                 return 0
             if not args.confirm_plan:
                 raise ValueError("Protocol 0.6 supersede apply requires --confirm-plan <PLAN_ID>.")
-            with mutation_lock(
-                project_id, project_root, "add --supersedes",
+            with project_mutation_guard(
+                project_root,
+                manifest_path,
+                "add --supersedes",
                 timeout=args.lock_timeout, break_stale=args.break_stale_lock,
-            ):
+            ) as guard:
+                if guard.project_id != project_id:
+                    raise ValueError(
+                        "Project identity changed before supersede apply; preview again."
+                    )
                 current_mutations, target, new_id = _build_mutations(
                     args, project_root, memory_dir, True, fixed_id=new_id
                 )
@@ -424,6 +458,7 @@ def run(args) -> int:
                     project_id,
                     CURRENT_PROTOCOL_VERSION,
                     tuple(current_mutations),
+                    project_root=project_root,
                 )
                 if current_plan.plan_id != args.confirm_plan:
                     raise ValueError(
@@ -431,20 +466,21 @@ def run(args) -> int:
                         f"current Plan ID is {current_plan.plan_id}. No files written."
                     )
                 apply_mutations(current_mutations)
-            try:
-                seed_path.unlink()
-            except FileNotFoundError:
-                pass
+            discard_private_file(seed_path)
             print(f"Added {args.type} memory {new_id} to {memory_dir / target}")
             print("Written files:")
             for mutation in current_mutations:
                 print(f"- {mutation.path}")
             _report_budget(memory_dir / target, target)
             return 0
-        with mutation_lock(
-            project_id, project_root, "add",
+        with project_mutation_guard(
+            project_root,
+            manifest_path,
+            "add",
             timeout=args.lock_timeout, break_stale=args.break_stale_lock,
-        ):
+        ) as guard:
+            if guard.project_id != project_id:
+                raise ValueError("Project identity changed before add; re-run the command.")
             # Every source file is re-read and the mutation plan is rebuilt under the lock.
             try:
                 mutations, target, new_id = _build_mutations(args, project_root, memory_dir, True)

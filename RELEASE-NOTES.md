@@ -27,12 +27,17 @@
 
 ### Concurrent and preview-safe mutation
 
-- Added project mutation locks in platform state storage outside repositories, including timeout and guarded stale-lock recovery.
-- Added canonical Plan IDs with base/output SHA-256 digests to preview-first operations; Protocol 0.6 apply rejects missing, mismatched, or stale confirmation without writing.
+- Added one bootstrap-to-permanent project mutation guard for every writer, including repair, enable, migration,
+  Subject operations, and Protocol 0.5 compatibility writes. The manifest project ID installed during repair is
+  now exactly the identity of the permanent lock being held.
+- Added repo-relative canonical Plan IDs with private execution and public preview representations. Ordinary plans
+  expose base/output SHA-256 digests; hard and purge public plans redact raw arguments, digests, and matching topic
+  text in path/blocker metadata while a random private nonce keeps confirmation identifiers resistant to topic
+  dictionary attacks.
 - Generate migration project identity from a random UUIDv4 persisted in platform state for the preview/apply pair, preventing identical legacy projects from sharing locks or future overlays.
 - Rebuild complete replacement, supersede, compaction, forgetting, and migration plans after acquiring the mutation lock; legacy destructive replacement now requires migration first.
-- Serialize `enable` under the project lock, and serialize first initialization under a normalized-path bootstrap
-  lock before switching repair work to the permanent project lock.
+- Hold the normalized-path bootstrap lock through permanent-lock acquisition and mutation-plan rebuild, eliminating
+  the repair/enable handoff window.
 - Added real-process concurrent-add and stale-plan regression tests. These tests verify deterministic safety properties, not a live cross-agent benchmark or database transaction semantics.
 - Added deterministic `OK`, `NEAR LIMIT`, and `OVER BUDGET` states; writes at 80% or above emit a no-write maintenance preview instead of relying on an agent to calculate the threshold.
 - Made same-day archives idempotent: one canonical file note, no repeated batch wrappers, merged changelog date headings, and newest-first archived changelog order.
@@ -43,8 +48,12 @@
 - Added redacted deterministic checks for common credential-like patterns, machine paths, personal email, and phone-number shapes. These checks are not complete secret detection and never auto-delete content.
 - Redact every recognized sensitive span on a finding line before rendering any preview, and revalidate manually
   edited active/candidate Evidence during `check`.
+- Validate formal structured entries as schema claims: reject duplicate fields, missing Status/Scope/Evidence,
+  missing or mismatched typed bodies, duplicate relations, and contradictory lifecycle fields.
 - Generate hard-forget Tombstone suffixes from random repo-external preview seeds rather than topic-derived hashes;
   protect both formal and provisional Subject references during purge.
+- Restrict private state directories/files to `0700`/`0600` on POSIX and reject symlink, foreign-owner, or
+  non-regular private state targets.
 - Keep ordinary scan output summary-only while `--security` and `--privacy` reveal redacted locations; validate inbox statuses and promotion/supersede relation integrity.
 
 ### Demo and submission materials

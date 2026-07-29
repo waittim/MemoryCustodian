@@ -43,6 +43,9 @@ v0.10 已提供：
 * Conflict schema version：`1`
 * Local overlay schema version：`1`
 
+`local_overlay_schema_version` 只存在于 repo 外 local manifest；shared manifest 不以当前机器是否存在
+overlay 作为 validity 条件。Shared manifest 只声明 shared Protocol、routing 与 conflict contracts。
+
 ---
 
 ## 一、版本目标
@@ -246,7 +249,7 @@ areas/frontend.md
 
 Module index 必须可机器解析，并包含与 module type 相符的 route metadata。
 
-推荐格式：
+规范格式：
 
 ```md
 ## Optional module index
@@ -288,6 +291,16 @@ Module index 必须可机器解析，并包含与 module type 相符的 route me
 * 不允许仅依赖自然语言描述如 “load when clearly relevant” 作为唯一 machine route。
 * 可保留 human-readable description，但它不能影响 CLI routing result。
 * Manifest parser 必须拒绝同一 module 的矛盾重复声明。
+* 该 nested-bullet grammar 是 Protocol 0.7 的规范性 machine grammar，不是展示建议：
+  * module 行必须是 subsection 下 column-zero 的 `- \`path\``。
+  * metadata 行固定缩进两个空格，并使用 `- key: value`。
+  * allowed keys 固定为 `tasks`、`activation`、`explicit`、`paths` 与 `description`。
+  * scalar key 在同一 module 内不得重复；重复 module path 一律 INVALID。
+  * key 顺序不影响语义；canonical renderer 按上述固定顺序输出。
+  * task/value list 使用逗号分隔的 unquoted canonical tokens。
+  * path glob 必须使用 Markdown code span；反引号、换行或无法解析的 escaping 一律 INVALID。
+  * unknown machine key 一律 INVALID；human prose 只能放在 `description`，且不参与 routing。
+  * parser error 不得 fallback 到自然语言 route guessing。
 
 ### 4.4 Area path matching
 
@@ -472,7 +485,6 @@ loaded
 skipped
 missing-required
 missing-optional
-omitted-by-budget
 invalid
 ```
 
@@ -482,6 +494,14 @@ invalid
 * omitted entries 单独列出
 * 有 Entry ID 时显示 ID
 * legacy unit 没有 ID 时显示稳定 unit reference，不生成伪 ID
+
+Entry disposition 使用独立 namespace：
+
+```text
+loaded
+omitted-by-budget
+inactive
+```
 
 ### 6.3 Stable reason codes
 
@@ -789,7 +809,8 @@ memory-custodian subject merge MC-SUBJ-source \
 Preview 必须列出：
 
 * source 与 target registry units
-* 所有引用 source 的 active、superseded、candidate entries
+* 所有引用 source 的 active、candidate entries
+* superseded 与 archive 中的 historical references inventory，但不计划机械重写
 * 将更新的 files
 * alias/canonical-ref collision
 * relation changes
@@ -801,11 +822,13 @@ Apply：
 
 * 使用 mutation lock。
 * 使用 Plan ID 和 stale digest guard。
-* 将引用统一更新到 target。
+* 将 current active 与 candidate 引用更新到 target。
 * source 标记 `Status: merged`。
 * 添加 `Merged-Into: <TARGET_ID>`。
 * target 可添加 `Merged-From: <SOURCE_ID>`。
 * 不删除 source audit history。
+* 不机械重写 superseded 或 archive historical entries；历史查询通过 source Subject 的
+  `Merged-Into` 解析 current canonical identity，并同时显示 historical identity。
 * 若合并后产生多个 active Scope+Subject+Facet owner，阻止 apply，要求先 supersede、exception 或 distinct reconciliation。
 * 不自动选择 target。
 * 不根据较早/较新时间决定 target。
@@ -902,7 +925,10 @@ Local manifest 只能声明 local modules，不得重新定义 shared routes。
 
 * project_id 必须与 shared manifest 一致。
 * Local overlay 缺失时 read 正常工作。
-* Local overlay corrupt 时 shared context 仍可生成，但 routing completeness 至少为 REVIEW/INCOMPLETE，并明确 local failure。
+* Local overlay corrupt 时 shared context 仍可生成，但必须分别输出：
+  * `Routing completeness: INCOMPLETE`
+  * `Local overlay status: REVIEW`
+  * 明确的 local failure reason
 * Local modules 只能使用 `Scope: local-user` 或 `Scope: local-machine`。
 * Shared entries 不能使用 local scope。
 * Local overlay 不能引用 repo 外的任意文件作为 runtime module。

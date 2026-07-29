@@ -3,16 +3,21 @@
 from __future__ import annotations
 
 import hashlib
-import os
 from pathlib import Path
-import tempfile
 
 from .entries import parse_structured_entries, validate_evidence
-from .locking import mutation_lock, state_root
+from .locking import (
+    create_private_file,
+    discard_private_file,
+    private_state_directory,
+    project_mutation_guard,
+    read_private_file,
+)
 from .mutations import TextMutation, apply_mutations
 from .plans import MutationPlan, digest_path, print_plan
 from .protocol import (
     CURRENT_PROTOCOL_VERSION,
+    compare_versions,
     prepended_text,
     project_id_from_manifest,
     protocol_metadata,
@@ -46,6 +51,14 @@ def _project(args) -> tuple[Path, Path, str]:
     if not manifest.exists():
         raise ValueError("manifest.md is missing; Subject operations require Protocol 0.6 metadata.")
     metadata = protocol_metadata(manifest.read_text(encoding="utf-8"))
+    comparison = compare_versions(
+        metadata.get("protocol_version", "0.5"),
+        CURRENT_PROTOCOL_VERSION,
+    )
+    if comparison is None:
+        raise ValueError("Project manifest has an invalid protocol version.")
+    if comparison != 0:
+        raise ValueError("Subject operations require Protocol 0.6.")
     if metadata.get("subject_schema_version") != "1":
         raise ValueError("Subject schema is not initialized; run `memory-custodian migrate`.")
     return project_root, memory_dir, project_id_from_manifest(manifest.read_text(encoding="utf-8"))
@@ -64,27 +77,10 @@ def _pending_subject_id(project_id: str, registry: Path, normalized_args: str) -
     fingerprint = hashlib.sha256(
         f"{project_id}\0{digest_path(registry)}\0{normalized_args}".encode("utf-8")
     ).hexdigest()[:32]
-    primary = state_root() / "plans"
-    try:
-        primary.mkdir(parents=True, exist_ok=True)
-        path = primary / f"subject-{fingerprint}.id"
-        probe = primary / f".subject-probe-{os.getpid()}"
-        descriptor = os.open(probe, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-        os.close(descriptor)
-        probe.unlink()
-    except OSError:
-        directory = Path(tempfile.gettempdir()) / "memory-custodian-state" / "plans"
-        directory.mkdir(parents=True, exist_ok=True)
-        path = directory / f"subject-{fingerprint}.id"
+    path = private_state_directory("plans") / f"subject-{fingerprint}.id"
     generated = generate_subject_id()
-    try:
-        descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-    except FileExistsError:
-        descriptor = None
-    if descriptor is not None:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            handle.write(generated + "\n")
-    value = path.read_text(encoding="utf-8").strip()
+    create_private_file(path, generated + "\n")
+    value = read_private_file(path).strip()
     if not SUBJECT_ID_RE.fullmatch(value):
         raise ValueError(f"Invalid pending Subject ID seed: {path}")
     return value, path
@@ -126,6 +122,7 @@ def _print_preflight(
 def _apply_preview(
     args,
     project_root: Path,
+    manifest_path: Path,
     project_id: str,
     build,
     *,
@@ -141,13 +138,31 @@ def _apply_preview(
         return 0
     if not args.confirm_plan:
         raise ValueError("Subject registry apply requires --confirm-plan <PLAN_ID>.")
-    with mutation_lock(
-        project_id,
+    with project_mutation_guard(
         project_root,
+        manifest_path,
         f"subject {args.subject_command}",
         timeout=args.lock_timeout,
         break_stale=args.break_stale_lock,
-    ):
+    ) as guard:
+        if guard.project_id != project_id:
+            raise ValueError(
+                "Project identity changed before Subject mutation apply; preview again."
+            )
+        if (
+            compare_versions(
+                protocol_metadata(guard.manifest_text or "").get(
+                    "protocol_version",
+                    "0.5",
+                ),
+                CURRENT_PROTOCOL_VERSION,
+            )
+            != 0
+        ):
+            raise ValueError(
+                "Subject mutation requires Protocol 0.6; project protocol changed "
+                "before apply."
+            )
         current = build()
         if current.plan_id != args.confirm_plan:
             print_plan(current)
@@ -157,10 +172,7 @@ def _apply_preview(
             )
         completed = apply_mutations(list(current.mutations))
     if seed_path:
-        try:
-            seed_path.unlink()
-        except FileNotFoundError:
-            pass
+        discard_private_file(seed_path)
     print("Applied Subject registry plan. Written files:")
     for path in completed:
         print(f"- {path}")
@@ -265,9 +277,17 @@ def _add(args) -> int:
             project_id,
             CURRENT_PROTOCOL_VERSION,
             (TextMutation(registry, updated),),
+            project_root=project_root,
         )
 
-    return _apply_preview(args, project_root, project_id, build, seed_path=seed_path)
+    return _apply_preview(
+        args,
+        project_root,
+        memory_dir / "manifest.md",
+        project_id,
+        build,
+        seed_path=seed_path,
+    )
 
 
 def _rename(args) -> int:
@@ -300,9 +320,16 @@ def _rename(args) -> int:
             project_id,
             CURRENT_PROTOCOL_VERSION,
             mutations,
+            project_root=project_root,
         )
 
-    return _apply_preview(args, project_root, project_id, build)
+    return _apply_preview(
+        args,
+        project_root,
+        memory_dir / "manifest.md",
+        project_id,
+        build,
+    )
 
 
 def _add_alias(args) -> int:
@@ -337,9 +364,16 @@ def _add_alias(args) -> int:
             project_id,
             CURRENT_PROTOCOL_VERSION,
             mutations,
+            project_root=project_root,
         )
 
-    return _apply_preview(args, project_root, project_id, build)
+    return _apply_preview(
+        args,
+        project_root,
+        memory_dir / "manifest.md",
+        project_id,
+        build,
+    )
 
 
 def run(args) -> int:

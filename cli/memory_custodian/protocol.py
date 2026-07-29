@@ -330,13 +330,26 @@ def _protocol_section_lines(
     ]
 
 
-def manifest_with_protocol_metadata(manifest: str, last_migrated_with: str = CURRENT_PACKAGE_LABEL) -> tuple[str, bool]:
+def manifest_with_protocol_metadata(
+    manifest: str,
+    last_migrated_with: str = CURRENT_PACKAGE_LABEL,
+    *,
+    project_id: str | None = None,
+) -> tuple[str, bool]:
     metadata = protocol_metadata(manifest)
     initialized_with = metadata.get("initialized_with", "unknown")
-    project_id = metadata.get("project_id")
+    existing_project_id = metadata.get("project_id")
+    if existing_project_id and not valid_project_id(existing_project_id):
+        raise ValueError(
+            f"Invalid project_id {existing_project_id!r}; review manifest.md manually before migration."
+        )
     if project_id and not valid_project_id(project_id):
-        raise ValueError(f"Invalid project_id {project_id!r}; review manifest.md manually before migration.")
-    project_id = project_id or str(uuid.uuid4())
+        raise ValueError(f"Invalid project_id override {project_id!r}.")
+    if existing_project_id and project_id and existing_project_id != project_id:
+        raise ValueError(
+            "Refusing to replace the existing project_id during protocol metadata repair."
+        )
+    project_id = existing_project_id or project_id or str(uuid.uuid4())
     replacement = _protocol_section_lines(initialized_with, last_migrated_with, project_id)
     lines = manifest.splitlines()
 
@@ -398,7 +411,11 @@ def manifest_with_protocol_metadata(manifest: str, last_migrated_with: str = CUR
     return text, text != ensure_newline(manifest)
 
 
-def manifest_with_current_protocol_metadata(manifest: str) -> tuple[str, bool]:
+def manifest_with_current_protocol_metadata(
+    manifest: str,
+    *,
+    project_id: str | None = None,
+) -> tuple[str, bool]:
     version = protocol_metadata(manifest).get("protocol_version")
     if version is not None:
         comparison = compare_versions(version, CURRENT_PROTOCOL_VERSION)
@@ -411,7 +428,11 @@ def manifest_with_current_protocol_metadata(manifest: str) -> tuple[str, bool]:
                 f"Project protocol {version} is newer than this CLI supports ({CURRENT_PROTOCOL_VERSION}); "
                 "update MemoryCustodian before updating the manifest."
             )
-    updated, changed = manifest_with_protocol_metadata(manifest, CURRENT_PACKAGE_LABEL)
+    updated, changed = manifest_with_protocol_metadata(
+        manifest,
+        CURRENT_PACKAGE_LABEL,
+        project_id=project_id,
+    )
     if "## Trust boundary" not in updated:
         lines = updated.splitlines()
         protocol_index = next(

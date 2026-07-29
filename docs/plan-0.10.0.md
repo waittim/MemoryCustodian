@@ -528,6 +528,11 @@ memory-custodian add "Decision B" --type decision --evidence user-confirmed
 * JSON keys 排序。
 * UTF-8。
 * 无不稳定时间字段。
+* target path 与 path-like argument 使用 repo-relative POSIX path。
+* private execution plan 与 public preview representation 分离。
+* hard/purge public representation 不包含 raw topic、base digest 或 output digest，并从 public path、
+  blocker 与 budget metadata 中脱敏匹配 topic。
+* hard/purge private plan 使用 repo 外随机 nonce，避免 Plan ID 成为 topic dictionary oracle。
 * Plan ID 使用 canonical JSON 的 SHA-256 前 16 个十六进制字符。
 
 Preview 输出：
@@ -557,7 +562,8 @@ Protocol 0.6 项目：
 
 Protocol 0.5 项目：
 
-* 保持旧行为。
+* 保持旧 entry format 与 legacy confirmation 行为。
+* 所有 write 仍通过 bootstrap mutation guard 串行化。
 * 输出迁移提示。
 * 不改变旧项目兼容性。
 

@@ -4,13 +4,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .locking import bootstrap_lock_id, mutation_lock
+from .locking import project_mutation_guard
 from .protocol import (
+    CURRENT_PROTOCOL_VERSION,
     changelog_text,
+    compare_versions,
     is_indexable_optional_path,
     is_safe_memory_name,
     manifest_with_optional_module_index,
-    project_id_from_manifest,
+    protocol_metadata,
     resolve_memory_dir,
     resolve_project_root,
     today,
@@ -110,18 +112,30 @@ def run(args) -> int:
         raise ValueError(f"Unknown or invalid optional feature: {args.feature}")
 
     relative_path, text = result
-    manifest_text = manifest_path.read_text(encoding="utf-8")
-    project_id = (
-        project_id_from_manifest(manifest_text, required=False)
-        or bootstrap_lock_id(project_root)
-    )
-    with mutation_lock(
-        project_id,
+    with project_mutation_guard(
         project_root,
+        manifest_path,
         "enable",
         timeout=args.lock_timeout,
         break_stale=args.break_stale_lock,
-    ):
+        allow_legacy=True,
+    ) as guard:
+        metadata = protocol_metadata(guard.manifest_text or "")
+        comparison = compare_versions(
+            metadata.get("protocol_version", "0.5"),
+            CURRENT_PROTOCOL_VERSION,
+        )
+        if comparison is None:
+            raise ValueError("Project manifest has an invalid protocol version.")
+        if comparison > 0:
+            raise ValueError(
+                "Project protocol is newer than this CLI supports; "
+                "update MemoryCustodian before enabling modules."
+            )
+        if comparison == 0 and guard.project_id is None:
+            raise ValueError(
+                "Protocol 0.6 manifest is missing a valid project_id; run `init --repair`."
+            )
         state, manifest_state, mutations = _build_mutations(
             memory_dir,
             manifest_path,
