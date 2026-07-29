@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from .locking import bootstrap_lock_id, mutation_lock
 from .protocol import (
     changelog_text,
     is_indexable_optional_path,
     is_safe_memory_name,
     manifest_with_optional_module_index,
+    project_id_from_manifest,
     resolve_memory_dir,
     resolve_project_root,
     today,
@@ -56,6 +58,42 @@ def _feature_path_and_text(feature: str, current_date: str) -> tuple[str, str] |
     return None
 
 
+def _build_mutations(
+    memory_dir: Path,
+    manifest_path: Path,
+    relative_path: str,
+    template_text: str,
+) -> tuple[str, str | None, list[TextMutation]]:
+    path = memory_dir / relative_path
+    state = "kept" if path.exists() else "written"
+    target_text = path.read_text(encoding="utf-8") if path.exists() else template_text
+    planned: dict[Path, str] = {} if path.exists() else {path: target_text}
+    manifest_state = None
+    if is_indexable_optional_path(relative_path):
+        updated_manifest, changed = manifest_with_optional_module_index(
+            manifest_path.read_text(encoding="utf-8"),
+            relative_path,
+        )
+        if changed:
+            planned[manifest_path] = updated_manifest
+            manifest_state = f"indexed {relative_path}"
+    changed_state = bool(planned)
+    changelog = memory_dir / "changelog.md"
+    if changed_state and relative_path == "changelog.md":
+        planned[changelog] = changelog_text(
+            target_text,
+            f"Enabled optional memory module {relative_path}.",
+        )
+    elif changed_state and changelog.exists():
+        planned[changelog] = changelog_text(
+            changelog.read_text(encoding="utf-8"),
+            f"Enabled optional memory module {relative_path}.",
+        )
+    return state, manifest_state, [
+        TextMutation(target, content) for target, content in planned.items()
+    ]
+
+
 def run(args) -> int:
     project_root = resolve_project_root(args.project_root)
     memory_dir = resolve_memory_dir(project_root, args.memory_dir)
@@ -72,28 +110,29 @@ def run(args) -> int:
         raise ValueError(f"Unknown or invalid optional feature: {args.feature}")
 
     relative_path, text = result
-    path = memory_dir / relative_path
-    state = "kept" if path.exists() else "written"
-    target_text = path.read_text(encoding="utf-8") if path.exists() else text
-    planned: dict[Path, str] = {} if path.exists() else {path: target_text}
-    manifest_state = None
-    if is_indexable_optional_path(relative_path):
-        updated_manifest, changed = manifest_with_optional_module_index(manifest_path.read_text(encoding="utf-8"), relative_path)
-        if changed:
-            planned[manifest_path] = updated_manifest
-            manifest_state = f"indexed {relative_path}"
-    changed_state = bool(planned)
-    changelog = memory_dir / "changelog.md"
-    if changed_state and relative_path == "changelog.md":
-        planned[changelog] = changelog_text(target_text, f"Enabled optional memory module {relative_path}.")
-    elif changed_state and changelog.exists():
-        planned[changelog] = changelog_text(
-            changelog.read_text(encoding="utf-8"), f"Enabled optional memory module {relative_path}."
+    manifest_text = manifest_path.read_text(encoding="utf-8")
+    project_id = (
+        project_id_from_manifest(manifest_text, required=False)
+        or bootstrap_lock_id(project_root)
+    )
+    with mutation_lock(
+        project_id,
+        project_root,
+        "enable",
+        timeout=args.lock_timeout,
+        break_stale=args.break_stale_lock,
+    ):
+        state, manifest_state, mutations = _build_mutations(
+            memory_dir,
+            manifest_path,
+            relative_path,
+            text,
         )
-    if not changed_state:
+        if mutations:
+            apply_mutations(mutations)
+    if not mutations:
         print(f"{relative_path}: already enabled")
         return 0
-    apply_mutations([TextMutation(target, content) for target, content in planned.items()])
     print(f"{relative_path}: {state}")
     if manifest_state:
         print(f"manifest.md: {manifest_state}")

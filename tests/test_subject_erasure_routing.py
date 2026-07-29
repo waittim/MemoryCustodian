@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -12,13 +13,17 @@ import sys
 import tempfile
 import time
 import unittest
+import uuid
+from unittest.mock import patch
 
 from memory_custodian.locking import stale_lock
+from memory_custodian.locking import bootstrap_lock_id, lock_path
 from memory_custodian.main import main
 from memory_custodian.protocol import parse_manifest_task_modules
 from memory_custodian.read import _optional_requested
 from memory_custodian.routes import RouteReason, merge_routed_modules
 from memory_custodian.scanning import scan_text
+from memory_custodian import init as init_module
 from memory_custodian.subjects import (
     generate_subject_id,
     normalize_alias,
@@ -384,6 +389,198 @@ Load:
             self.assertTrue(stale_lock(path))
             payload = json.loads(path.read_text(encoding="utf-8"))
             self.assertEqual(payload["hostname"], socket.gethostname())
+
+
+class AuditGapRegressionTests(unittest.TestCase):
+    def test_enable_concurrency_preserves_both_index_updates(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as state:
+            self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            env = dict(os.environ)
+            env["PYTHONPATH"] = str(ROOT / "cli")
+            env["XDG_STATE_HOME"] = state
+            command = [sys.executable, "-m", "memory_custodian.main", "enable"]
+            first = subprocess.Popen(
+                [*command, "profile/git", "--project-root", tmp],
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            second = subprocess.Popen(
+                [*command, "area/storage", "--project-root", tmp],
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            first_output = first.communicate(timeout=15)
+            second_output = second.communicate(timeout=15)
+            self.assertEqual(
+                (first.returncode, second.returncode),
+                (0, 0),
+                (first_output, second_output),
+            )
+            manifest = (
+                Path(tmp) / "docs" / "memory" / "manifest.md"
+            ).read_text(encoding="utf-8")
+            self.assertIn("`profiles/git.md`", manifest)
+            self.assertIn("`areas/storage.md`", manifest)
+
+    def test_concurrent_first_init_uses_one_bootstrap_identity(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as state:
+            env = dict(os.environ)
+            env["PYTHONPATH"] = str(ROOT / "cli")
+            env["XDG_STATE_HOME"] = state
+            command = [
+                sys.executable,
+                "-m",
+                "memory_custodian.main",
+                "init",
+                "--project-root",
+                tmp,
+            ]
+            first = subprocess.Popen(command, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            second = subprocess.Popen(command, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            first_output = first.communicate(timeout=15)
+            second_output = second.communicate(timeout=15)
+            self.assertEqual(
+                (first.returncode, second.returncode),
+                (0, 0),
+                (first_output, second_output),
+            )
+            manifest = (
+                Path(tmp) / "docs" / "memory" / "manifest.md"
+            ).read_text(encoding="utf-8")
+            ids = re.findall(r"(?m)^- project_id: ([0-9a-f-]+)$", manifest)
+            self.assertEqual(len(ids), 1)
+            self.assertFalse(lock_path(bootstrap_lock_id(Path(tmp))).exists())
+
+    def test_first_init_holds_bootstrap_and_project_locks_while_writing(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as state:
+            root = Path(tmp)
+            real_apply = init_module.apply_mutations
+
+            def verify_locks(mutations):
+                manifest_mutation = next(
+                    mutation for mutation in mutations if mutation.path.name == "manifest.md"
+                )
+                project_id = re.search(
+                    r"project_id: ([0-9a-f-]+)",
+                    manifest_mutation.text,
+                ).group(1)
+                self.assertTrue(lock_path(bootstrap_lock_id(root)).exists())
+                self.assertTrue(lock_path(project_id).exists())
+                return real_apply(mutations)
+
+            with patch.dict(os.environ, {"XDG_STATE_HOME": state}), patch(
+                "memory_custodian.init.apply_mutations",
+                side_effect=verify_locks,
+            ):
+                self.assertEqual(main(["init", "--project-root", tmp]), 0)
+
+    def test_scan_preview_redacts_all_sensitive_values_on_line(self):
+        first = "FirstSecretValue123"
+        second = "SecondSecretValue456"
+        findings = scan_text(
+            Path("constraints.md"),
+            f"api_key={first} password={second}",
+        )
+        self.assertGreaterEqual(len(findings), 1)
+        for finding in findings:
+            self.assertNotIn(first, finding.preview)
+            self.assertNotIn(second, finding.preview)
+            self.assertIn("[redacted]", finding.preview)
+
+    def test_check_revalidates_evidence_and_provisional_subject(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            subject_id = add_subject(tmp, "Evidence subject")
+            memory = Path(tmp) / "docs" / "memory"
+            (memory / "constraints.md").write_text(
+                "# Constraints\n\n"
+                "## MC-CON-20260729-a1b2c3d4 — Invalid evidence\n\n"
+                "Status: active\n"
+                "Scope: project\n"
+                f"Subject: {subject_id}\n"
+                "Facet: security\n"
+                "Evidence:\n"
+                "- arbitrary-value\n\n"
+                "Constraint:\nKeep validation strict.\n",
+                encoding="utf-8",
+            )
+            (memory / "inbox.md").write_text(
+                "# Memory Inbox\n\n"
+                "## MC-INBOX-20260729-b2c3d4e5 — Candidate\n\n"
+                "Status: candidate\n"
+                "Candidate-Type: constraint\n"
+                "Scope: project\n"
+                "Provisional-Subject: MC-SUBJ-20260729-deadbeef\n"
+                "Provisional-Facet: security\n"
+                "Evidence:\n"
+                "- agent-observed\n\n"
+                "Statement:\nReview later.\n",
+                encoding="utf-8",
+            )
+            output = StringIO()
+            with redirect_stdout(output):
+                self.assertEqual(main(["check", "--project-root", tmp]), 1)
+            text = output.getvalue()
+            self.assertIn("has invalid Evidence", text)
+            self.assertNotIn("arbitrary-value", text)
+            self.assertIn("missing or inactive Provisional-Subject", text)
+
+    def test_hard_forget_uses_random_pending_tombstone_suffix(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as state:
+            self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            memory = Path(tmp) / "docs" / "memory"
+            topic = "DictionaryAttackTopic"
+            (memory / "decisions.md").write_text(
+                f"# Decisions\n\n## Removable\nDecision:\n{topic} is enabled.\n",
+                encoding="utf-8",
+            )
+            manifest = (memory / "manifest.md").read_text(encoding="utf-8")
+            project_id = re.search(r"project_id: ([0-9a-f-]+)", manifest).group(1)
+            old_suffix = hashlib.sha256(
+                f"{project_id}\0hard\0{topic}".encode("utf-8")
+            ).hexdigest()[:8]
+            args = ["forget", topic, "--mode", "hard", "--project-root", tmp]
+            with patch.dict(os.environ, {"XDG_STATE_HOME": state}), patch(
+                "memory_custodian.plans.uuid.uuid4",
+                return_value=uuid.UUID("12345678-1234-4234-8234-123456789abc"),
+            ):
+                apply_preview(args)
+            tombstones = (memory / "do-not-use.md").read_text(encoding="utf-8")
+            self.assertIn("MC-TOMB-20260729-12345678", tombstones)
+            self.assertNotIn(f"MC-TOMB-20260729-{old_suffix}", tombstones)
+            self.assertNotIn(topic, tombstones)
+
+    def test_purge_blocks_provisional_subject_reference(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            subject_id = add_subject(tmp, "Sensitive candidate subject")
+            self.assertEqual(
+                main([
+                    "add", "Review the abstract policy later.",
+                    "--type", "constraint",
+                    "--candidate",
+                    "--subject", subject_id,
+                    "--facet", "security",
+                    "--evidence", "agent-observed",
+                    "--project-root", tmp,
+                ]),
+                0,
+            )
+            args = [
+                "forget", "Sensitive candidate subject",
+                "--mode", "purge",
+                "--allow-broad-match",
+                "--project-root", tmp,
+            ]
+            _plan_id, output = preview(args)
+            self.assertIn(f"cannot remove {subject_id.upper()}", output)
+
+    def test_release_notes_have_one_v010_heading(self):
+        notes = (ROOT / "RELEASE-NOTES.md").read_text(encoding="utf-8")
+        self.assertEqual(len(re.findall(r"(?m)^## v0\.10\.0\b", notes)), 1)
+        self.assertLess(notes.index("## Unreleased"), notes.index("## v0.10.0"))
 
 
 if __name__ == "__main__":

@@ -30,6 +30,7 @@ from .entries import (
     VALID_SCOPES_RE,
     heading_entry_ids,
     parse_structured_entries,
+    validate_evidence,
 )
 from .scanning import scan_text
 from .subjects import FACETS, load_subjects, subject_indexes, validate_subject_registry
@@ -192,6 +193,26 @@ def run(args) -> int:
                     issues.append(f"{relative}: active entry {entry.entry_id} has only unconfirmed Evidence")
                 if "legacy-unverified" in entry.evidence:
                     warnings.append(f"{relative}: {entry.entry_id} uses migration-only legacy-unverified Evidence")
+            if entry.status in {"active", "candidate", "superseded", "promoted"}:
+                candidate_entry = entry.status in {"candidate", "promoted"}
+                if entry.evidence:
+                    try:
+                        validate_evidence(
+                            entry.evidence,
+                            project_root,
+                            candidate=candidate_entry,
+                            allow_missing=True,
+                            allow_internal=not candidate_entry,
+                        )
+                    except ValueError:
+                        issues.append(
+                            f"{relative}: {entry.entry_id} has invalid Evidence schema "
+                            "or unsafe source path"
+                        )
+                elif candidate_entry:
+                    issues.append(
+                        f"{relative}: {entry.entry_id} has no Evidence"
+                    )
             if not VALID_SCOPES_RE.fullmatch(entry.scope):
                 issues.append(f"{relative}: {entry.entry_id} has invalid Scope {entry.scope!r}")
             if entry.scope.startswith("area:"):
@@ -226,6 +247,25 @@ def run(args) -> int:
                         )
                     else:
                         active_identities[identity] = (entry.entry_id, relative)
+            if entry.status in {"candidate", "promoted"}:
+                provisional_subject = entry.fields.get("Provisional-Subject", "")
+                provisional_facet = entry.fields.get("Provisional-Facet", "")
+                if bool(provisional_subject) != bool(provisional_facet):
+                    issues.append(
+                        f"{relative}: {entry.entry_id} must declare Provisional-Subject and "
+                        "Provisional-Facet together"
+                    )
+                elif provisional_subject:
+                    if provisional_subject.casefold() not in subjects_by_id:
+                        issues.append(
+                            f"{relative}: {entry.entry_id} references missing or inactive "
+                            f"Provisional-Subject {provisional_subject}"
+                        )
+                    if provisional_facet not in FACETS:
+                        issues.append(
+                            f"{relative}: {entry.entry_id} has invalid "
+                            f"Provisional-Facet {provisional_facet!r}"
+                        )
             expected_codes = {
                 "decisions.md": {"DEC"},
                 "constraints.md": {"CON"},

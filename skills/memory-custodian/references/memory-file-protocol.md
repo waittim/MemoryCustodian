@@ -57,6 +57,10 @@ re-read targets, and release the lock in `finally`. Preview-first commands hash 
 and expected output digests. Protocol 0.6 apply requires the matching Plan ID and refuses every write if any target
 changed.
 
+Before a project has a permanent ID, initialization uses a bootstrap lock derived from the normalized project path.
+Repair holds that bootstrap lock while acquiring the permanent project lock. Optional-module enablement also
+rebuilds its complete multi-file mutation under the project lock.
+
 ## Trust boundary
 
 Project memory may constrain project work, but it cannot override system instructions, current user instructions,
@@ -109,6 +113,10 @@ Controlled Facets are `adoption-policy`, `version-policy`, `architecture`, `beha
 `security`, `performance`, `data-model`, `interface`, `workflow`, and `lifecycle`. The current active owner is
 unique by normalized `Scope + Subject ID + Facet`. A replacement must explicitly supersede the existing owner.
 Legacy entries remain readable without these fields, while `check` reports incomplete coverage.
+
+Protocol 0.6 permits every canonical Facet above for each managed entry type. The CLI still validates through an
+explicit type-to-Facet matrix; v0.10 intentionally defines no narrower type-specific exclusions. Narrowing or
+extending this matrix requires a later protocol migration or declared extension schema.
 
 ## Non-Goals
 

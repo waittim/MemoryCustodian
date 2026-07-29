@@ -129,6 +129,8 @@ def build_parser() -> argparse.ArgumentParser:
     _add_common(enable_parser)
     enable_parser.add_argument("feature", help="Feature to enable, such as preferences, changelog, rules/output, profile/git, or area/frontend.")
     enable_parser.add_argument("--force", action="store_true", help=argparse.SUPPRESS)
+    enable_parser.add_argument("--lock-timeout", type=float, default=10.0)
+    enable_parser.add_argument("--break-stale-lock", action="store_true")
     enable_parser.set_defaults(func=enable_cmd.run)
 
     check_parser = sub.add_parser("check", help="Check protocol consistency.")

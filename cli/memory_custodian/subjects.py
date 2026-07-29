@@ -36,6 +36,9 @@ FACETS = {
     "lifecycle",
 }
 SUBJECT_REQUIRED_TYPES = {"decision", "constraint", "tombstone", "do-not-use", "area"}
+# Protocol 0.6 deliberately permits the complete canonical Facet vocabulary for
+# every managed type. Keeping the matrix explicit makes admission deterministic
+# and leaves later protocol versions a migration point for narrower combinations.
 TYPE_FACETS = {
     "decision": FACETS,
     "constraint": FACETS,

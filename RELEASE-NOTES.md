@@ -1,6 +1,10 @@
 # Release Notes
 
-## v0.10.0 — Protocol 0.6 Subject And Erasure Alignment
+## Unreleased
+
+## v0.10.0 - 2026-07-28
+
+### Subject identity, routing, and erasure alignment
 
 - Added `subjects.md` as a non-routed, plain-text registry with stable Subject IDs, exact normalized alias and
   canonical-reference ownership, and preview-first add, rename, and alias mutations.
@@ -8,16 +12,12 @@
   explicit supersede transitions and legacy coverage reporting.
 - Made routing provenance structured and deterministic for manifest routes and explicit profile/area inputs,
   without hidden relevance scoring.
-- Added a unified `ErasureScope` for forget previews and apply output. Hard and purge now state that managed-memory
+- Added a unified `ErasureScope` for forget previews and apply output. Hard and purge state that managed-memory
   removal does not rewrite Git history or revoke distributed copies.
 - Added prevention-first sensitive-memory guidance: prefer minimal abstract constraints and controlled Evidence
   references over copying raw secrets, contract text, or unnecessary vendor details.
 - Extended same-version migration to install Subject protocol metadata and registry scaffolding without inferring
   semantic identity from legacy prose.
-
-## Unreleased
-
-## v0.10.0 - 2026-07-28
 
 ### Evidence-backed entry governance
 
@@ -31,6 +31,8 @@
 - Added canonical Plan IDs with base/output SHA-256 digests to preview-first operations; Protocol 0.6 apply rejects missing, mismatched, or stale confirmation without writing.
 - Generate migration project identity from a random UUIDv4 persisted in platform state for the preview/apply pair, preventing identical legacy projects from sharing locks or future overlays.
 - Rebuild complete replacement, supersede, compaction, forgetting, and migration plans after acquiring the mutation lock; legacy destructive replacement now requires migration first.
+- Serialize `enable` under the project lock, and serialize first initialization under a normalized-path bootstrap
+  lock before switching repair work to the permanent project lock.
 - Added real-process concurrent-add and stale-plan regression tests. These tests verify deterministic safety properties, not a live cross-agent benchmark or database transaction semantics.
 - Added deterministic `OK`, `NEAR LIMIT`, and `OVER BUDGET` states; writes at 80% or above emit a no-write maintenance preview instead of relying on an agent to calculate the threshold.
 - Made same-day archives idempotent: one canonical file note, no repeated batch wrappers, merged changelog date headings, and newest-first archived changelog order.
@@ -39,6 +41,10 @@
 
 - Documented that memory cannot elevate authority or override system, user, safety, or permission boundaries.
 - Added redacted deterministic checks for common credential-like patterns, machine paths, personal email, and phone-number shapes. These checks are not complete secret detection and never auto-delete content.
+- Redact every recognized sensitive span on a finding line before rendering any preview, and revalidate manually
+  edited active/candidate Evidence during `check`.
+- Generate hard-forget Tombstone suffixes from random repo-external preview seeds rather than topic-derived hashes;
+  protect both formal and provisional Subject references during purge.
 - Keep ordinary scan output summary-only while `--security` and `--privacy` reveal redacted locations; validate inbox statuses and promotion/supersede relation integrity.
 
 ### Demo and submission materials

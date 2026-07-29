@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 import uuid
 
-from .locking import mutation_lock
+from .locking import bootstrap_lock_id, mutation_lock
 from .mutations import TextMutation, apply_mutations
 from .plans import MutationPlan, print_plan
 from .protocol import (
@@ -196,6 +196,62 @@ def _replacement_state(
     return results, mutations, replacement_warnings
 
 
+def _initialization_state(
+    args,
+    project_root: Path,
+    memory_dir: Path,
+    memory_label: str,
+    project_id: str,
+    current_date: str,
+) -> tuple[list[str], list[TextMutation]]:
+    results: list[str] = []
+    mutations: list[TextMutation] = []
+    files = list(CORE_FILES)
+    if args.extended:
+        files.extend(OPTIONAL_FILES)
+    for name in files:
+        path = memory_dir / name
+        rendered = render_template(
+            name,
+            current_date,
+            memory_label,
+            project_id=project_id if name == "manifest.md" else None,
+        )
+        if not path.exists():
+            result = "written"
+            mutations.append(TextMutation(path, rendered))
+        elif args.repair and name == "manifest.md":
+            repaired, changed = _repair_manifest(path.read_text(encoding="utf-8"))
+            repaired, indexed = _index_existing_optional(memory_dir, repaired)
+            changed = changed or indexed
+            result = "repaired" if changed else "kept"
+            if changed:
+                mutations.append(TextMutation(path, repaired))
+        else:
+            result = "kept"
+        results.append(f"{name}: {result}")
+
+    agent = args.agent
+    selected = (
+        ("AGENTS.md", args.with_codex or agent in {"codex", "all"}),
+        ("CLAUDE.md", args.with_claude or agent in {"claude", "all"}),
+        ("GEMINI.md", args.with_gemini or agent in {"gemini", "all"}),
+    )
+    for name, enabled in selected:
+        if not enabled:
+            continue
+        path = project_root / name
+        result, updated = _snippet_update(
+            path,
+            _agent_snippet(memory_label),
+            args.force_agent or args.repair,
+        )
+        if updated is not None:
+            mutations.append(TextMutation(path, updated))
+        results.append(f"{name}: {result}")
+    return results, mutations
+
+
 def run(args) -> int:
     if args.force:
         raise ValueError(
@@ -289,61 +345,44 @@ def run(args) -> int:
         for item in current_results:
             print(f"- {item}")
         return 0
-    init_project_id = existing_project_id or str(uuid.uuid4())
-    results: list[str] = []
-    mutations: list[TextMutation] = []
-    files = list(CORE_FILES)
-    if args.extended:
-        files.extend(OPTIONAL_FILES)
-    for name in files:
-        path = memory_dir / name
-        rendered = render_template(
-            name, current_date, memory_label,
-            project_id=init_project_id if name == "manifest.md" else None,
-        )
-        if not path.exists():
-            result = "written"
-            mutations.append(TextMutation(path, rendered))
-        elif args.repair and name == "manifest.md":
-            repaired, changed = _repair_manifest(path.read_text(encoding="utf-8"))
-            repaired, indexed = _index_existing_optional(memory_dir, repaired)
-            changed = changed or indexed
-            result = "repaired" if changed else "kept"
-            if changed:
-                mutations.append(TextMutation(path, repaired))
-        else:
-            result = "kept"
-        results.append(f"{name}: {result}")
+    bootstrap_id = bootstrap_lock_id(project_root)
+    with mutation_lock(
+        bootstrap_id,
+        project_root,
+        "init bootstrap",
+        timeout=args.lock_timeout,
+        break_stale=args.break_stale_lock,
+    ):
+        current_manifest = memory_dir / "manifest.md"
+        current_project_id = None
+        if current_manifest.exists():
+            current_project_id = project_id_from_manifest(
+                current_manifest.read_text(encoding="utf-8"),
+                required=False,
+            )
+        init_project_id = current_project_id or str(uuid.uuid4())
 
-    agent = args.agent
-    with_codex = args.with_codex or agent in {"codex", "all"}
-    with_claude = args.with_claude or agent in {"claude", "all"}
-    with_gemini = args.with_gemini or agent in {"gemini", "all"}
-    if with_codex:
-        path = project_root / "AGENTS.md"
-        result, updated = _snippet_update(path, _agent_snippet(memory_label), args.force_agent or args.repair)
-        if updated is not None:
-            mutations.append(TextMutation(path, updated))
-        results.append(f"AGENTS.md: {result}")
-    if with_claude:
-        path = project_root / "CLAUDE.md"
-        result, updated = _snippet_update(path, _agent_snippet(memory_label), args.force_agent or args.repair)
-        if updated is not None:
-            mutations.append(TextMutation(path, updated))
-        results.append(f"CLAUDE.md: {result}")
-    if with_gemini:
-        path = project_root / "GEMINI.md"
-        result, updated = _snippet_update(path, _agent_snippet(memory_label), args.force_agent or args.repair)
-        if updated is not None:
-            mutations.append(TextMutation(path, updated))
-        results.append(f"GEMINI.md: {result}")
+        def build_and_apply() -> tuple[list[str], list[TextMutation]]:
+            current_results, current_mutations = _initialization_state(
+                args,
+                project_root,
+                memory_dir,
+                memory_label,
+                init_project_id,
+                current_date,
+            )
+            if current_mutations:
+                apply_mutations(current_mutations)
+            return current_results, current_mutations
 
-    if mutations:
         with mutation_lock(
-            init_project_id, project_root, "init",
-            timeout=args.lock_timeout, break_stale=args.break_stale_lock,
+            init_project_id,
+            project_root,
+            "init repair" if args.repair else "init",
+            timeout=args.lock_timeout,
+            break_stale=args.break_stale_lock,
         ):
-            apply_mutations(mutations)
+            results, mutations = build_and_apply()
 
     action = "Repaired" if args.repair else "Initialized"
     print(f"{action} MemoryCustodian at {memory_dir}")

@@ -201,7 +201,10 @@ def _show(args) -> int:
         if path.name == "subjects.md":
             continue
         for entry in parse_structured_entries(path, path.read_text(encoding="utf-8")):
-            if entry.fields.get("Subject", "").casefold() == subject.subject_id.casefold():
+            if any(
+                entry.fields.get(field, "").casefold() == subject.subject_id.casefold()
+                for field in ("Subject", "Provisional-Subject")
+            ):
                 references.append((entry.entry_id, path.relative_to(memory_dir).as_posix()))
     if references:
         for entry_id, relative in references:

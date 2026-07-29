@@ -309,6 +309,8 @@ controlled Facet. `subjects.md` is shared protocol metadata, not normal task con
 Canonical-Ref collisions are rejected, as is a second active owner for the same Scope+Subject+Facet. Renaming a
 Subject preserves its ID. v0.10 does not infer that different names are semantically equivalent and does not
 automatically resolve Subjects created independently on different branches.
+Protocol 0.6 permits the full canonical Facet vocabulary for every managed entry type; the explicit compatibility
+matrix is an extension boundary, not a claim that v0.10 imposes narrower type-specific exclusions.
 Legacy 0.5 prose and bullets remain readable after conservative migration and are reported as legacy coverage rather
 than silently rewritten. Migration assigns a random UUIDv4 once, persists it outside the repository between preview
 and apply, and also upgrades clearly structured decisions in enabled `areas/*.md` files.

@@ -5,12 +5,19 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 from pathlib import Path
+import uuid
 
 from .entries import parse_structured_entries
 from .locking import mutation_lock
 from .erasure import ErasureScope, render_apply_boundary, render_scope, scope_for_forget
 from .mutations import TextMutation, apply_mutations
-from .plans import MutationPlan, print_plan
+from .plans import (
+    MutationPlan,
+    digest_text,
+    discard_pending_seed,
+    pending_entry_suffixes,
+    print_plan,
+)
 from .protocol import (
     CURRENT_PROTOCOL_VERSION,
     MarkdownUnit,
@@ -87,12 +94,22 @@ def _append_changelog_entry(text: str, message: str) -> str:
     return _prepend_entry(text, entry)
 
 
-def _tombstone(topic: str, mode: str, project_id: str | None = None) -> str | None:
+def _tombstone(
+    topic: str,
+    mode: str,
+    project_id: str | None = None,
+    tombstone_suffix: str | None = None,
+) -> str | None:
     if mode == "purge":
         return None
     if project_id:
         stamp = today().replace("-", "")
-        suffix = hashlib.sha256(f"{project_id}\0{mode}\0{topic}".encode()).hexdigest()[:8]
+        if mode == "hard":
+            if tombstone_suffix is None:
+                raise ValueError("Hard forget requires a random pending Tombstone ID seed.")
+            suffix = tombstone_suffix
+        else:
+            suffix = hashlib.sha256(f"{project_id}\0{mode}\0{topic}".encode()).hexdigest()[:8]
         entry_id = f"MC-TOMB-{stamp}-{suffix}"
         title = "Redacted user-requested removal" if mode == "hard" else topic
         statement = (
@@ -119,7 +136,11 @@ def _tombstone(topic: str, mode: str, project_id: str | None = None) -> str | No
 
 
 def _update_existing_tombstones(
-    text: str, topic: str, mode: str, project_id: str | None = None
+    text: str,
+    topic: str,
+    mode: str,
+    project_id: str | None = None,
+    tombstone_suffix: str | None = None,
 ) -> tuple[str, tuple[MarkdownUnit, ...], tuple[MarkdownUnit, ...]]:
     document = parse_markdown_units(text)
     needle = topic.casefold()
@@ -151,8 +172,13 @@ def _update_existing_tombstones(
     )
     kept = [unit for unit in document.units if unit not in matches]
     if mode == "hard":
-        generic = _tombstone(topic, mode, project_id)
-        if generic is not None and not any(unit.text.strip() == generic.strip() for unit in kept):
+        generic = _tombstone(topic, mode, project_id, tombstone_suffix)
+        has_generic_guard = any(
+            "Redacted user-requested removal" in unit.text
+            and "Do not reconstruct removed content" in unit.text
+            for unit in kept
+        )
+        if generic is not None and not has_generic_guard:
             kept.insert(0, MarkdownUnit("h2", generic.strip(), generic.splitlines()[0][3:].strip()))
     return render_markdown_document(document, kept), matches, blockers
 
@@ -193,11 +219,12 @@ def _subject_reference_blockers(
             continue
         text = planned_text.get(path, read_text(path))
         for entry in parse_structured_entries(path, text):
-            subject_id = entry.fields.get("Subject", "").casefold()
-            if subject_id in references:
-                references[subject_id].append(
-                    f"{path.relative_to(memory_dir).as_posix()}:{entry.entry_id}"
-                )
+            for field in ("Subject", "Provisional-Subject"):
+                subject_id = entry.fields.get(field, "").casefold()
+                if subject_id in references:
+                    references[subject_id].append(
+                        f"{path.relative_to(memory_dir).as_posix()}:{entry.entry_id}"
+                    )
     return [
         f"subjects.md: cannot remove {subject_id.upper()} while referenced by {', '.join(owners)}"
         for subject_id, owners in references.items()
@@ -210,6 +237,7 @@ def _build_forget_mutation_plan(
     memory_dir: Path,
     project_id: str | None,
     protocol_version: str,
+    tombstone_suffix: str | None = None,
 ) -> MutationPlan:
     topic = args.topic.strip()
     targets = _target_files(memory_dir, args.mode)
@@ -229,10 +257,11 @@ def _build_forget_mutation_plan(
             topic,
             args.mode,
             project_id,
+            tombstone_suffix,
         )
         if candidate != ensure_newline(read_text(tombstone_path)):
             tombstone_updated = candidate
-    tombstone = _tombstone(topic, args.mode, project_id)
+    tombstone = _tombstone(topic, args.mode, project_id, tombstone_suffix)
     if args.mode == "soft" and tombstone:
         tombstone_updated = _prepend_entry(read_text(tombstone_path), tombstone)
 
@@ -319,6 +348,19 @@ def run(args) -> int:
     metadata = protocol_metadata(manifest_text)
     protocol_06 = compare_versions(metadata.get("protocol_version", "0.5"), CURRENT_PROTOCOL_VERSION) == 0
     project_id = project_id_from_manifest(manifest_text) if protocol_06 else None
+    tombstone_suffix: str | None = None
+    tombstone_seed_path: Path | None = None
+    if args.mode == "hard":
+        if protocol_06:
+            suffixes, tombstone_seed_path = pending_entry_suffixes(
+                "forget-tombstone",
+                project_root,
+                digest_text(f"{project_id}\0hard\0{topic}"),
+                ["hard-tombstone"],
+            )
+            tombstone_suffix = suffixes["hard-tombstone"]
+        else:
+            tombstone_suffix = uuid.uuid4().hex[:8]
 
     targets = _target_files(memory_dir, args.mode)
     plans: list[FilePlan] = []
@@ -337,7 +379,11 @@ def run(args) -> int:
     if args.mode in {"hard", "purge"}:
         tombstone_original = read_text(tombstone_path)
         candidate, tombstone_matches, tombstone_blockers = _update_existing_tombstones(
-            tombstone_original, topic, args.mode, project_id
+            tombstone_original,
+            topic,
+            args.mode,
+            project_id,
+            tombstone_suffix,
         )
         if candidate != ensure_newline(tombstone_original):
             tombstone_updated = candidate
@@ -348,7 +394,7 @@ def run(args) -> int:
     if total_matches + len(tombstone_matches) + manual_blockers > 1:
         broad_reasons.append("plan matches more than one semantic unit")
 
-    tombstone = _tombstone(topic, args.mode, project_id)
+    tombstone = _tombstone(topic, args.mode, project_id, tombstone_suffix)
     changelog_path = memory_dir / "changelog.md"
     if args.mode == "soft" and tombstone:
         tombstone_updated = _prepend_entry(read_text(tombstone_path), tombstone)
@@ -400,6 +446,7 @@ def run(args) -> int:
         memory_dir,
         project_id,
         metadata.get("protocol_version", "0.5"),
+        tombstone_suffix,
     )
     mutations = list(mutation_plan.mutations)
     scope = ErasureScope(**mutation_plan.context["erasure_scope"])
@@ -440,6 +487,7 @@ def run(args) -> int:
                 memory_dir,
                 project_id,
                 metadata.get("protocol_version", "0.5"),
+                tombstone_suffix,
             )
             if current_plan.plan_id != args.confirm_plan:
                 print_plan(current_plan)
@@ -456,5 +504,6 @@ def run(args) -> int:
     print(f"Applied forgetting plan. Written files: {len(completed)}")
     for name in completed:
         print(f"- {name}")
+    discard_pending_seed(tombstone_seed_path)
     render_apply_boundary()
     return 0

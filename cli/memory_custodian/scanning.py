@@ -39,11 +39,29 @@ PRIVACY_PATTERNS = (
 )
 
 
-def _redact(line: str, match: re.Match[str]) -> str:
-    value = match.group(0)
-    masked = (value[:3] + "…" + value[-2:]) if len(value) > 7 else "[redacted]"
-    rendered = line[: match.start()] + masked + line[match.end() :]
-    return rendered.strip()[:120]
+def _redact(line: str) -> str:
+    """Redact every recognized sensitive span before any line preview is emitted."""
+
+    spans = [
+        (match.start(), match.end())
+        for _kind, _severity, pattern in (*SECURITY_PATTERNS, *PRIVACY_PATTERNS)
+        for match in pattern.finditer(line)
+    ]
+    if not spans:
+        return line.strip()[:120]
+    merged: list[tuple[int, int]] = []
+    for start, end in sorted(spans):
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    parts: list[str] = []
+    cursor = 0
+    for start, end in merged:
+        parts.extend((line[cursor:start], "[redacted]"))
+        cursor = end
+    parts.append(line[cursor:])
+    return "".join(parts).strip()[:120]
 
 
 def scan_text(path: Path, text: str) -> list[Finding]:
@@ -53,5 +71,5 @@ def scan_text(path: Path, text: str) -> list[Finding]:
             for kind, severity, pattern in patterns:
                 match = pattern.search(line)
                 if match:
-                    findings.append(Finding(path, number, kind, severity, _redact(line, match), category))
+                    findings.append(Finding(path, number, kind, severity, _redact(line), category))
     return findings

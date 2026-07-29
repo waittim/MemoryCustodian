@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from datetime import datetime, timezone
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -31,6 +32,14 @@ def state_root() -> Path:
 
 def lock_path(project_id: str) -> Path:
     return state_root() / "locks" / f"{project_id}.lock"
+
+
+def bootstrap_lock_id(project_root: Path) -> str:
+    """Return a path-stable lock identity for projects without a manifest identity yet."""
+
+    normalized = os.path.normcase(str(project_root.resolve()))
+    digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+    return f"bootstrap-{digest}"
 
 
 def _pid_exists(pid: int) -> bool:

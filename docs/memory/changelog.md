@@ -4,6 +4,7 @@ Entries are newest first.
 
 ## 2026-07-29
 - Aligned Protocol 0.6 with stable Subject/Facet governance, deterministic routing provenance, and explicit managed-memory erasure boundaries.
+- Closed release-audit gaps in enable/init locking, full-line redaction, Evidence revalidation, random hard-forget IDs, and provisional Subject integrity.
 
 ## 2026-07-28
 - Closed the v0.10 release audit gaps, added deterministic maintenance previews, and made archives idempotent.
