@@ -3,6 +3,7 @@
 Entries are newest first.
 
 ## 2026-07-29
+- Fixed area-scoped entry identity, bidirectional storage validation, nested memory Plan roots, malformed lock recovery, and preview seed expiry.
 - Unified mutation guards and separated private execution plans from redacted public previews.
 - Aligned Protocol 0.6 with stable Subject/Facet governance, deterministic routing provenance, and explicit managed-memory erasure boundaries.
 - Closed release-audit gaps in enable/init locking, full-line redaction, Evidence revalidation, random hard-forget IDs, and provisional Subject integrity.

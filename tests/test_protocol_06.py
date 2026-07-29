@@ -20,6 +20,7 @@ sys.path.insert(0, str(ROOT / "cli"))
 from memory_custodian.entries import generate_entry_id, validate_evidence
 from memory_custodian.locking import (
     LockError,
+    MALFORMED_LOCK_RECOVERY_AGE_SECONDS,
     PrivateStateError,
     lock_path,
     mutation_lock,
@@ -31,8 +32,10 @@ from tests.cli_test_support import _subject_for_add
 from memory_custodian.main import main as raw_main
 from memory_custodian.plans import (
     MutationPlan,
+    PENDING_PLAN_MAX_AGE_SECONDS,
     discard_pending_seed,
     pending_entry_suffixes,
+    pending_project_id,
 )
 from memory_custodian.mutations import TextMutation
 from memory_custodian.protocol import budget_state, count_inbox_items, estimate_tokens
@@ -42,13 +45,17 @@ from memory_custodian import forget as forget_module
 from memory_custodian.add import _title
 
 
-def preview_id(argv: list[str]) -> str:
+def preview(argv: list[str]) -> tuple[str, str]:
     output = StringIO()
     with redirect_stdout(output):
         assert main(argv) == 0
     match = re.search(r"Plan ID: ([0-9a-f]{16})", output.getvalue())
     assert match, output.getvalue()
-    return match.group(1)
+    return match.group(1), output.getvalue()
+
+
+def preview_id(argv: list[str]) -> str:
+    return preview(argv)[0]
 
 
 class Protocol06Tests(unittest.TestCase):
@@ -200,6 +207,52 @@ class Protocol06Tests(unittest.TestCase):
             self.assertIn("must declare exactly one Constraint typed body", text)
             self.assertIn("uses Decision body", text)
             self.assertIn("cannot declare both Superseded-By and Promoted-To", text)
+
+    def test_check_enforces_bidirectional_type_storage_and_area_scope(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            memory = Path(tmp) / "docs" / "memory"
+            (memory / "brief.md").write_text(
+                "# Project Brief\n\nPurpose:\nValidate storage.\n\n"
+                "Current direction:\n- Keep schemas canonical.\n",
+                encoding="utf-8",
+            )
+            (memory / "constraints.md").write_text(
+                "# Constraints\n\n"
+                "## MC-DEC-20260729-a1b2c3d4 — Misplaced decision\n\n"
+                "Status: active\n"
+                "Scope: project\n"
+                "Evidence:\n"
+                "- user-confirmed\n\n"
+                "Decision:\n"
+                "This decision is in the wrong canonical file.\n",
+                encoding="utf-8",
+            )
+            area = memory / "areas" / "backend.md"
+            area.parent.mkdir(parents=True)
+            area.write_text(
+                "# Area: Backend\n\n"
+                "## MC-AREA-20260729-b2c3d4e5 — Wrong scope\n\n"
+                "Status: active\n"
+                "Scope: project\n"
+                "Evidence:\n"
+                "- user-confirmed\n\n"
+                "Decision:\n"
+                "Area storage requires its matching area scope.\n",
+                encoding="utf-8",
+            )
+            output = StringIO()
+            with redirect_stdout(output):
+                self.assertEqual(main(["check", "--project-root", tmp]), 1)
+            text = output.getvalue()
+            self.assertIn(
+                "MC-DEC-20260729-a1b2c3d4 type does not match its storage location",
+                text,
+            )
+            self.assertIn(
+                "MC-AREA-20260729-b2c3d4e5 must use Scope: area:backend",
+                text,
+            )
 
     def test_entry_id_format_and_collision_retry(self):
         with patch("memory_custodian.entries.uuid.uuid4") as generated:
@@ -407,6 +460,94 @@ class Protocol06Tests(unittest.TestCase):
                 )
             self.assertEqual(rebuilt.call_count, 2)
 
+    def test_nested_memory_dir_plans_are_repo_relative_and_apply(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            memory_name = "docs/team/memory"
+            memory = Path(tmp) / memory_name
+            self.assertEqual(
+                main(
+                    [
+                        "init",
+                        "--project-root",
+                        tmp,
+                        "--memory-dir",
+                        memory_name,
+                    ]
+                ),
+                0,
+            )
+            inbox = memory / "inbox.md"
+            inbox.write_text(
+                "# Memory Inbox\n\n- Duplicate\n- Duplicate\n",
+                encoding="utf-8",
+            )
+            compact_args = [
+                "compact",
+                "--project-root",
+                tmp,
+                "--memory-dir",
+                memory_name,
+            ]
+            compact_plan, compact_output = preview(compact_args)
+            self.assertIn("docs/team/memory/inbox.md", compact_output)
+            self.assertNotIn("\n- team/memory/inbox.md", compact_output)
+            self.assertEqual(
+                main(
+                    [
+                        *compact_args,
+                        "--apply",
+                        "--confirm-plan",
+                        compact_plan,
+                    ]
+                ),
+                0,
+            )
+            self.assertEqual(inbox.read_text(encoding="utf-8").count("- Duplicate"), 1)
+
+            self.assertEqual(
+                main(
+                    [
+                        "add",
+                        "NestedMemoryMarker",
+                        "--type",
+                        "constraint",
+                        "--project-root",
+                        tmp,
+                        "--memory-dir",
+                        memory_name,
+                    ]
+                ),
+                0,
+            )
+            forget_args = [
+                "forget",
+                "NestedMemoryMarker",
+                "--mode",
+                "soft",
+                "--project-root",
+                tmp,
+                "--memory-dir",
+                memory_name,
+            ]
+            forget_plan, forget_output = preview(forget_args)
+            self.assertIn("docs/team/memory/constraints.md", forget_output)
+            self.assertNotIn("\n- team/memory/constraints.md", forget_output)
+            self.assertEqual(
+                main(
+                    [
+                        *forget_args,
+                        "--apply",
+                        "--confirm-plan",
+                        forget_plan,
+                    ]
+                ),
+                0,
+            )
+            self.assertNotIn(
+                "NestedMemoryMarker",
+                (memory / "constraints.md").read_text(encoding="utf-8"),
+            )
+
     def test_lock_acquire_release_timeout_and_stale(self):
         with tempfile.TemporaryDirectory() as state, patch.dict(os.environ, {"XDG_STATE_HOME": state}):
             project_id = str(uuid.uuid4())
@@ -426,6 +567,61 @@ class Protocol06Tests(unittest.TestCase):
             old = time.time() - 61
             os.utime(path, (old, old))
             self.assertTrue(stale_lock(path))
+
+    def test_malformed_lock_requires_age_and_explicit_stale_recovery(self):
+        with tempfile.TemporaryDirectory() as state, patch.dict(
+            os.environ,
+            {"XDG_STATE_HOME": state},
+        ):
+            project_id = str(uuid.uuid4())
+            root = Path(state)
+            path = lock_path(project_id)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text('{"pid":', encoding="utf-8")
+            fresh = time.time() - MALFORMED_LOCK_RECOVERY_AGE_SECONDS + 10
+            os.utime(path, (fresh, fresh))
+            self.assertFalse(stale_lock(path))
+            with self.assertRaises(LockError):
+                with mutation_lock(
+                    project_id,
+                    root,
+                    "without recovery",
+                    timeout=0,
+                ):
+                    pass
+
+            old = time.time() - MALFORMED_LOCK_RECOVERY_AGE_SECONDS - 1
+            os.utime(path, (old, old))
+            self.assertTrue(stale_lock(path))
+            with mutation_lock(
+                project_id,
+                root,
+                "recover malformed",
+                timeout=0.1,
+                break_stale=True,
+            ):
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                self.assertEqual(payload["pid"], os.getpid())
+            self.assertFalse(path.exists())
+
+    def test_pending_preview_seed_ttl_removes_old_and_preserves_fresh(self):
+        with tempfile.TemporaryDirectory() as state, tempfile.TemporaryDirectory() as project:
+            with patch.dict(os.environ, {"XDG_STATE_HOME": state}):
+                _old_value, old_path = pending_project_id(
+                    "ttl-old",
+                    Path(project),
+                    "old-source",
+                )
+                old = time.time() - PENDING_PLAN_MAX_AGE_SECONDS - 1
+                os.utime(old_path, (old, old))
+
+                _fresh_value, fresh_path = pending_project_id(
+                    "ttl-fresh",
+                    Path(project),
+                    "fresh-source",
+                )
+                self.assertFalse(old_path.exists())
+                self.assertTrue(fresh_path.exists())
 
     def test_scans_redact_secret_and_locate_machine_path(self):
         path = Path("docs/memory/preferences.md")

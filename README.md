@@ -4,7 +4,7 @@
 
 MemoryCustodian helps agents remember what matters: decisions, constraints, rejected ideas, and project context — across sessions, agents, and teams.
 
-It stores memory as plain Markdown in your repo and loads only the pieces needed for the current task.
+It stores memory as plain Markdown in your repo and routes a bounded context pack using manifest rules, the supplied task category, and explicit scope.
 
 **Durable memory. Minimal context.**
 
@@ -324,7 +324,10 @@ writes. Short topics and plans matching multiple semantic units additionally req
 
 Private locks and preview seeds live outside the repository in directories restricted to the current user. State
 directories are forced to mode `0700` and regular files to `0600` on POSIX; symlink or non-regular state targets are
-rejected. Pending seeds contain random identifiers, not raw memory messages or forget topics.
+rejected. Pending seeds contain random identifiers, not raw memory messages or forget topics. Seeds older than
+seven days are removed opportunistically on the next private-plan-state access; an expired preview must be
+generated again. A malformed lock can be recovered only through explicit stale-lock recovery after a five-minute
+safety age.
 
 Inbox compaction does not infer decisions, constraints, preferences, or rejected approaches from keywords. The CLI reports candidates and can apply only exact duplicate top-level bullet-unit removal and exact tombstone filtering. Each unit includes its continuation and nested lines; nested bullets are never cleaned up independently. An Agent reviews each remaining candidate's scope, type, confidence, and existing overlap, then edits Markdown or calls `add`; `check` validates the result.
 

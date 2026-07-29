@@ -18,12 +18,11 @@ from .entries import (
 from .locking import (
     create_private_file,
     discard_private_file,
-    private_state_directory,
     project_mutation_guard,
     read_private_file,
 )
 from .mutations import TextMutation, apply_mutations
-from .plans import MutationPlan, digest_path, print_plan
+from .plans import MutationPlan, digest_path, pending_plan_directory, print_plan
 from .protocol import (
     CURRENT_PROTOCOL_VERSION,
     DECISION_ENTRY_BUDGET,
@@ -262,7 +261,13 @@ def _build_mutations(
             scope=scope,
             candidate=candidate,
         )
-        id_kind = "inbox" if candidate else ("area" if args.area else kind)
+        id_kind = (
+            "inbox"
+            if candidate
+            else "area"
+            if args.area and kind == "decision"
+            else kind
+        )
         new_id = fixed_id or generate_entry_id(id_kind, ids)
         if new_id.casefold() in {value.casefold() for value in ids}:
             raise ValueError(f"Entry ID collision: {new_id}")
@@ -342,7 +347,7 @@ def _supersede_fingerprint(args, project_id: str, memory_dir: Path) -> str:
 
 
 def _seed_path(fingerprint: str) -> Path:
-    return private_state_directory("plans") / f"supersede-{fingerprint}.id"
+    return pending_plan_directory() / f"supersede-{fingerprint}.id"
 
 
 def run(args) -> int:

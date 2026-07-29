@@ -38,6 +38,8 @@
 - Rebuild complete replacement, supersede, compaction, forgetting, and migration plans after acquiring the mutation lock; legacy destructive replacement now requires migration first.
 - Hold the normalized-path bootstrap lock through permanent-lock acquisition and mutation-plan rebuild, eliminating
   the repair/enable handoff window.
+- Recover malformed private lock residue only through explicit stale-lock recovery after a five-minute safety age,
+  and opportunistically expire abandoned preview seeds after seven days.
 - Added real-process concurrent-add and stale-plan regression tests. These tests verify deterministic safety properties, not a live cross-agent benchmark or database transaction semantics.
 - Added deterministic `OK`, `NEAR LIMIT`, and `OVER BUDGET` states; writes at 80% or above emit a no-write maintenance preview instead of relying on an agent to calculate the threshold.
 - Made same-day archives idempotent: one canonical file note, no repeated batch wrappers, merged changelog date headings, and newest-first archived changelog order.
@@ -50,6 +52,8 @@
   edited active/candidate Evidence during `check`.
 - Validate formal structured entries as schema claims: reject duplicate fields, missing Status/Scope/Evidence,
   missing or mismatched typed bodies, duplicate relations, and contradictory lifecycle fields.
+- Keep area decision IDs as `MC-AREA` while area constraints, preferences, and rejected approaches retain
+  `MC-CON`, `MC-PREF`, and `MC-DNU`; validate type, body, storage path, and Scope bidirectionally.
 - Generate hard-forget Tombstone suffixes from random repo-external preview seeds rather than topic-derived hashes;
   protect both formal and provisional Subject references during purge.
 - Restrict private state directories/files to `0700`/`0600` on POSIX and reject symlink, foreign-owner, or

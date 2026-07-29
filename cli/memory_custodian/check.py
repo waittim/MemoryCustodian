@@ -31,6 +31,7 @@ from .entries import (
     heading_entry_ids,
     parse_structured_entries,
     structured_entry_schema_issues,
+    structured_entry_storage_issues,
     validate_evidence,
 )
 from .scanning import scan_text
@@ -171,6 +172,7 @@ def run(args) -> int:
         for entry in parsed_entries:
             structured_by_id.setdefault(entry.entry_id.casefold(), []).append(entry)
             issues.extend(structured_entry_schema_issues(entry, relative))
+            issues.extend(structured_entry_storage_issues(entry, relative))
         if relative.startswith("archive/"):
             continue
         for entry in parsed_entries:
@@ -217,10 +219,6 @@ def run(args) -> int:
                     )
             if not VALID_SCOPES_RE.fullmatch(entry.scope):
                 issues.append(f"{relative}: {entry.entry_id} has invalid Scope {entry.scope!r}")
-            if entry.scope.startswith("area:"):
-                expected = f"areas/{entry.scope.split(':', 1)[1]}.md"
-                if relative not in {expected, "inbox.md"}:
-                    issues.append(f"{relative}: {entry.entry_id} area Scope does not match its file")
             code = entry.entry_id.split("-", 2)[1].upper()
             managed_subject_type = code in {"DEC", "CON", "DNU", "AREA"}
             subject_id = entry.fields.get("Subject", "")
@@ -268,20 +266,6 @@ def run(args) -> int:
                             f"{relative}: {entry.entry_id} has invalid "
                             f"Provisional-Facet {provisional_facet!r}"
                         )
-            expected_codes = {
-                "decisions.md": {"DEC"},
-                "constraints.md": {"CON"},
-                "do-not-use.md": {"DNU", "TOMB"},
-                "preferences.md": {"PREF"},
-                "inbox.md": {"INBOX"},
-            }.get(relative)
-            if relative.startswith(("areas/", "rules/", "profiles/")):
-                expected_codes = {"AREA"}
-            if expected_codes is not None and code not in expected_codes:
-                issues.append(
-                    f"{relative}: {entry.entry_id} type does not match its storage location"
-                )
-
         if relative in {
             "decisions.md", "constraints.md", "do-not-use.md", "preferences.md", "inbox.md"
         } or relative.startswith(("areas/", "rules/", "profiles/")):

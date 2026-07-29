@@ -45,6 +45,10 @@ Confirm with the user or an authoritative project document.
 Candidates never enter normal task context and compaction never promotes them automatically. Legacy freeform
 units remain readable after migration; their compatibility does not make them the recommended new-write format.
 
+Area decisions use `MC-AREA` with a `Decision` body. Area constraints, preferences, and rejected approaches retain
+their semantic `MC-CON`, `MC-PREF`, and `MC-DNU` IDs and typed bodies while using `Scope: area:<slug>` and
+`areas/<slug>.md`. Validation is bidirectional: Entry ID, typed body, storage path, and Scope must agree.
+
 Protocol 0.6 manifests include `entry_schema_version: 1`, `subject_schema_version: 1`, a persistent UUIDv4
 `project_id`, `subject_registry: subjects.md`, `admission_policy: evidence-required`, and
 `conflict_identity_policy: scope-subject-facet`. The project ID is identity for external mutation locks, not
@@ -65,7 +69,10 @@ with a repo-external random nonce. Protocol 0.6 apply requires the matching Plan
 target changed.
 
 Private state directories use mode `0700` and state files use `0600` on POSIX. State reads and writes reject
-symlinks, non-regular files, and files owned by another user.
+symlinks, non-regular files, and files owned by another user. Well-formed stale locks require the same-host,
+dead-PID, and 60-second checks. Malformed lock residue is recoverable only with explicit stale-lock recovery after
+five minutes. Preview seeds older than seven days are removed opportunistically on the next private-plan-state
+access, after which callers must generate a new preview and Plan ID.
 
 ## Trust boundary
 

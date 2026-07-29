@@ -20,6 +20,72 @@ def curate_brief(memory: Path) -> None:
 
 
 class AddForgetCompactTests(unittest.TestCase):
+    def _assert_area_scoped_entry(
+        self,
+        *,
+        kind: str,
+        code: str,
+        body: str,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            memory = Path(tmp) / "docs" / "memory"
+            curate_brief(memory)
+            self.assertEqual(
+                main(
+                    [
+                        "add",
+                        f"Area-scoped {kind} regression.",
+                        "--type",
+                        kind,
+                        "--area",
+                        "backend",
+                        "--project-root",
+                        tmp,
+                    ]
+                ),
+                0,
+            )
+            area = (memory / "areas" / "backend.md").read_text(encoding="utf-8")
+            self.assertRegex(
+                area,
+                rf"(?m)^## MC-{code}-\d{{8}}-[0-9a-f]{{8}}\b",
+            )
+            self.assertIn(f"\n{body}:\n", area)
+            self.assertIn("Scope: area:backend", area)
+            output = StringIO()
+            with redirect_stdout(output):
+                self.assertEqual(main(["check", "--project-root", tmp]), 0)
+            self.assertIn("MemoryCustodian check: OK", output.getvalue())
+
+    def test_area_decision_id_body_scope_and_storage_are_valid(self):
+        self._assert_area_scoped_entry(
+            kind="decision",
+            code="AREA",
+            body="Decision",
+        )
+
+    def test_area_constraint_id_body_scope_and_storage_are_valid(self):
+        self._assert_area_scoped_entry(
+            kind="constraint",
+            code="CON",
+            body="Constraint",
+        )
+
+    def test_area_preference_id_body_scope_and_storage_are_valid(self):
+        self._assert_area_scoped_entry(
+            kind="preference",
+            code="PREF",
+            body="Preference",
+        )
+
+    def test_area_do_not_use_id_body_scope_and_storage_are_valid(self):
+        self._assert_area_scoped_entry(
+            kind="do-not-use",
+            code="DNU",
+            body="Rejected",
+        )
+
     def test_add_decision_and_forget_topic(self):
         with tempfile.TemporaryDirectory() as tmp:
             self.assertEqual(main(["init", "--project-root", tmp]), 0)
@@ -438,15 +504,47 @@ class AddForgetCompactTests(unittest.TestCase):
     def test_add_rule_creates_optional_rule_file(self):
         with tempfile.TemporaryDirectory() as tmp:
             self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            memory = Path(tmp) / "docs" / "memory"
+            curate_brief(memory)
             self.assertEqual(
                 main(["add", "Do not include internal notes in published text.", "--type", "rule", "--name", "output", "--project-root", tmp]),
                 0,
             )
-            rule = Path(tmp) / "docs" / "memory" / "rules" / "output.md"
+            rule = memory / "rules" / "output.md"
             self.assertIn("Rule: Output", rule.read_text(encoding="utf-8"))
             self.assertIn("published text", rule.read_text(encoding="utf-8"))
-            manifest = Path(tmp) / "docs" / "memory" / "manifest.md"
+            manifest = memory / "manifest.md"
             self.assertIn("`rules/output.md`", manifest.read_text(encoding="utf-8"))
+            self.assertEqual(main(["check", "--project-root", tmp]), 0)
+
+    def test_add_profile_uses_canonical_id_body_scope_and_storage(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            memory = Path(tmp) / "docs" / "memory"
+            curate_brief(memory)
+            self.assertEqual(
+                main(
+                    [
+                        "add",
+                        "Keep Git operations reviewable.",
+                        "--type",
+                        "profile",
+                        "--name",
+                        "git",
+                        "--project-root",
+                        tmp,
+                    ]
+                ),
+                0,
+            )
+            profile = (memory / "profiles" / "git.md").read_text(encoding="utf-8")
+            self.assertRegex(
+                profile,
+                r"(?m)^## MC-AREA-\d{8}-[0-9a-f]{8}\b",
+            )
+            self.assertIn("\nScope: project\n", profile)
+            self.assertIn("\nProfile:\n", profile)
+            self.assertEqual(main(["check", "--project-root", tmp]), 0)
 
     def test_add_area_indexes_optional_area_file(self):
         with tempfile.TemporaryDirectory() as tmp:

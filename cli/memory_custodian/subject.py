@@ -9,12 +9,16 @@ from .entries import parse_structured_entries, validate_evidence
 from .locking import (
     create_private_file,
     discard_private_file,
-    private_state_directory,
     project_mutation_guard,
     read_private_file,
 )
 from .mutations import TextMutation, apply_mutations
-from .plans import MutationPlan, digest_path, print_plan
+from .plans import (
+    MutationPlan,
+    digest_path,
+    pending_plan_directory,
+    print_plan,
+)
 from .protocol import (
     CURRENT_PROTOCOL_VERSION,
     compare_versions,
@@ -77,7 +81,7 @@ def _pending_subject_id(project_id: str, registry: Path, normalized_args: str) -
     fingerprint = hashlib.sha256(
         f"{project_id}\0{digest_path(registry)}\0{normalized_args}".encode("utf-8")
     ).hexdigest()[:32]
-    path = private_state_directory("plans") / f"subject-{fingerprint}.id"
+    path = pending_plan_directory() / f"subject-{fingerprint}.id"
     generated = generate_subject_id()
     create_private_file(path, generated + "\n")
     value = read_private_file(path).strip()

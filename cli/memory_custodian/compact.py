@@ -37,7 +37,12 @@ MANUAL_TARGET_REASONS = {
 }
 
 
-def _compact_plan(args, memory_dir: Path, mutations: list[TextMutation]) -> MutationPlan:
+def _compact_plan(
+    args,
+    project_root: Path,
+    memory_dir: Path,
+    mutations: list[TextMutation],
+) -> MutationPlan:
     manifest = (memory_dir / "manifest.md").read_text(encoding="utf-8")
     metadata = protocol_metadata(manifest)
     comparison = compare_versions(
@@ -56,7 +61,7 @@ def _compact_plan(args, memory_dir: Path, mutations: list[TextMutation]) -> Muta
         project_id or "legacy-protocol-0.5",
         metadata.get("protocol_version", "0.5"),
         tuple(mutations),
-        project_root=memory_dir.parents[1],
+        project_root=project_root,
     )
 
 
@@ -67,7 +72,7 @@ def _execute_plan(
     mutations: list[TextMutation],
     rebuild,
 ) -> bool:
-    plan = _compact_plan(args, memory_dir, mutations)
+    plan = _compact_plan(args, project_root, memory_dir, mutations)
     protocol_06 = plan.protocol_version == CURRENT_PROTOCOL_VERSION
     project_id = plan.project_id
     print_plan(plan)
@@ -85,7 +90,12 @@ def _execute_plan(
         allow_legacy=True,
     ) as guard:
         current_mutations = rebuild()
-        current_plan = _compact_plan(args, memory_dir, current_mutations)
+        current_plan = _compact_plan(
+            args,
+            project_root,
+            memory_dir,
+            current_mutations,
+        )
         current_comparison = compare_versions(
             current_plan.protocol_version,
             CURRENT_PROTOCOL_VERSION,

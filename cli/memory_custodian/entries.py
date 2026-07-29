@@ -408,6 +408,74 @@ def structured_entry_schema_issues(
     return issues
 
 
+def structured_entry_storage_issues(
+    entry: StructuredEntry,
+    relative_path: str,
+) -> list[str]:
+    """Validate canonical Entry ID, storage path, and Scope relationships."""
+
+    if relative_path.startswith("archive/"):
+        return []
+
+    issues: list[str] = []
+    prefix = f"{relative_path}: {entry.entry_id}"
+    code = entry.entry_id.split("-", 2)[1].upper()
+    project_files = {
+        "decisions.md": {"DEC"},
+        "constraints.md": {"CON"},
+        "do-not-use.md": {"DNU", "TOMB"},
+        "preferences.md": {"PREF"},
+    }
+
+    if relative_path == "inbox.md":
+        if code != "INBOX":
+            issues.append(f"{prefix} type does not match its storage location")
+        return issues
+
+    if code == "INBOX":
+        issues.append(f"{prefix} must be stored in inbox.md")
+        return issues
+
+    expected_codes = project_files.get(relative_path)
+    if expected_codes is not None:
+        if code not in expected_codes:
+            issues.append(f"{prefix} type does not match its storage location")
+        if entry.scope != "project":
+            issues.append(f"{prefix} project storage requires Scope: project")
+        return issues
+
+    if relative_path.startswith("areas/") and relative_path.endswith(".md"):
+        area_name = relative_path[len("areas/") : -len(".md")]
+        if "/" in area_name or not area_name:
+            issues.append(f"{prefix} has a non-canonical area storage path")
+            return issues
+        if code not in {"AREA", "CON", "PREF", "DNU"}:
+            issues.append(f"{prefix} type does not match its area storage location")
+        expected_scope = f"area:{area_name}"
+        if entry.scope != expected_scope:
+            issues.append(
+                f"{prefix} must use Scope: {expected_scope} for {relative_path}"
+            )
+        return issues
+
+    if relative_path.startswith("rules/") and relative_path.endswith(".md"):
+        if code != "AREA":
+            issues.append(f"{prefix} type does not match its rule storage location")
+        if entry.scope != "project":
+            issues.append(f"{prefix} rule storage requires Scope: project")
+        return issues
+
+    if relative_path.startswith("profiles/") and relative_path.endswith(".md"):
+        if code != "AREA":
+            issues.append(f"{prefix} type does not match its profile storage location")
+        if entry.scope != "project":
+            issues.append(f"{prefix} profile storage requires Scope: project")
+        return issues
+
+    issues.append(f"{prefix} formal entry is outside a canonical storage file")
+    return issues
+
+
 def supersede_entry(text: str, old_id: str, new_id: str) -> str:
     preamble, sections = split_h2(text)
     changed = False

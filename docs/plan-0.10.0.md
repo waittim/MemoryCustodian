@@ -166,6 +166,15 @@ Reason:
 Retries must remain bounded after application restarts.
 ```
 
+Area-scoped non-decision entries retain their semantic ID/body pair:
+
+* constraint：`MC-CON-*` + `Constraint:`
+* preference：`MC-PREF-*` + `Preference:`
+* tombstone / do-not-use：`MC-DNU-*` + `Rejected:`
+
+All use `Scope: area:<slug>` and `areas/<slug>.md`. Validator 必须双向检查 Entry ID、typed body、storage path
+与 Scope；`MC-AREA` 在 `areas/` 中只表示 area decision。
+
 Superseded entry：
 
 ```md
@@ -423,7 +432,7 @@ Windows：
 Fallback：
 
 ```text
-<tempdir>/memory-custodian-state/
+<tempdir>/memory-custodian-state-<uid-or-home-hash>/
 ```
 
 Lock 路径：
@@ -465,13 +474,17 @@ locks/<project_id>.lock
 --break-stale-lock
 ```
 
-只允许在：
+对于 well-formed lock，只允许在：
 
 * 同主机；
 * 原 PID 已不存在；
 * lock 年龄超过 60 秒；
 
 三项同时满足时使用。
+
+对于 exclusive create 后异常退出留下的 malformed lock，只允许在 private regular file ownership
+验证通过、显式使用 `--break-stale-lock` 且 lock 年龄超过 300 秒时恢复。更年轻或无法安全验证的
+malformed lock 必须拒绝；不得自动破锁。
 
 不得提供无条件 `--force-lock`。
 
@@ -529,10 +542,13 @@ memory-custodian add "Decision B" --type decision --evidence user-confirmed
 * UTF-8。
 * 无不稳定时间字段。
 * target path 与 path-like argument 使用 repo-relative POSIX path。
+* project root 必须由 command 显式传入，不得从 memory directory 深度反推。
 * private execution plan 与 public preview representation 分离。
 * hard/purge public representation 不包含 raw topic、base digest 或 output digest，并从 public path、
   blocker 与 budget metadata 中脱敏匹配 topic。
 * hard/purge private plan 使用 repo 外随机 nonce，避免 Plan ID 成为 topic dictionary oracle。
+* repo 外 pending preview seed 超过 7 天后，在下次 private plan state 访问时机会式清理；清理会使旧
+  Plan ID 失效并要求重新 preview。
 * Plan ID 使用 canonical JSON 的 SHA-256 前 16 个十六进制字符。
 
 Preview 输出：
@@ -780,13 +796,18 @@ AGENTS.md / CLAUDE.md / GEMINI.md managed bootstrap templates
 * Duplicate ID。
 * Invalid Status。
 * Invalid Scope。
+* area decision/constraint/preference/do-not-use 的 ID、typed body、storage path 与 Scope 自洽。
+* Entry type 与 project/area/rule/profile/inbox storage matrix 双向一致。
 * Project ID preservation。
 * Lock acquire/release。
 * Lock timeout。
 * Stale lock detection。
+* malformed lock 的 300 秒显式恢复边界。
+* pending preview seed 的 7 天过期清理。
 * Plan ID deterministic。
 * File digest 变化导致 Plan ID 变化。
 * `--confirm-plan` mismatch 零写入。
+* nested custom `--memory-dir` preview/apply 使用完整 repo-relative path。
 * Secret scan 脱敏。
 * Machine path scan。
 * Legacy entry compatibility。

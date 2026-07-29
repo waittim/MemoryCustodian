@@ -247,6 +247,7 @@ def _subject_reference_blockers(
 
 def _build_forget_mutation_plan(
     args,
+    project_root: Path,
     memory_dir: Path,
     project_id: str | None,
     protocol_version: str,
@@ -344,7 +345,7 @@ def _build_forget_mutation_plan(
         else (),
         tuple(blockers),
         context={"erasure_scope": scope.canonical()},
-        project_root=memory_dir.parents[1],
+        project_root=project_root,
         public_arguments={
             "topic": "[redacted]",
             "mode": args.mode,
@@ -499,6 +500,7 @@ def run(args) -> int:
         writes.append((changelog_path, changelog_updated))
     mutation_plan = _build_forget_mutation_plan(
         args,
+        project_root,
         memory_dir,
         project_id,
         metadata.get("protocol_version", "0.5"),
@@ -559,6 +561,7 @@ def run(args) -> int:
                 )
             current_plan = _build_forget_mutation_plan(
                 args,
+                project_root,
                 memory_dir,
                 project_id,
                 current_metadata.get("protocol_version", "0.5"),
@@ -588,6 +591,7 @@ def run(args) -> int:
             )
             current_plan = _build_forget_mutation_plan(
                 args,
+                project_root,
                 memory_dir,
                 None,
                 current_metadata.get("protocol_version", "0.5"),

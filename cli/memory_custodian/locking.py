@@ -28,6 +28,9 @@ class UnsafePrivateStateError(PrivateStateError):
     pass
 
 
+MALFORMED_LOCK_RECOVERY_AGE_SECONDS = 300.0
+
+
 @dataclass(frozen=True)
 class ProjectMutationGuard:
     project_id: str | None
@@ -155,6 +158,37 @@ def discard_private_file(path: Path | None) -> None:
         pass
 
 
+def discard_expired_private_files(
+    directory: Path,
+    *,
+    max_age_seconds: float,
+    suffixes: tuple[str, ...],
+) -> tuple[Path, ...]:
+    """Remove old private regular files while preserving fresh preview state."""
+
+    if max_age_seconds <= 0:
+        raise ValueError("Private state max age must be positive.")
+    ensure_private_directory(directory)
+    now = time.time()
+    removed: list[Path] = []
+    for path in sorted(directory.iterdir()):
+        if not path.name.endswith(suffixes):
+            continue
+        validate_private_file(path)
+        try:
+            age = now - path.lstat().st_mtime
+        except FileNotFoundError:
+            continue
+        if age <= max_age_seconds:
+            continue
+        try:
+            path.unlink()
+            removed.append(path)
+        except FileNotFoundError:
+            pass
+    return tuple(removed)
+
+
 def lock_path(project_id: str) -> Path:
     return state_root() / "locks" / f"{project_id}.lock"
 
@@ -181,15 +215,30 @@ def _pid_exists(pid: int) -> bool:
 
 def stale_lock(path: Path, minimum_age: float = 60.0) -> bool:
     try:
-        payload = json.loads(read_private_file(path))
-        age = time.time() - path.stat().st_mtime
-        return (
-            payload.get("hostname") == socket.gethostname()
-            and not _pid_exists(int(payload.get("pid", -1)))
-            and age > minimum_age
-        )
-    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        raw = read_private_file(path)
+        age = time.time() - path.lstat().st_mtime
+    except OSError:
         return False
+    try:
+        payload = json.loads(raw)
+        if not isinstance(payload, dict):
+            raise ValueError
+        hostname = payload["hostname"]
+        pid = payload["pid"]
+        if not isinstance(hostname, str) or not hostname:
+            raise ValueError
+        if isinstance(pid, bool):
+            raise ValueError
+        pid = int(pid)
+        if pid <= 0:
+            raise ValueError
+    except (KeyError, ValueError, TypeError, json.JSONDecodeError):
+        return age > max(minimum_age, MALFORMED_LOCK_RECOVERY_AGE_SECONDS)
+    return (
+        hostname == socket.gethostname()
+        and not _pid_exists(pid)
+        and age > minimum_age
+    )
 
 
 @contextmanager
@@ -257,7 +306,7 @@ def mutation_lock(
             current = json.loads(read_private_file(path))
             if current.get("pid") == os.getpid():
                 path.unlink()
-        except FileNotFoundError:
+        except (FileNotFoundError, ValueError, TypeError, json.JSONDecodeError):
             pass
 
 

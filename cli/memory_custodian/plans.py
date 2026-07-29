@@ -12,6 +12,7 @@ import uuid
 from .locking import (
     create_private_file,
     discard_private_file,
+    discard_expired_private_files,
     private_state_directory,
     read_private_file,
 )
@@ -26,8 +27,17 @@ def digest_path(path: Path) -> str:
     return digest_text(path.read_text(encoding="utf-8")) if path.exists() else digest_text("")
 
 
-def _writable_plan_dir() -> Path:
-    return private_state_directory("plans")
+PENDING_PLAN_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
+
+
+def pending_plan_directory() -> Path:
+    directory = private_state_directory("plans")
+    discard_expired_private_files(
+        directory,
+        max_age_seconds=PENDING_PLAN_MAX_AGE_SECONDS,
+        suffixes=(".json", ".id"),
+    )
+    return directory
 
 
 def pending_seed_key(command: str, project_root: Path, manifest_sha256: str) -> str:
@@ -47,7 +57,7 @@ def pending_project_id(command: str, project_root: Path, manifest_sha256: str) -
     """Create or reuse a random UUIDv4 seed for a preview/apply pair."""
 
     key = pending_seed_key(command, project_root, manifest_sha256)
-    path = _writable_plan_dir() / f"{command}-{key}.json"
+    path = pending_plan_directory() / f"{command}-{key}.json"
     generated = str(uuid.uuid4())
     payload = json.dumps({"project_id": generated}, sort_keys=True) + "\n"
     create_private_file(path, payload)
@@ -72,7 +82,7 @@ def pending_entry_suffixes(
     if not keys:
         return {}, None
     key = pending_seed_key(command, project_root, source_sha256)
-    path = _writable_plan_dir() / f"{command}-{key}.json"
+    path = pending_plan_directory() / f"{command}-{key}.json"
     generated = {item: uuid.uuid4().hex[:8] for item in keys}
     payload = json.dumps({"entry_suffixes": generated}, sort_keys=True) + "\n"
     create_private_file(path, payload)
@@ -99,7 +109,7 @@ def pending_plan_nonce(
     """Create or reuse a full-width random nonce for a sensitive private plan."""
 
     key = pending_seed_key(command, project_root, source_sha256)
-    path = _writable_plan_dir() / f"{command}-{key}.json"
+    path = pending_plan_directory() / f"{command}-{key}.json"
     generated = uuid.uuid4().hex
     payload = json.dumps({"plan_nonce": generated}, sort_keys=True) + "\n"
     create_private_file(path, payload)

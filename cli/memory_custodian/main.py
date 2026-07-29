@@ -78,7 +78,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_parser.add_argument("--name", help="Name for rule, profile, or area memory.")
     add_parser.add_argument(
         "--area",
-        help="Store a scoped decision, constraint, preference, or tombstone in areas/<name>.md.",
+        help="Store a scoped decision, constraint, preference, tombstone, or do-not-use entry in areas/<name>.md.",
     )
     add_parser.add_argument("--reason", help="Optional reason for decisions or tombstones.")
     add_parser.add_argument("--evidence", action="append", default=[], help="Evidence reference; repeatable.")
