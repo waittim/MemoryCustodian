@@ -1,6 +1,6 @@
 # MemoryCustodian v0.12.0 实施指南
 
-## Protocol 0.8：事务恢复、统一审计与跨 Agent 一致性
+## Protocol 0.8：事务恢复、统一审计、冲突治理与跨 Agent 一致性
 
 你正在继续修改已经完成以下版本的 MemoryCustodian：
 
@@ -19,6 +19,10 @@
   * Explain
   * Freshness and reachability audit
   * ID-based operations
+  * Canonical Subject registry and Facet
+  * Structural conflict detection
+  * Merge-aware reconciliation review
+  * Explicit exception and Subject merge workflows
 
 本阶段的目标不是发布 MemoryCustodian 1.0，而是在进入 1.0 之前，对现有能力进行生产化加固和系统性验证。重点是事务恢复、统一审计、跨平台确定性与跨 Agent 一致性；本阶段仍允许在未来通过显式迁移继续调整协议，不作长期冻结承诺。
 
@@ -29,6 +33,8 @@
 * Package version：`0.12.0`
 * Protocol version：`0.8`
 * Entry schema version：`1`
+* Subject schema version：`1`
+* Conflict schema version：`1`
 
 ---
 
@@ -54,11 +60,19 @@ MemoryCustodian v0.12 必须实现并通过仓库内测试、fixtures、audit �
 16. 每个 enabled module 都有可审计的 loaded、skipped、missing 或 omitted disposition。
 17. 缺少 routing scope 时不会静默声称 context pack 完整；strict routing 会阻止 substantial work。
 18. Active project-scoped hard constraints 在正常 substantial routes 中保持可达。
+19. 同一 structural conflict identity 不存在多个 unresolved active owners。
+20. Subject rename 不改变 identity；duplicate Canonical-Ref 与 alias ownership 可审计。
+21. Git 可用时，merge-aware audit 能将确定冲突与需要语义复核的并发 hard-memory changes 分开报告。
+22. 无法自动判定的异名同义问题不会被描述为已解决，而会产生显式 reconciliation requirement。
+23. Subject merge、supersede、exception 和 reconciliation mutation 具备 crash-safe transaction protection。
 
 不得宣称：
 
 * Memory 内容经过事实真实性证明。
 * CLI 可以理解任意语义。
+* CLI 可以发现所有自然语言矛盾。
+* 不同 Subject 名称一定表示不同概念。
+* 时间戳或最新 merge 自动决定有效条目。
 * Secret scanning 能检测所有 secrets。
 * Multi-file mutation 等同数据库 ACID transaction。
 * 所有 agent 都一定遵守 Skill。
@@ -119,6 +133,8 @@ Status
 Scope
 Evidence
 Typed body
+Subject（managed decision/constraint/do-not-use/area hard memory）
+Facet（managed decision/constraint/do-not-use/area hard memory）
 ```
 
 允许的 Status：
@@ -154,7 +170,99 @@ project
 area:<slug>
 ```
 
-### 2.3 Entry relation
+
+### 2.3 Canonical Subject Contract
+
+Protocol 0.8 正式规范 v0.10–v0.11 的 Subject registry：
+
+```text
+docs/memory/subjects.md
+```
+
+Subject unit 必须具有：
+
+```text
+Subject ID
+Status
+Kind
+Canonical-Ref（可选）
+Evidence
+Aliases（可选）
+```
+
+允许 Subject Status：
+
+```text
+active
+merged
+```
+
+要求：
+
+* Entry 引用稳定 Subject ID，而不是显示名称。
+* Rename 不改变 Subject ID。
+* Active Subject ID 全局唯一。
+* 同一 normalized Canonical-Ref 最多属于一个 active Subject。
+* 同一 normalized alias 最多属于一个 active Subject。
+* `merged` Subject 必须有 `Merged-Into`。
+* Target 必须 active。
+* 不允许 Subject merge cycle。
+* Active managed entry 不得引用 merged Subject。
+* Registry 不进入普通 context pack，但属于 audit、migration、mutation 和 conflict analysis 的 shared source。
+* 不使用 fuzzy similarity 自动合并 Subject。
+* 没有 Canonical-Ref 的 custom Subject 允许存在，但 merge-aware review必须覆盖并发创建风险。
+* `audit --subjects` 必须列出没有 Canonical-Ref 的 active custom Subjects，作为周期性 registry review inventory；这不是错误，也不声称它们重复。
+
+Canonical Facet 是受控枚举。扩展枚举必须通过 protocol migration 或规范性 extension，不得由普通 entry 自由创建。
+
+Structural conflict identity：
+
+```text
+normalized Scope + Subject ID + Facet
+```
+
+同一 exact identity 最多一个 active owner。
+
+Project 与 area 对同一 Subject/Facet 的重叠必须：
+
+* 只有 project owner；或
+* area owner 通过合法 `Exception-To` 显式声明 narrower exception；或
+* 处于 unresolved REVIEW/CONFLICT 状态，不能静默视为一致。
+
+### 2.4 Conflict and reconciliation relations
+
+除原 relations 外，支持：
+
+```text
+Exception-To
+Reconciled-With
+Reconciliation
+Merged-Into
+Merged-From
+```
+
+`Reconciliation` 枚举：
+
+```text
+distinct
+superseded
+exception
+subject-merged
+```
+
+要求：
+
+* `distinct` 必须引用两个 reviewer 明确认定为不同 invariant 的 entries。
+* `superseded` 必须与 Supersedes/Superseded-By 一致。
+* `exception` 必须与合法 Exception-To 一致。
+* `subject-merged` 必须与 Subject registry merge 一致。
+* relation 必须可双向审计。
+* 不允许 cycle。
+* 不允许 relation 仅靠任意 prose 表示。
+* Reconciliation 必须带 admissible Evidence。
+* 关系不能作为授权或权限提升。
+
+### 2.5 Entry relation
 
 支持：
 
@@ -164,6 +272,10 @@ Superseded-By
 Promoted-From
 Promoted-To
 Related
+Exception-To
+Reconciled-With
+Merged-Into
+Merged-From
 ```
 
 要求：
@@ -172,11 +284,12 @@ Related
 * Supersedes 与 Superseded-By 必须双向一致。
 * Promoted relations 必须双向一致。
 * 不允许 relation cycle。
+* Exception-To、reconciliation 与 Subject merge relation 必须满足 Canonical Subject Contract。
 * `check` 将断裂 relation 报 ERROR。
 * `migrate` 不自动猜测 relation。
 * `forget` preview 必须显示受影响 relation，但 hard/purge 输出不得泄露敏感 topic。
 
-### 2.4 Legacy 内容
+### 2.6 Legacy 内容
 
 Protocol 0.8 项目中：
 
@@ -201,6 +314,15 @@ v0.12 release 前必须将仓库自身 dogfood memory、templates 和 examples �
 * apply-time digest verification
 
 Protocol 0.8 增加 multi-file transaction journal，以处理进程在替换多个文件中途崩溃的问题。
+
+以下 conflict-governance mutations 必须使用 journal：
+
+* supersede
+* promote
+* Subject merge
+* reconciliation acknowledgement
+* adding/removing Exception-To
+* canonicalization that changes Subject references
 
 ### 3.1 Journal 位置
 
@@ -362,6 +484,9 @@ memory-custodian audit
 --privacy
 --security
 --relations
+--subjects
+--conflicts
+--merge-base <ref>
 --budgets
 --local
 --transactions
@@ -379,6 +504,8 @@ reachability
 completeness
 evidence
 relations
+subjects
+conflicts
 budgets
 transactions
 ```
@@ -489,6 +616,51 @@ MC-ROUTING-008  Adapter omitted required scope input
 * Audit 不通过文件内容猜测 module relevance。
 * Audit 不自动添加 paths、改变 routes 或移动 entries。
 
+
+### 4.4 Subject and conflict findings
+
+统一 audit 必须复用 v0.11 的 Subject index、scope overlap、conflict result 和 merge-base change collector。
+
+至少提供：
+
+```text
+MC-SUBJECT-001   Duplicate active Subject ID
+MC-SUBJECT-002   Duplicate normalized Canonical-Ref
+MC-SUBJECT-003   Alias owned by multiple active Subjects
+MC-SUBJECT-004   Active entry references missing Subject
+MC-SUBJECT-005   Active entry references merged Subject
+MC-SUBJECT-006   Invalid Subject merge relation
+
+MC-CONFLICT-001  Multiple active owners for exact Scope+Subject+Facet
+MC-CONFLICT-002  Project/area overlap lacks valid Exception-To
+MC-CONFLICT-003  Invalid exception scope or target
+MC-CONFLICT-004  Reconciliation relation inconsistent
+MC-CONFLICT-005  Concurrent branches created colliding Subject identities
+MC-CONFLICT-006  Concurrent hard-memory changes require semantic reconciliation
+MC-CONFLICT-007  Branch extends an entry superseded on the other side
+MC-CONFLICT-008  Subject merged on one side but referenced on the other
+```
+
+Severity：
+
+* duplicate exact active owner：ERROR。
+* duplicate Canonical-Ref：ERROR。
+* alias ownership collision：ERROR。
+* missing/merged Subject reference：ERROR。
+* invalid Exception-To：ERROR。
+* deterministic cross-branch identity collision：ERROR。
+* concurrent hard-memory changes without deterministic identity match：WARNING/REVIEW，或由 project policy 提升为 ERROR。
+* canonical safety baseline 中存在 unresolved conflict：BLOCKER。
+
+`audit --merge-base <ref>`：
+
+* Git 不可用时返回明确 `UNAVAILABLE`，不影响非 Git audit。
+* 不将 unavailable 解释为 PASS。
+* 输出 merge base、current side changes、target side changes、finding codes 和 required reconciliation。
+* 不输出任意“semantic contradiction proven”。
+* 同一 Git graph 与 memory contents 必须产生确定 findings。
+* hard forget/purge privacy 规则适用于 Git-derived output。
+
 ---
 
 ## 五、统一 Machine-readable CLI 输出
@@ -535,6 +707,11 @@ MC-ROUTING-008  Adapter omitted required scope input
   * budgets
   * shared/local distinction
   * rendered context text
+  * conflict status
+  * Subject IDs and Facets for loaded managed entries
+  * structural conflict identities
+  * conflict/reconciliation finding codes
+  * merge-aware review status when requested
 
 不得为写命令加入绕过 preview 的 JSON shortcut。
 
@@ -555,6 +732,9 @@ explicit areas
 explicit rules
 explicit profiles
 strict-routing mode
+conflict policy
+Subject registry contents
+optional merge-base Git graph
 --no-local
 CLI version
 ```
@@ -569,6 +749,9 @@ CLI version
 * 相同 stable reason codes
 * 相同 explanation reason
 * 相同 context text，除非存在明确记录的换行平台差异
+* 相同 current-memory conflict status
+* 相同 structural conflict findings
+* 相同 merge-aware findings when the same merge base and Git graph are supplied
 
 要求：
 
@@ -583,6 +766,8 @@ CLI version
 * 存在 enabled path-routed areas 但未提供 paths/explicit areas 时，routing completeness 必须为 INCOMPLETE。
 * `--strict-routing` 在 INCOMPLETE、AMBIGUOUS 或 INVALID 时返回非零 exit code。
 * 不得使用 “all relevant memory loaded” 描述缺失 scope 的 context pack。
+* 不得使用 “no semantic conflicts” 描述仅通过 structural checks 的 memory set。
+* Subject display-name changes不得改变 context identity、finding identity 或 order。
 
 ### 6.2 Adapters
 
@@ -604,6 +789,11 @@ CLI version
 7. 遵守 trust boundary。
 8. 在 meaningful decision 后提出或执行 memory update。
 9. 不直接把全部 `docs/memory/` 注入 context。
+10. 创建 managed hard memory 前复用 Subject ID。
+11. 在 substantial work 前阻止 current-memory deterministic conflict。
+12. merge/rebase workflow 中显式运行 merge-aware audit 或等价 contract。
+13. REVIEW 只能通过 distinct、supersede、exception 或 subject-merge resolution 消除。
+14. 不根据时间戳、文件顺序或 Evidence 数量选择 winner。
 
 Adapters 不能分别定义另一套路由表。
 
@@ -629,6 +819,10 @@ evals/memory-custodian/cross-agent/
 * expected routing completeness
 * expected warnings
 * expected context pack hash
+* expected conflict status
+* expected Subject identities
+* expected conflict findings
+* optional merge-base fixture and expected reconciliation reviews
 
 静态 checker 验证 adapter 不偏离协议。
 
@@ -657,11 +851,18 @@ evals/memory-custodian/cross-agent/
 * 不丢失 optional module index。
 * 不更换 project_id。
 * 不更换已有合法 Entry ID。
+* 不更换已有合法 Subject ID。
+* 添加或验证 subject/conflict schema metadata 与 `subject_registry` path。
 * 不伪造 Evidence。
 * 不自动创建 local overlay。
 * 不自动移动 shared preferences 到 local。
 * 不自动添加 area glob。
 * 不自动把 missing routing scope 标记为 complete。
+* 不自动创建或合并 Subject。
+* 不从 legacy title/body 推断 Canonical-Ref。
+* 不使用时间戳决定 active owner。
+* 保留 existing Subject IDs、aliases、Canonical-Refs、Facet 和 reconciliation relations。
+* 无法建立 Subject identity 的 legacy managed entry进入 manual subject assignment report。
 * 不自动重写 freeform rules/profiles。
 * 无法自动 canonicalize 的 legacy entries 产生 manual migration report。
 
@@ -681,6 +882,9 @@ memory-custodian migrate --canonicalize
 * 输出逐条 manual migration checklist。
 * 不使用 LLM。
 * 不推断 Evidence。
+* 不推断 Subject equivalence。
+* 不推断 Facet。
+* 不自动生成 Exception-To 或 reconciliation relation。
 * 用户或 agent 完成语义 rewrite 后再运行 `check`。
 
 允许提供：
@@ -781,6 +985,7 @@ v0.12 不需要数据库，但应避免明显低效行为。
 * 普通小型项目的 `read` 和 `status` 不重复扫描同一文件。
 * 单次命令中缓存 parse result。
 * ID lookup 建立内存索引。
+* Subject、Canonical-Ref、alias 和 structural conflict identity 建立单次命令内存索引。
 * `list`、`show`、relation check 复用统一 parser。
 * Audit 每个文件最多读取必要次数。
 * 不为了性能引入持久索引数据库。
@@ -818,6 +1023,14 @@ CI 至少覆盖：
 * Canonical entry parse/write。
 * Legacy parse。
 * Relation integrity。
+* Subject registry integrity。
+* Canonical-Ref and alias uniqueness。
+* Facet validation。
+* Structural conflict ownership。
+* Exception-To validation。
+* Reconciliation validation。
+* Subject merge。
+* Merge-aware review。
 * Evidence admission。
 * Candidate promotion。
 * Supersede。
@@ -865,6 +1078,9 @@ CI 至少覆盖：
 * expected reasons
 * expected warnings
 * expected context hash
+* expected Subject IDs
+* expected conflict status
+* expected conflict and reconciliation findings
 
 Adapter drift checker 确保：
 
@@ -887,6 +1103,8 @@ Adapter drift checker 确保：
 * local overlay secret rejection
 * symlink escape
 * transaction target replacement attack
+* hard-forget subject metadata leakage
+* merge-base output privacy
 
 ### 10.6 Migration fixtures
 
@@ -895,12 +1113,16 @@ Adapter drift checker 确保：
 * clean 0.5 project
 * heavily customized 0.5 manifest
 * 0.6 evidence project
-* 0.7 local-overlay project
+* 0.7 local-overlay and conflict-governance project
 * legacy bullet-heavy project
 * corrupted metadata
 * newer protocol
 * archived tombstones
 * incomplete transaction during migration
+* duplicate Subject registry
+* duplicate structural owner
+* unresolved project/area exception
+* cross-branch custom Subject creation fixture
 
 ---
 
@@ -922,6 +1144,8 @@ README 包含：
 * v0.12 verified capabilities
 * Pre-1.0 status and non-guarantees
 * Non-goals
+* Structural conflict detection limitations
+* Merge-aware reconciliation and why it is not a semantic theorem prover
 * Links to detailed references
 
 详细内容放入 references：
@@ -933,6 +1157,8 @@ admission-policy.md
 entry-schema.md
 local-overlay-policy.md
 routing-policy.md
+subject-identity-policy.md
+conflict-reconciliation-policy.md
 transaction-policy.md
 quality-audit.md
 forgetting-policy.md
@@ -994,6 +1220,8 @@ README 使用产品语言，不重复全部 MUST 级规则。
 * Forgetting and privacy
 * Migration
 * Cross-agent support
+* Subject identity and conflict governance
+* Merge-aware reconciliation
 * Compatibility and non-goals
 
 不得夸大：
@@ -1011,10 +1239,17 @@ README 使用产品语言，不重复全部 MUST 级规则。
 * 有 project_id。
 * Active managed entries canonical。
 * 无 duplicate ID。
+* 无 duplicate active Subject ID。
+* 无 duplicate normalized Canonical-Ref。
+* 无 alias ownership collision。
+* 所有 managed hard-memory entries 有合法 Subject 与 Facet。
+* 无 multiple active structural owners。
+* project/area overlaps 有合法 Exception-To 或已完成 reconciliation。
 * 无 broken relation。
 * 无 active legacy entry。
 * Evidence coverage 可解释。
 * `audit --all` 不存在 ERROR/BLOCKER。
+* project policy 要求的 merge-aware fixtures 不存在 unresolved REVIEW。
 * manifest area index 与实际文件一致。
 * 所有 active project-scoped hard constraints 对 substantial routes 可达。
 * 每个 enabled module 的 route metadata 完整。
@@ -1050,6 +1285,10 @@ README 使用产品语言，不重复全部 MUST 级规则。
 
 * Protocol version 为 0.8。
 * Canonical managed entry contract 已定义并验证。
+* Subject schema version 为 1。
+* Conflict schema version 为 1。
+* Managed active decision、constraint、do-not-use 和 area hard-memory entries 具有合法 Subject 与 Facet。
+* `subjects.md` 是规范性 shared registry，且不进入普通 context pack。
 * Active legacy entry 在 Protocol 0.8 项目中被检查为错误。
 * Reader 仍能安全读取 legacy projects。
 * 0.5、0.6、0.7 可单步迁移至 0.8。
@@ -1072,6 +1311,14 @@ README 使用产品语言，不重复全部 MUST 级规则。
 * Candidate 不进入 normal task context。
 * Superseded entry 不作为 active invariant。
 * Relations 可审计。
+* Subject registry 可审计。
+* Rename 不改变 Subject identity。
+* Duplicate Canonical-Ref、alias ownership 和 missing Subject reference 被检测。
+* Exact Scope+Subject+Facet 多 active owner 至少为 ERROR。
+* Project/area overlap 无 Exception-To 至少为 REVIEW；影响安全 baseline 时为 BLOCKER。
+* Merge-aware deterministic conflict 至少为 ERROR。
+* 无法自动判定的并发 hard-memory changes 被标记 reconciliation required，不静默 PASS。
+* Subject merge、reconciliation 和 exception mutation 使用 transaction journal。
 * Reachability 可审计。
 * Unreachable active project-scoped hard constraint 至少为 ERROR；若会导致 substantial routes 无法满足安全基线则为 BLOCKER。
 * Freshness 只提示，不自动改写。
@@ -1101,6 +1348,8 @@ README 使用产品语言，不重复全部 MUST 级规则。
 ### Tooling
 
 * `audit` 具有稳定 finding model。
+* `audit --subjects`、`--conflicts` 与 optional `--merge-base` 使用同一 finding model。
+* JSON 包含 Subject、Facet、conflict identity、conflict status 和 reconciliation findings。
 * 主要只读命令支持稳定 JSON。
 * Exit codes 文档化。
 * Error output 与 stdout 分离。
@@ -1112,6 +1361,8 @@ README 使用产品语言，不重复全部 MUST 级规则。
 * Codex、Claude Code、Gemini、generic adapters 使用同一协议。
 * Adapter 不包含第二套路由表。
 * Cross-agent contract fixtures 通过。
+* Cross-agent conflict fixtures 产生相同 Subject identity、finding codes 和 conflict status。
+* Adapter 不自行实现另一套 Subject 或 conflict logic。
 * Static checker 不冒充 live runtime benchmark。
 * 至少保留一个明确标注为 live evaluation 的可复现示例。
 

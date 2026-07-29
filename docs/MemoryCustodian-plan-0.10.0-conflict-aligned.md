@@ -1,6 +1,6 @@
 # MemoryCustodian v0.10 实施指南
 
-## Protocol 0.6：Evidence、Entry Identity 与并发安全
+## Protocol 0.6：Evidence、Entry Identity、Subject Identity 与并发安全
 
 你正在修改仓库：
 
@@ -15,6 +15,7 @@
 * 项目记忆位于 `docs/memory/`
 * `manifest.md` 是唯一运行时路由依据
 * CLI 不进行语义猜测
+* 当前版本不具备任意自然语言矛盾检测能力
 * 所有危险修改保持 preview-first
 * 不引入 RAG、embedding、vector database、cloud memory 或后台 daemon
 
@@ -39,6 +40,10 @@
 9. 现有 Protocol 0.5 项目可以保守迁移，不丢失任何已有内容。
 10. Runtime routing 的输入与输出边界必须明确：CLI 不进行隐藏的 relevance scoring，所有已加载内容必须能够追溯到 manifest route 或显式参数。
 11. 为后续版本的完整 routing explainability 保留稳定的 module identity、canonical task 和结构化 reason model 基础，但本版本不实现自然语言 relevance 判断。
+12. Project、area decision、constraint 与 rejected approach 具有稳定 Subject identity 和受控 Facet，避免用自由文本 key 作为冲突身份。
+13. CLI 在当前 memory set 内阻止相同 Scope、Subject 与 Facet 同时存在多个 active owner。
+14. Subject 名称与 aliases 可以变化，但 entry 始终引用稳定 Subject ID；CLI 不声称能够自动发现两个异名 Subject 实际语义相同。
+15. 为 v0.11 的 merge-aware conflict review 保留 Subject registry、canonical reference、alias ownership 和 structural conflict identity。
 
 目标版本：
 
@@ -64,6 +69,10 @@
 * 自动删除或自动修复敏感内容
 * 未经 preview 的跨文件 destructive mutation
 * 自动 commit、push、merge 或 release
+* 根据任意自然语言自动判断两个 Subject 是否同义
+* 通过 embedding、LLM 或模糊相似度自动合并 Subject
+* 使用“较新条目自动获胜”解决矛盾
+* 仅根据时间戳自动 supersede、删除或降级 active memory
 
 Git 可以作为可选增强，用于检查 evidence revision，但不能成为核心命令的必要条件。
 
@@ -77,10 +86,13 @@ Git 可以作为可选增强，用于检查 evidence revision，但不能成为�
 ## MemoryCustodian Protocol
 - protocol_version: 0.6
 - entry_schema_version: 1
+- subject_schema_version: 1
+- subject_registry: subjects.md
 - initialized_with: memory-custodian <version>
 - last_migrated_with: memory-custodian <version>
 - project_id: <UUIDv4>
 - admission_policy: evidence-required
+- conflict_identity_policy: scope-subject-facet
 ```
 
 要求：
@@ -119,6 +131,8 @@ v0.10 不实现新的 relevance engine，也不改变 v0.9.1 的 canonical task 
   * the manifest routes a bounded context pack through explicit task categories
   * routing is deterministic for the supplied task and explicit scope
 * 当前 agent 仍负责选择 canonical task；v0.10 不得把这一判断边界描述为已解决问题。
+* New init and Protocol 0.6 migration create `subjects.md` as a managed registry scaffold.
+* Manifest protocol metadata identifies `subject_registry: subjects.md`, but `subjects.md` is not a normal runtime route.
 
 ---
 
@@ -168,6 +182,8 @@ MC-INBOX-20260726-d92a7e10
 
 Status: active
 Scope: project
+Subject: MC-SUBJ-20260729-91d44e2a
+Facet: version-policy
 Evidence:
 - repo:pyproject.toml
 
@@ -185,6 +201,8 @@ Area decision：
 
 Status: active
 Scope: area:sync
+Subject: MC-SUBJ-20260729-bf41a803
+Facet: behavior
 Evidence:
 - user-confirmed
 
@@ -211,6 +229,8 @@ Constraint：
 
 Status: active
 Scope: project
+Subject: MC-SUBJ-20260729-c10387ef
+Facet: architecture
 Evidence:
 - user-confirmed
 
@@ -228,6 +248,8 @@ Rejected approach：
 
 Status: active
 Scope: area:storage
+Subject: MC-SUBJ-20260729-e58a920c
+Facet: adoption-policy
 Evidence:
 - user-confirmed
 
@@ -251,6 +273,137 @@ Evidence:
 Preference:
 Prefer concise generated documentation.
 ```
+
+
+### 4.4 Canonical Subject Identity 与 Facet
+
+自由文本 `Invariant-Key` 不能作为可靠冲突身份，因为不同 agent 可能为同一概念生成不同名字。Protocol 0.6 必须建立独立的 Subject registry，并让 managed entries 引用稳定 Subject ID。
+
+新增 shared registry：
+
+```text
+docs/memory/subjects.md
+```
+
+`subjects.md`：
+
+* 是 shared protocol metadata，不是普通 task context。
+* 默认不注入 agent context pack。
+* 由 CLI 在 add、check、migrate、subject operations 和 conflict preflight 中读取。
+* 保持 plain Markdown、可审查、可 diff。
+* 不得成为第二个 manifest。
+* 不得保存 secrets、权限声明或任意 executable instruction。
+
+Subject ID 格式：
+
+```text
+MC-SUBJ-<YYYYMMDD>-<8HEX>
+```
+
+示例：
+
+```md
+## MC-SUBJ-20260729-a1b2c3d4 — Library X
+
+Status: active
+Kind: dependency
+Canonical-Ref: dependency:pypi:library-x
+Evidence:
+- repo:pyproject.toml
+
+Aliases:
+- Library X
+- libx
+```
+
+要求：
+
+* Entry 始终引用 `Subject ID`，不能以显示名称作为冲突身份。
+* `Canonical-Name` 或标题可以修改，Subject ID 不变。
+* Alias 不参与冲突 identity 计算。
+* 同一规范化 alias 不能同时属于两个 active Subject。
+* 同一规范化 `Canonical-Ref` 不能同时属于两个 active Subject。
+* `Canonical-Ref` 可选，但对有权威标识的对象 SHOULD 使用。
+* Canonical reference 至少支持：
+  * `dependency:pypi:<normalized-name>`
+  * `dependency:npm:<normalized-name>`
+  * `repo-path:<normalized-relative-path>`
+  * `area:<manifest-area-slug>`
+  * `api:<project-declared-id>`
+  * `service:<project-declared-id>`
+  * `feature:<project-declared-id>`
+* PyPI、npm 和 repo path normalization 必须有确定规则和测试。
+* 没有天然权威标识的 project concept 使用稳定 Subject ID 与用户维护的 aliases。
+* CLI 不根据相似名称、词干、编辑距离或正文推断两个 Subject 等价。
+* 创建新的 custom Subject 前，CLI 必须显示现有可用 Subject 和 exact alias/canonical-ref matches。
+* 创建 Subject 是显式操作，不能由普通 `add` 静默完成。
+* 对同一分支中的 exact canonical-ref 或 alias collision，CLI 必须拒绝。
+* 两个分支分别创建异名但同义 Subject 的情况无法在 v0.10 中自动证明；该风险由 v0.11 的 merge-aware review 处理。
+
+Managed entry 增加：
+
+```text
+Subject: <SUBJECT_ID>
+Facet: <CANONICAL_FACET>
+```
+
+示例：
+
+```md
+## MC-CON-20260729-82f1bc45 — Do not use Library X
+
+Status: active
+Scope: project
+Subject: MC-SUBJ-20260729-a1b2c3d4
+Facet: adoption-policy
+Evidence:
+- user-confirmed
+
+Constraint:
+Do not introduce Library X.
+```
+
+`Facet` 必须来自受控枚举，至少支持：
+
+```text
+adoption-policy
+version-policy
+architecture
+behavior
+compatibility
+security
+performance
+data-model
+interface
+workflow
+lifecycle
+```
+
+要求：
+
+* Facet 使用 canonical lowercase kebab-case。
+* 不允许普通 `add` 自由创建新 Facet。
+* 后续扩展 Facet 必须通过 protocol migration 或显式 manifest extension schema。
+* Entry type 与 Facet 的允许组合必须校验。
+* `preference` 可以在 v0.10 中不要求 Subject/Facet。
+* `decision`、`constraint`、`do-not-use` 和 area 中对应的正式 active entry 必须提供 Subject 与 Facet。
+* Candidate 可以声明 provisional Subject/Facet，但不能创建 active Subject identity。
+* Legacy entry 可以暂时缺少 Subject/Facet，但 `check` 必须报告 coverage。
+
+Structural conflict identity 定义为：
+
+```text
+normalized Scope + Subject ID + Facet
+```
+
+Protocol 0.6 mutation preflight 必须：
+
+* 在当前 memory set 中检查该 identity。
+* 若已有 active owner，拒绝创建第二个 active owner。
+* 提示使用 `--supersedes <ENTRY_ID>`、调整 Scope，或先审查 Subject。
+* 不解析 typed body 来判断两个陈述是否一致。
+* 即使正文相同，也不允许同一 identity 存在两个 active owner。
+* 时间戳只用于审计，不用于自动决定 winner。
 
 ---
 
@@ -308,7 +461,10 @@ legacy-unverified
 * Evidence 不能仅为 `conversation-unconfirmed`。
 * `Scope` 合法。
 * 写入位置与 Type、Scope 一致。
-* 不与现有 active entry 形成明显结构性重复或同 ID 冲突。
+* 对 decision、constraint、do-not-use 和 area managed entry，Subject ID 存在且 active。
+* Facet 合法，且与 entry type 组合允许。
+* 同一 normalized Scope、Subject 与 Facet 不存在第二个 active owner。
+* 不与现有 active entry 形成同 ID 冲突。
 
 CLI 不负责判断内容语义是否真实，但必须执行结构准入。
 
@@ -429,6 +585,57 @@ Use --candidate or provide user-confirmed/source-backed evidence.
 
 如果旧 entry 已经 superseded，拒绝操作并显示现有替代 ID。
 
+
+### 6.3 Subject registry CLI
+
+新增：
+
+```bash
+memory-custodian subject list
+memory-custodian subject show MC-SUBJ-...
+memory-custodian subject add "Library X" \
+  --kind dependency \
+  --canonical-ref dependency:pypi:library-x \
+  --alias libx \
+  --evidence repo:pyproject.toml
+memory-custodian subject rename MC-SUBJ-... "Library X Runtime"
+memory-custodian subject add-alias MC-SUBJ-... "X runtime"
+```
+
+要求：
+
+* `subject list` 默认只显示 active shared subjects。
+* `subject show` 显示 ID、title、kind、canonical ref、aliases、Evidence 和被哪些 entries 引用。
+* `subject add` 必须显式执行；普通 `add` 不能隐式创建 Subject。
+* `subject add` 在写入前列出 exact canonical-ref 和 normalized alias matches。
+* exact canonical-ref 或 alias 已属于 active Subject 时拒绝新建，并返回现有 Subject ID。
+* `subject rename` 不更换 Subject ID。
+* Alias normalization 必须确定、文档化、跨平台一致。
+* 不使用 fuzzy match 自动拒绝或自动合并；可以显示 non-blocking lexical review hint，但不得声称语义等价。
+* `subject add`、rename 和 alias mutation 使用项目 mutation lock。
+* 所有 Subject registry mutation 默认 preview-first，并输出 Plan ID。
+* Apply 必须使用 `--apply --confirm-plan <PLAN_ID>`。
+* 若操作会更新多个文件，必须在同一 mutation plan 中完成。
+* v0.10 不提供自动 Subject merge；该 multi-file reconciliation workflow 在 v0.11 实现。
+
+扩展 active add：
+
+```bash
+memory-custodian add "Do not introduce Library X." \
+  --type constraint \
+  --subject MC-SUBJ-... \
+  --facet adoption-policy \
+  --evidence user-confirmed
+```
+
+要求：
+
+* managed active entry 缺 `--subject` 或 `--facet` 时拒绝。
+* Subject 不存在、inactive 或位于错误 registry 时拒绝。
+* 同一 structural conflict identity 已有 active owner时拒绝。
+* 若用户意图是替换旧 entry，要求显式 `--supersedes`。
+* 若 scope 更窄，仍不能静默假设它是合法 exception；v0.11 提供显式 exception/reconciliation relation。
+
 ---
 
 ## 七、并发 Mutation Lock
@@ -536,6 +743,7 @@ memory-custodian add "Decision B" --type decision --evidence user-confirmed
 * `migrate`
 * `init --replace-existing`
 * 任何 multi-file supersede 或未来 mutation plan
+* Subject registry add、rename、alias mutation
 
 ### 8.1 Plan ID 计算
 
@@ -692,6 +900,10 @@ memory-custodian check --security
 * 不伪造 user-confirmed 或 source-backed evidence。
 * 不自动把模型推断升级为正式记忆。
 * 不自动重写 freeform prose。
+* 创建 `subjects.md` registry scaffold。
+* 不根据 legacy entry 标题或正文自动推断 Subject 等价关系。
+* 不自动生成 Canonical-Ref。
+* 对可以由用户明确提供 Subject 的 legacy entry，输出 manual subject assignment checklist。
 * 所有 migration write 使用现有 atomic write 与新 mutation lock。
 
 ### 11.2 Legacy entry 处理
@@ -733,6 +945,8 @@ ID 应通过 UUIDv4 生成，并在 preview 中展示。
 * Reader 必须继续读取 legacy units。
 * Context packing 继续保持完整语义单元。
 * Legacy 条目不因缺 Evidence 被省略。
+* Legacy 条目不因缺 Subject/Facet 被省略。
+* `check` 报告 subject/facet coverage，但 Protocol 0.6 legacy compatibility 不因缺失而删除内容。
 * `check` 显示 evidence coverage。
 * README 明确 legacy support 是迁移兼容，不是新写入推荐格式。
 
@@ -780,6 +994,12 @@ AGENTS.md / CLAUDE.md / GEMINI.md managed bootstrap templates
 * Plan ID calculation
 * Privacy/security scanning
 * Migration 0.5 → 0.6
+* Subject registry parsing and validation
+* Subject ID generation and indexing
+* Canonical reference normalization
+* Alias normalization and ownership
+* Facet validation
+* Structural conflict identity and mutation preflight
 * Canonical routing input normalization
 * Stable module identity and internal route reason model
 
@@ -816,6 +1036,16 @@ AGENTS.md / CLAUDE.md / GEMINI.md managed bootstrap templates
 * Machine path scan。
 * Legacy entry compatibility。
 * Protocol downgrade guard 保持正常。
+* Subject ID 格式与唯一性。
+* Subject rename 保持 ID。
+* Canonical-Ref normalization。
+* Exact canonical-ref collision。
+* Alias ownership collision。
+* Facet enum 与 type/facet compatibility。
+* Managed active entry 缺 Subject/Facet。
+* Duplicate active Scope+Subject+Facet 被拒绝。
+* 同一 identity 使用 `--supersedes` 成功。
+* 不同名称但无 exact alias/ref match 不被错误自动合并。
 * Canonical task normalization 不读取自由文本做语义猜测。
 * Manifest route、显式 profile 与显式 area 的来源类别可被内部模型区分。
 * Module identity 使用规范化 repo-relative path，跨平台结果一致。
@@ -871,6 +1101,9 @@ Fixtures：
 10. Superseded decision no longer behaves as active invariant。
 11. Routing does not perform hidden semantic relevance scoring。
 12. Loaded modules can be traced to manifest routes or explicit inputs。
+13. Stable Subject ID survives display-name changes。
+14. Duplicate exact structural owner is rejected。
+15. Agent does not claim that aliases or timestamps prove semantic equivalence。
 
 静态 checker 不要声称执行真实 agent runtime。
 
@@ -908,6 +1141,11 @@ README 新增或更新：
 * Plan confirmation
 * Trust boundary
 * Protocol 0.6 migration
+* Stable Subject identity
+* Subject registry and canonical references
+* Facet taxonomy
+* Structural conflict identity
+* Current limitation：异名同义 Subject 仍需要后续 merge-aware review
 * Routing boundary：canonical task、manifest route 与显式 optional inputs
 * 当前版本不保证 agent 选择了正确 task category
 * 当前版本不提供完整 excluded-module explanation trace；该能力属于 v0.11
@@ -944,6 +1182,9 @@ memory-custodian migrate --apply --confirm-plan <PLAN_ID>
 Release notes 必须真实描述实现内容，不得宣称：
 
 * semantic truth verification
+* complete semantic contradiction detection
+* automatic alias equivalence
+* automatic merge conflict resolution
 * complete secret detection
 * cryptographic authorization
 * transactional database semantics
@@ -972,6 +1213,13 @@ Release notes 必须真实描述实现内容，不得宣称：
 * CLI 不执行隐藏的 keyword、semantic 或 LLM relevance selection。
 * 每个 loaded module 都可追溯到 manifest route 或显式参数。
 * 稳定 module identity 与内部 route reason model 已建立，可供 v0.11 扩展。
+* `subjects.md` 使用稳定 Subject ID，显示名称变化不改变 identity。
+* Managed active decision/constraint/do-not-use 具有 Subject 与 Facet。
+* 同一 Scope+Subject+Facet 的第二个 active owner 在当前 memory set mutation preflight 中被拒绝。
+* Exact Canonical-Ref 与 alias ownership collision 被拒绝。
+* Subject registry mutation preview-first，并受 Plan ID 与 stale digest guard 保护。
+* v0.10 文档明确不保证发现两个异名但同义的 Subject。
+* 时间戳不用于自动决定冲突 winner。
 * 文档不把 canonical task classification 描述为自动解决的 relevance problem。
 * 全部 unit、integration、skill eval 和 repository checks 通过。
 * README、references、templates、examples、dogfood memory 和 release notes 同步更新。

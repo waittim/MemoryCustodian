@@ -1,6 +1,6 @@
 # MemoryCustodian v0.11.0 实施指南
 
-## Protocol 0.7：Local Overlay、确定性路由与完整解释
+## Protocol 0.7：Local Overlay、确定性路由、冲突审计与完整解释
 
 你正在继续修改已经完成 v0.10 / Protocol 0.6 的 MemoryCustodian。
 
@@ -15,10 +15,17 @@ v0.10 已提供：
 * Privacy/security checks
 * Protocol 0.5 → 0.6 migration
 * Stable module identity 与 routing reason model 基础
+* Stable Subject registry、Canonical-Ref、aliases 与 controlled Facet
+* Structural conflict identity：Scope + Subject ID + Facet
+* Current-memory mutation preflight prevents a second exact active owner
 
 当前阶段要解决的核心问题是：
 
 > 对于给定 task，MemoryCustodian 如何确定加载哪些 memory；当某个 module 没有被加载时，用户如何看到它被排除的原因；当 task scope 不足时，系统如何避免静默地产生一个看似完整、实际可能漏载的 context pack。
+
+同时解决另一类静默失败：
+
+> 两个分支分别新增可以干净合并、但可能互相矛盾的 active hard-memory entries 时，如何检测确定性的结构冲突，并让无法自动判断的并发语义变化强制进入人工或 agent reconciliation。
 
 不要询问更多信息。先完整检查 v0.10 的实现、测试、模板、Skill、references、examples、evals、dogfood memory 和 adapters，再按照本指南完成端到端实现。
 
@@ -30,6 +37,8 @@ v0.10 已提供：
 * Protocol version：`0.7`
 * Entry schema version：`1`
 * Routing schema version：`1`
+* Subject schema version：`1`
+* Conflict schema version：`1`
 * Local overlay schema version：`1`
 
 ---
@@ -52,6 +61,10 @@ MemoryCustodian v0.11 必须实现以下保障：
 12. ID-based list、show、forget 和 promotion/supersede workflows 可操作 canonical entries。
 13. 现有 Protocol 0.6 项目可以保守迁移，不丢失 custom routes、entries 或 Evidence。
 14. 不引入 semantic search、embedding、LLM runtime relevance scoring 或后台索引。
+15. `check --conflicts` 能确定性发现同一或重叠 Scope 下的 Subject/Facet active ownership 冲突。
+16. Git 可用时，`audit --merge-base <ref>` 能发现两个分支并发修改 hard memory 的 reconciliation risk。
+17. 两个分支分别创建不同 Subject ID 时，exact Canonical-Ref 或 alias collision 被确定性发现；无法证明同义的异名 Subject 被标记为 review，而不是静默视为无冲突。
+18. Subject merge、scope exception 和 supersede 使用显式关系与 preview-first multi-file mutation。
 
 v0.11 解决的是：
 
@@ -60,6 +73,10 @@ v0.11 解决的是：
 v0.11 不声称解决：
 
 > automatically understanding every piece of memory relevant to an arbitrary natural-language task
+
+也不声称解决：
+
+> proving that every pair of differently named natural-language entries is semantically contradictory
 
 ---
 
@@ -84,6 +101,10 @@ v0.11 不声称解决：
 * 自动删除 unreachable memory
 * 自动修复 freshness warning
 * 自动 commit、push、merge 或 release
+* 依赖时间戳或 merge order 自动选择冲突 winner
+* 根据编辑距离、关键词或正文相似度自动合并 Subject
+* 自动判断两个任意自然语言 constraints 是否语义矛盾
+* 在 merge-aware review 未完成时静默声明 hard-memory conflict-free
 
 文件系统和 manifest 仍是唯一 shared source of truth。
 
@@ -106,18 +127,23 @@ Agent 可以负责：
 ## MemoryCustodian Protocol
 - protocol_version: 0.7
 - entry_schema_version: 1
+- subject_schema_version: 1
+- subject_registry: subjects.md
 - routing_schema_version: 1
+- conflict_schema_version: 1
 - initialized_with: memory-custodian <version>
 - last_migrated_with: memory-custodian <version>
 - project_id: <UUIDv4>
 - admission_policy: evidence-required
 - routing_policy: explicit-task-and-scope
+- conflict_policy: canonical-subject-and-review
 ```
 
 必须保留 v0.10 的合法：
 
 * `project_id`
 * Entry IDs
+* Subject IDs、Canonical-Refs、aliases、Facets
 * Evidence
 * custom routes
 * optional module files
@@ -527,7 +553,276 @@ Warning: enabled path-routed areas were not evaluated because no paths or explic
 
 ---
 
-## 七、Local Overlay
+
+## 七、Conflict Identity 与 Merge Reconciliation
+
+### 7.1 设计边界
+
+v0.11 不实现通用自然语言 contradiction detector。系统必须区分：
+
+1. **Deterministic structural conflict**：可以由 Scope、Subject ID、Facet、relations 和 registry metadata 确定。
+2. **Potential semantic conflict**：两个分支并发改变 hard memory，但结构身份不同，CLI 无法证明相同或不同。
+3. **No detected conflict**：没有确定冲突，也没有触发 merge reconciliation risk；这不等同于证明所有自然语言陈述一致。
+
+不得使用：
+
+* “newer wins”
+* 文件中靠后的 entry wins
+* merge order wins
+* Evidence 数量自动决定 winner
+* fuzzy title similarity 自动决定 Subject 等价
+* LLM runtime 自动裁决
+
+时间戳、Evidence 和 Git history只用于解释与 review，不赋予 precedence。
+
+### 7.2 Structural conflict identity
+
+沿用 v0.10：
+
+```text
+Scope + Subject ID + Facet
+```
+
+Scope overlap 规则：
+
+* 相同 `project` scope：exact overlap。
+* 相同 `area:<slug>`：exact overlap。
+* `project` 与任意 `area:<slug>`：narrower-scope overlap。
+* 两个不同 area：默认不 overlap，除非 manifest 显式声明 area overlap group。
+* `local-user`、`local-machine` 不参与 shared hard-memory ownership。
+
+Finding：
+
+* exact overlap 下存在多个 active owner：`CONFLICT / ERROR`。
+* project 与 area 对同一 Subject/Facet 同时 active，且无显式 exception relation：`REVIEW`。
+* 同一 Subject/Facet 在两个声明为互斥或重叠的 area 中 active：按 manifest policy 报 `REVIEW` 或 `CONFLICT`。
+* Superseded、candidate、archive entries 不计为 active owner。
+* 正文是否相同不影响 exact conflict；一个 invariant identity 只能有一个 active owner。
+
+### 7.3 Explicit exception relation
+
+为 narrower-scope exception 增加：
+
+```text
+Exception-To: <ENTRY_ID>
+```
+
+要求：
+
+* 只允许 area-scoped active entry 指向 project-scoped active entry。
+* 两者必须使用相同 Subject ID 与 Facet。
+* 被引用 entry 必须存在且 active。
+* `Exception-To` 不代表任意 override，只表示该 area 下有显式、可审查的 narrower policy。
+* Explain 必须同时加载并显示 project baseline 与 matched area exception。
+* Constraint packing 和 agent workflow 必须明确 narrower exception 的作用范围。
+* relation 断裂、scope 不合法或 Subject/Facet 不一致为 ERROR。
+* 不允许 exception cycle。
+* Local overlay 不得创建 `Exception-To` 覆盖 shared hard memory。
+
+### 7.4 `check --conflicts`
+
+新增：
+
+```bash
+memory-custodian check --conflicts
+```
+
+不依赖 Git，扫描当前 worktree memory set：
+
+* duplicate active Scope+Subject+Facet
+* invalid or broken `Exception-To`
+* duplicate active Canonical-Ref
+* alias simultaneously owned by multiple active Subjects
+* subject registry entry missing or inactive
+* managed hard-memory entry missing Subject/Facet
+* merged Subject 仍被新 active entry 引用
+* project/area overlap without explicit exception
+* exact identity owner没有 supersede relation但存在多个 active entries
+
+固定结果至少包括：
+
+```text
+CLEAR
+REVIEW
+CONFLICT
+INVALID
+```
+
+建议 findings：
+
+```text
+MC-CONFLICT-001  Multiple active owners for one structural identity
+MC-CONFLICT-002  Project/area overlap requires explicit exception review
+MC-CONFLICT-003  Duplicate active Canonical-Ref
+MC-CONFLICT-004  Alias owned by multiple active Subjects
+MC-CONFLICT-005  Subject reference missing or inactive
+MC-CONFLICT-006  Invalid Exception-To relation
+MC-CONFLICT-007  Managed hard-memory entry lacks Subject or Facet
+MC-CONFLICT-008  Merged Subject still referenced as active identity
+```
+
+行为：
+
+* `CONFLICT` 或 `INVALID` 返回非零 exit。
+* `REVIEW` 在普通 inspection 中允许 exit 0，但必须清晰显示。
+* 不自动修改 entry 或 registry。
+* 不输出“semantically consistent”。
+* `check --conflicts` 的结果模型必须供 `read --explain` 和 v0.12 audit 复用。
+
+### 7.5 Strict read 与 conflict status
+
+普通 `read` 除 routing completeness 外，必须显示：
+
+```text
+Conflict status: CLEAR / REVIEW / CONFLICT / INVALID
+```
+
+要求：
+
+* 当前 context pack 命中 deterministic conflict 时，不能把两个 active owners 当作同时有效指令。
+* 普通 inspection 可以输出 metadata 和安全 baseline，但必须标记：
+  * `Context pack contains unresolved active-memory conflict`
+* `--strict-routing` 同时执行当前-memory structural conflict gate：
+  * CLEAR：按 routing status 处理。
+  * REVIEW：输出 warning；若是 matched project/area overlap，substantial work 应先 reconciliation。
+  * CONFLICT：exit 2，`Context pack not approved for substantial work`。
+  * INVALID：exit 2。
+* Explain 显示冲突 Entry IDs、Subject ID、Facet、Scope 和 finding code。
+* 不重复 hard-forgotten topic。
+* 不根据时间戳自动选择其中一条加载。
+
+### 7.6 Merge-aware audit
+
+Git 是可选增强。新增：
+
+```bash
+memory-custodian audit --merge-base origin/main
+```
+
+或在 v0.11 text-first 阶段：
+
+```bash
+memory-custodian check --conflicts --merge-base origin/main
+```
+
+行为：
+
+1. 若 Git 不可用或 ref 无效：
+   * 不影响普通 `check --conflicts`。
+   * 输出 `merge review unavailable`。
+   * 返回明确环境状态，不伪装为 conflict-free。
+2. 计算当前 HEAD 与目标 ref 的 merge base。
+3. 分别收集 merge base 之后两侧对以下内容的新增、修改、supersede、删除：
+   * `subjects.md`
+   * `decisions.md`
+   * `constraints.md`
+   * `do-not-use.md`
+   * `areas/*.md`
+4. 只分析完整 semantic entries 和 registry units，不做逐行语义拼接。
+5. 产生：
+   * deterministic conflicts
+   * subject registry collisions
+   * concurrent hard-memory reconciliation reviews
+   * missing relation reviews
+
+Deterministic findings：
+
+* 两侧创建相同 Canonical-Ref 的不同 Subject ID。
+* 两侧创建相同 normalized alias 的不同 Subject ID。
+* 两侧为同一 Scope+Subject+Facet 创建不同 active owner。
+* 一侧 supersede 某 entry，另一侧仍基于旧 entry 创建 active relation。
+* 一侧 merge Subject，另一侧继续引用被合并 Subject。
+
+Review findings：
+
+* 两侧都在同一 managed hard-memory file 中新增 active entries，但 identity 不同。
+* 两侧都修改同一 Subject 的不同 Facet，且没有 `Related` 或 process acknowledgement。
+* 两侧创建没有 Canonical-Ref、exact alias 不同的新 custom Subjects。
+* 一侧新增 project constraint，另一侧新增可能受其覆盖的 area constraint。
+* 两侧 Evidence 指向互相变化的 authoritative files。
+
+这些 REVIEW finding 不断言内容矛盾。它们只表示：
+
+```text
+Concurrent hard-memory changes require semantic reconciliation.
+```
+
+### 7.7 Reconciliation acknowledgement
+
+Merge-aware REVIEW 不能仅靠时间流逝消失。提供显式、可审查的 resolution artifact，推荐使用：
+
+```text
+Reconciled-With: <ENTRY_ID>
+Reconciliation: distinct | superseded | exception | subject-merged
+```
+
+或独立 reconciliation record。实现时选择一种规范性表示，并满足：
+
+* 双方 Entry IDs 可追溯。
+* resolution 类型来自枚举。
+* `distinct` 表示 reviewer 明确确认两者管理不同 invariant。
+* `superseded` 必须与 Supersedes relation 一致。
+* `exception` 必须与 Exception-To 一致。
+* `subject-merged` 必须与 Subject merge 结果一致。
+* Reconciliation mutation preview-first。
+* 不能使用空字符串或任意 prose 作为唯一 acknowledgement。
+* Evidence 或 `user-confirmed` 记录 reviewer 依据。
+* 新的后续修改可以重新触发 review。
+
+### 7.8 Subject merge
+
+新增：
+
+```bash
+memory-custodian subject merge MC-SUBJ-source \
+  --into MC-SUBJ-target
+```
+
+Preview 必须列出：
+
+* source 与 target registry units
+* 所有引用 source 的 active、superseded、candidate entries
+* 将更新的 files
+* alias/canonical-ref collision
+* relation changes
+* resulting conflict identities
+* blockers
+* Plan ID
+
+Apply：
+
+* 使用 mutation lock。
+* 使用 Plan ID 和 stale digest guard。
+* 将引用统一更新到 target。
+* source 标记 `Status: merged`。
+* 添加 `Merged-Into: <TARGET_ID>`。
+* target 可添加 `Merged-From: <SOURCE_ID>`。
+* 不删除 source audit history。
+* 若合并后产生多个 active Scope+Subject+Facet owner，阻止 apply，要求先 supersede、exception 或 distinct reconciliation。
+* 不自动选择 target。
+* 不根据较早/较新时间决定 target。
+* Hard forget/purge 的 subject privacy rules 继续适用。
+
+### 7.9 CI 与团队工作流
+
+推荐但不强制 Git 成为运行条件：
+
+```bash
+memory-custodian check --conflicts
+memory-custodian audit --merge-base origin/main
+```
+
+在启用 MemoryCustodian 的团队 CI 中：
+
+* 当前-memory deterministic `CONFLICT/INVALID` 必须失败。
+* merge-aware deterministic conflict 必须失败。
+* merge-aware REVIEW 是否阻止合并由项目 policy 决定；新模板 SHOULD 默认要求 reconciliation。
+* CI 输出不得声称静态检查等同完整语义证明。
+* README 必须说明短文件和时间戳只提高 reviewability，不构成矛盾检测。
+
+---
+
+## 八、Local Overlay
 
 ### 7.1 目标
 
@@ -648,7 +943,7 @@ memory-custodian read --no-local
 
 ---
 
-## 八、ID-based Operations
+## 九、ID-based Operations
 
 新增或完善：
 
@@ -678,7 +973,7 @@ memory-custodian promote MC-INBOX-... \
 
 ---
 
-## 九、Reachability 与 Freshness Audit
+## 十、Reachability、Freshness 与 Conflict Audit
 
 v0.11 可以先通过 `check` 子命令提供，v0.12 再统一到正式 `audit`：
 
@@ -686,6 +981,12 @@ v0.11 可以先通过 `check` 子命令提供，v0.12 再统一到正式 `audit`
 memory-custodian check --routing
 memory-custodian check --reachability
 memory-custodian check --freshness
+memory-custodian check --conflicts
+memory-custodian audit --merge-base origin/main
+memory-custodian subject list
+memory-custodian subject merge MC-SUBJ-old --into MC-SUBJ-new
+memory-custodian check --conflicts
+memory-custodian audit --merge-base origin/main
 ```
 
 ### 9.1 Routing audit
@@ -744,12 +1045,13 @@ Evidence-aware 检查：
 * issue/pr Evidence 不联网验证。
 * 长期未更新的 entry 可以基于记录时间提示 REVIEW，但不能仅因年龄自动判 stale。
 * Superseded relation 指向不存在 entry 时 ERROR。
+* Subject、Facet、Exception-To、Merged-Into 和 reconciliation relations 参与 conflict/freshness review。
 * Freshness finding 不自动改写 Evidence。
 * Git 不可用时显示 INFO，不阻塞核心功能。
 
 ---
 
-## 十、Adapters 与 Agent Workflow
+## 十一、Adapters 与 Agent Workflow
 
 所有 adapters 必须统一为：
 
@@ -763,6 +1065,9 @@ Evidence-aware 检查：
 8. 不直接加载整个 `docs/memory/`。
 9. 不自行维护第二套路由表。
 10. meaningful decision 后按 Evidence admission 更新 memory。
+11. 创建 hard-memory entry 前复用现有 Subject ID，不凭自由文本创建第二个 identity。
+12. merge/rebase 前运行 current-memory conflict check；Git 可用时运行 merge-aware review。
+13. 遇到 REVIEW 时显式建立 distinct、supersede、exception 或 subject-merge resolution。
 
 必须更新：
 
@@ -782,7 +1087,7 @@ Skill 不得指示 agent：
 
 ---
 
-## 十一、协议迁移
+## 十二、协议迁移
 
 实现 Protocol 0.6 → 0.7 migration。
 
@@ -801,6 +1106,11 @@ Skill 不得指示 agent：
 * 不自动改变 custom route semantics。
 * 不自动把 root constraints 加入 custom routes。
 * 不自动将 shared preferences 移动到 local。
+* 保留 v0.10 `subjects.md`、Subject IDs、Canonical-Refs 与 aliases。
+* 不自动合并 legacy or duplicate Subjects。
+* 不根据 entry 标题、正文或时间戳推断 Subject。
+* 添加 conflict schema metadata。
+* 对缺 Subject/Facet 的 managed legacy entries输出 manual assignment checklist。
 * 不丢失 human-readable module descriptions。
 
 ### 11.2 Optional module migration
@@ -838,7 +1148,7 @@ Skill 不得指示 agent：
 
 ---
 
-## 十二、需要修改的仓库区域
+## 十三、需要修改的仓库区域
 
 至少检查并按需要修改：
 
@@ -880,12 +1190,19 @@ adapters/
 * Local overlay state
 * Shared/local precedence
 * Protocol 0.6 → 0.7 migration
+* Subject registry index
+* Structural conflict graph
+* Scope overlap evaluator
+* Exception relation validation
+* Merge-base change collector
+* Merge reconciliation finding model
+* Subject merge planner
 
 如现有结构已有类似模块，应扩展现有模块，不要在 adapter 或 `main.py` 中复制 routing logic。
 
 ---
 
-## 十三、测试要求
+## 十四、测试要求
 
 ### 13.1 Unit tests
 
@@ -921,6 +1238,15 @@ adapters/
 * Unreachable hard constraint ERROR。
 * Freshness missing Evidence path。
 * Protocol downgrade guard。
+* Duplicate active Scope+Subject+Facet。
+* Project/area overlap without Exception-To。
+* Valid and invalid Exception-To。
+* Duplicate Canonical-Ref。
+* Alias ownership collision。
+* Missing or merged Subject reference。
+* Conflict status CLEAR/REVIEW/CONFLICT/INVALID。
+* Strict read blocks deterministic conflict。
+* Subject merge updates all references atomically。
 
 ### 13.2 Integration tests
 
@@ -942,6 +1268,13 @@ Fixtures 至少包括：
 * Legacy Protocol 0.6 optional index。
 * Area without machine matcher。
 * Project moved to a different absolute path。
+* Two branches append conflicting exact identities。
+* Two branches create duplicate Canonical-Ref Subjects。
+* Two branches create custom Subjects with different names。
+* One branch supersedes while the other extends old entry。
+* Project constraint and area exception without relation。
+* Reconciled distinct entries。
+* Subject merge creates downstream owner conflict。
 
 验证：
 
@@ -969,6 +1302,11 @@ Fixtures 至少包括：
 10. Local preference cannot override shared constraint。
 11. Unreachable hard constraint is reported。
 12. Agent does not claim automatic semantic relevance.
+13. Agent reuses existing Subject ID instead of inventing a free-text key。
+14. Exact structural conflict blocks substantial work。
+15. Concurrent hard-memory changes produce reconciliation review。
+16. Agent does not use timestamps to pick a winner。
+17. Subject merge is explicit and preview-first。
 
 静态 checker 不得声称验证真实 agent runtime compliance。
 
@@ -990,10 +1328,13 @@ Fixtures 至少包括：
 * skipped set stable
 * reason code stable
 * rendered context stable，除非明确记录换行差异
+* conflict status stable
+* structural conflict findings stable
+* merge-base change classification stable for the same Git graph
 
 ---
 
-## 十四、CLI 输出规范
+## 十五、CLI 输出规范
 
 普通 `read` 必须显示：
 
@@ -1016,6 +1357,11 @@ Fixtures 至少包括：
 * warnings
 * conflicts
 * incomplete dimensions
+* conflict status
+* structural conflict identity
+* conflicting Entry IDs
+* Subject/Facet/Scope
+* merge reconciliation warnings when explicitly requested
 
 错误输出：
 
@@ -1029,7 +1375,7 @@ v0.11 可以保持 text-first；v0.12 再提供稳定 machine-readable JSON cont
 
 ---
 
-## 十五、文档要求
+## 十六、文档要求
 
 README 新增或更新：
 
@@ -1044,6 +1390,12 @@ README 新增或更新：
 * Shared vs local memory
 * Reachability and freshness checks
 * Current limitations
+* Structural conflict detection vs semantic reconciliation
+* Why short files and timestamps help review but do not resolve contradictions
+* Subject registry, aliases and canonical references
+* `check --conflicts`
+* optional `audit --merge-base`
+* explicit supersede、exception、distinct reconciliation 与 subject merge
 
 README 应使用准确表述：
 
@@ -1100,12 +1452,14 @@ Release notes 必须真实描述：
 * local overlay
 * reachability/freshness checks
 * ID operations
+* canonical Subject identity and exact structural conflict detection
+* merge-aware reconciliation review
 
-不得描述为 automatic semantic retrieval。
+不得描述为 automatic semantic retrieval、complete contradiction detection 或 automatic conflict resolution。
 
 ---
 
-## 十六、完成标准
+## 十七、完成标准
 
 只有满足以下全部条件才算完成：
 
@@ -1114,6 +1468,8 @@ Release notes 必须真实描述：
 * Package version 为 0.11.0。
 * Protocol version 为 0.7。
 * Entry schema 仍为 1。
+* Subject schema version 为 1。
+* Conflict schema version 为 1。
 * Routing schema version 为 1。
 * Local overlay schema version 为 1。
 * Protocol 0.6 项目仍可安全读取并迁移。
@@ -1132,6 +1488,11 @@ Release notes 必须真实描述：
 * No-path substantial task 不静默显示 complete。
 * `--strict-routing` 对 incomplete/ambiguous scope 失败。
 * 相同 task、paths 与 explicit modules 产生确定结果。
+* `check --conflicts` 确定性检测 duplicate active owner、registry collision 和 invalid exception。
+* `read` 显示 conflict status。
+* `--strict-routing` 阻止 deterministic conflict 下的 substantial work。
+* Git 可用时，merge-aware audit 能区分 deterministic conflict 与 reconciliation review。
+* 异名且无 exact canonical metadata 的 Subject 不会被错误自动合并。
 
 ### Memory quality
 
@@ -1139,6 +1500,10 @@ Release notes 必须真实描述：
 * Candidate 不进入 normal context。
 * Superseded entries 不作为 active invariant。
 * Freshness finding 不自动改写 memory。
+* 时间戳不作为冲突 precedence。
+* Subject rename 不改变 Subject ID。
+* Subject merge preview-first，并在产生 active owner conflict 时拒绝。
+* Explicit Exception-To 与 reconciliation relation 可审计。
 * Budget omission 显示 Entry IDs 或稳定 legacy references。
 
 ### Local overlay
