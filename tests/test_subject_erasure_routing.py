@@ -630,8 +630,14 @@ class AuditGapRegressionTests(unittest.TestCase):
                     )
                 self.assertNotIn(topic, applied.getvalue())
             tombstones = (memory / "do-not-use.md").read_text(encoding="utf-8")
-            self.assertIn("MC-TOMB-20260729-12345678", tombstones)
-            self.assertNotIn(f"MC-TOMB-20260729-{old_suffix}", tombstones)
+            self.assertRegex(
+                tombstones,
+                r"(?m)^## MC-TOMB-\d{8}-12345678\b",
+            )
+            self.assertNotRegex(
+                tombstones,
+                rf"MC-TOMB-\d{{8}}-{re.escape(old_suffix)}\b",
+            )
             self.assertNotIn(topic, tombstones)
 
     def test_purge_blocks_provisional_subject_reference(self):
