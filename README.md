@@ -350,7 +350,8 @@ compaction command, but never automatically rewrites, archives, or applies seman
 - Platform files such as `AGENTS.md`, `CLAUDE.md`, and `GEMINI.md` stay thin; they point agents to the manifest instead of storing durable memory.
 - Routine CLI operations use Python stdlib only and work offline.
 - Expected input and filesystem errors are reported on stderr; unexpected programming failures retain their traceback for debugging.
-- CI exercises the Python CLI on Ubuntu and includes a Windows smoke job for platform-sensitive behavior.
+- CI exercises every supported Python minor from 3.10 through 3.14 on Ubuntu and runs a Windows smoke job for each
+  of those versions to cover platform-sensitive behavior.
 - The default architecture avoids RAG retrieval, embedding indexes, vector databases, cloud-hosted memory, chat-log archiving, automatic full-context loading, and required Git workflows.
 - Install and update flows may use normal plugin marketplace or package distribution channels.
 - Deletion and avoidance are explicit through `do-not-use.md` tombstones.

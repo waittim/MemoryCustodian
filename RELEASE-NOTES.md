@@ -73,7 +73,7 @@
 
 ### Compatibility and repository hygiene
 
-- Restored Python 3.10+ support with CI coverage on Python 3.10 and 3.13.
+- Restored Python 3.10+ support with CI coverage across every supported minor from Python 3.10 through 3.14.
 - Run CI on every pushed branch and include version-drift verification plus explicit privacy/security checks.
 - Removed generated `egg-info` metadata from source control and expanded build-artifact ignores.
 - Removed an obsolete demo preparation script that recursively deleted a user-provided target path.

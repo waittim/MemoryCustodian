@@ -3,6 +3,7 @@
 Entries are newest first.
 
 ## 2026-07-29
+- Expanded Ubuntu full-suite and Windows smoke CI across every supported Python minor from 3.10 through 3.14.
 - Fixed area-scoped entry identity, bidirectional storage validation, nested memory Plan roots, malformed lock recovery, and preview seed expiry.
 - Unified mutation guards and separated private execution plans from redacted public previews.
 - Aligned Protocol 0.6 with stable Subject/Facet governance, deterministic routing provenance, and explicit managed-memory erasure boundaries.

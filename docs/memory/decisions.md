@@ -43,9 +43,10 @@ Evidence:
 - legacy-unverified
 
 Decision:
-Support Python 3.10+ and test the main suite on both Python 3.10 and 3.13.
+Support Python 3.10+ and test every supported minor from Python 3.10 through 3.14.
 Reason:
-The stdlib-only implementation does not require Python 3.13 features, and the broader range lowers installation friction while retaining a maintained baseline.
+The stdlib-only implementation does not require newer-minor features, and full minor-version coverage keeps the
+declared open-ended support range honest while retaining a maintained baseline.
 
 ## MC-DEC-20260712-53d9eded — Prioritize useful and reachable memory over chronological accumulation.
 
