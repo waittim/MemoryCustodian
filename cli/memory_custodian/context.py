@@ -55,6 +55,48 @@ class ContextRoutingResult:
     incomplete_dimensions: tuple[str, ...]
 
 
+def invalid_context_result(
+    *,
+    supplied_task: str,
+    supplied_paths: list[str] | tuple[str, ...],
+    rules: list[str] | tuple[str, ...],
+    profiles: list[str] | tuple[str, ...],
+    areas: list[str] | tuple[str, ...],
+    error: ValueError,
+) -> ContextRoutingResult:
+    """Represent invalid routing through the same result model as valid reads."""
+
+    try:
+        canonical = canonical_task(supplied_task)
+    except ValueError:
+        canonical = "<invalid>"
+    paths = tuple(
+        NormalizedPath(str(value).replace("\\", "/"), False)
+        for value in supplied_paths
+    )
+    invalid = RoutedModule(
+        "manifest.md",
+        True,
+        (RouteReason.INVALID,),
+        disposition=ModuleDisposition.INVALID,
+        details=(str(error),),
+    )
+    return ContextRoutingResult(
+        supplied_task,
+        canonical,
+        paths,
+        tuple(rules),
+        tuple(profiles),
+        tuple(areas),
+        RoutingCompleteness.INVALID,
+        (invalid,),
+        (),
+        (),
+        (f"Routing input or manifest is invalid: {error}",),
+        ("invalid-routing",),
+    )
+
+
 def _requested(values: list[str] | tuple[str, ...]) -> tuple[str, ...]:
     normalized: list[str] = []
     for value in values:

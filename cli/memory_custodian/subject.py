@@ -391,6 +391,8 @@ def _merge(args) -> int:
     target = _find(subjects, args.target_subject_id)
     if source.subject_id.casefold() == target.subject_id.casefold():
         raise ValueError("Subject merge source and target must be different.")
+    if source.status != "active" or target.status != "active":
+        raise ValueError("Subject merge preview requires active source and target Subjects.")
     current: list[str] = []
     historical: list[str] = []
     resulting: dict[tuple[str, str], list[str]] = {}

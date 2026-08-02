@@ -118,8 +118,30 @@ def _parse_manifest(path: Path, expected_project_id: str) -> tuple[Path, ...]:
         raise ValueError("Local overlay manifest has an invalid schema version.")
     if not project or project.group(1) != expected_project_id:
         raise ValueError("Local overlay project_id does not match the shared manifest.")
+    allowed_lines = {
+        "# Local Memory Overlay",
+        "## Preferences",
+        "## Profiles",
+    }
+    module_lines: list[str] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped in allowed_lines:
+            continue
+        if re.fullmatch(r"- (?:local_overlay_schema_version|project_id):\s*\S+", stripped):
+            continue
+        module = re.fullmatch(
+            r"- ((?:preferences\.md)|(?:profiles/[A-Za-z0-9][A-Za-z0-9._-]*\.md))",
+            stripped,
+        )
+        if module:
+            module_lines.append(module.group(1))
+            continue
+        raise ValueError(f"Local overlay manifest contains an invalid declaration: {line!r}")
+    if len(module_lines) != len(set(module_lines)):
+        raise ValueError("Local overlay manifest contains a duplicate module declaration.")
     modules: list[Path] = []
-    for raw in re.findall(r"(?m)^- ((?:preferences\.md)|(?:profiles/[A-Za-z0-9][A-Za-z0-9._-]*\.md))\s*$", text):
+    for raw in module_lines:
         candidate = path.parent / raw
         try:
             candidate.resolve().relative_to(path.parent.resolve())

@@ -10,6 +10,8 @@
   grammar, case-sensitive cross-platform path globs, and a root-constraints safety baseline.
 - Added `read --path/--rule/--explain/--strict-routing`, complete enabled-module dispositions, stable reason codes,
   entry-level budget omissions, and `COMPLETE/INCOMPLETE/AMBIGUOUS/INVALID` diagnostics.
+- Invalid routing now remains inside the shared result/disposition model, ordinary non-strict `INCOMPLETE` reads use
+  the documented successful inspection exit, and explain exposes inbox/archive policy exclusions.
 - Added routing, reachability, and Evidence/relation freshness checks. They report bounded structural facts and never
   claim automatic semantic retrieval or factual correctness.
 
@@ -19,6 +21,8 @@
   `--no-local`, and preview-only local reset. Local state is not a secret store and cannot override shared hard memory.
 - Added canonical entry `list`, `show`, and `forget --id`; preview-only candidate promotion and Subject merge
   inventory remain deferred to the Protocol 0.8 transaction journal.
+- Made `forget --id` heading-exact and relation-safe: referencing entries block removal instead of being deleted as
+  incidental substring matches. Promotion previews now report ID/structural-owner blockers and area-scoped targets.
 - Unified topic/ID/purge/local-reset erasure wording and added optional bounded Git history exposure inspection.
   MemoryCustodian does not rewrite Git history or revoke clones, forks, backups, caches, or distributed copies.
 
@@ -26,6 +30,8 @@
 
 - Added deterministic current-worktree conflict codes for duplicate structural owners, canonical Subject collisions,
   invalid exception relations, missing Subject/Facet coverage, and reconciliation-record validation.
+- Reconciliation validation now uses a strict canonical parser, and merge-aware review consumes valid resolution
+  records while avoiding one-sided custom-Subject false positives.
 - Added matched-context conflict gates and optional read-only merge-base review for cross-branch structural collisions
   and concurrent hard-memory changes requiring human reconciliation.
 - Subject names, timestamps, Evidence counts, file order, and prose similarity never choose a winner. This release

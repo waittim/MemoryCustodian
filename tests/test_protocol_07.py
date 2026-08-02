@@ -199,10 +199,16 @@ class Protocol07Tests(unittest.TestCase):
             code, output, _error = self._capture([
                 "read", "--task", "implementation", "--explain", "--names-only", "--project-root", tmp,
             ])
-            self.assertEqual(code, 1)
+            self.assertEqual(code, 0)
             self.assertIn("Routing completeness: INCOMPLETE", output)
             self.assertIn("required-module-missing", output)
             self.assertIn("MC-MISSING-REQUIRED", output)
+            strict_code, strict_output, _error = self._capture([
+                "read", "--task", "implementation", "--strict-routing",
+                "--names-only", "--project-root", tmp,
+            ])
+            self.assertEqual(strict_code, 1)
+            self.assertIn("Context pack not approved for substantial work", strict_output)
 
     def test_protocol_06_optional_description_migrates_to_explicit_only(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -321,6 +327,9 @@ class Protocol07Tests(unittest.TestCase):
             code, output, _error = self._capture(["check", "--conflicts", "--project-root", tmp])
             self.assertEqual(code, 0)
             self.assertIn("Conflict status: CLEAR", output)
+            listed = self._capture(["list", "--project-root", tmp])[1]
+            self.assertIn("MC-REC-20260801-aaaaaaaa", listed)
+            self.assertNotIn("reconciliations.md#unit-", listed)
             path.write_text(valid + valid.replace("aaaaaaaa", "bbbbbbbb"), encoding="utf-8")
             code, output, _error = self._capture(["check", "--conflicts", "--project-root", tmp])
             self.assertEqual(code, 1)

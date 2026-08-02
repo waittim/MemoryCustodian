@@ -119,25 +119,24 @@ def freshness_findings(project_root: Path, memory_dir: Path) -> tuple[QualityFin
         for entry in canonical_entries(memory_dir, include_archive=True)
     }
     for entry in entries:
-        if entry.status not in {"active", "candidate"}:
-            continue
-        for evidence in entry.evidence:
-            prefix, separator, rest = evidence.partition(":")
-            if not separator or prefix not in {"repo", "doc", "test"}:
-                continue
-            raw_path, at, revision = rest.partition("@")
-            if not (project_root / raw_path).exists():
-                findings.append(QualityFinding(
-                    "ERROR", "MC-FRESH-001",
-                    f"{entry.entry_id} Evidence path does not exist: {prefix}:{raw_path}",
-                ))
-            if at:
-                saw_revision = True
-                if head is not None and not head.startswith(revision) and not revision.startswith(head):
+        if entry.status in {"active", "candidate"}:
+            for evidence in entry.evidence:
+                prefix, separator, rest = evidence.partition(":")
+                if not separator or prefix not in {"repo", "doc", "test"}:
+                    continue
+                raw_path, at, revision = rest.partition("@")
+                if not (project_root / raw_path).exists():
                     findings.append(QualityFinding(
-                        "WARNING", "MC-FRESH-002",
-                        f"{entry.entry_id} Evidence revision differs from current Git HEAD.",
+                        "ERROR", "MC-FRESH-001",
+                        f"{entry.entry_id} Evidence path does not exist: {prefix}:{raw_path}",
                     ))
+                if at:
+                    saw_revision = True
+                    if head is not None and not head.startswith(revision) and not revision.startswith(head):
+                        findings.append(QualityFinding(
+                            "WARNING", "MC-FRESH-002",
+                            f"{entry.entry_id} Evidence revision differs from current Git HEAD.",
+                        ))
         for relation in ("Supersedes", "Superseded-By", "Promoted-From", "Promoted-To", "Exception-To"):
             target = entry.fields.get(relation)
             if target and target.casefold() not in by_id:

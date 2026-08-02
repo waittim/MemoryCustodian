@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 import sys
 
-from .conflicts import ConflictStatus, analyze_conflicts, render_conflict_result
-from .context import ContextRoutingResult, route_context
+from .conflicts import ConflictResult, ConflictStatus, analyze_conflicts, render_conflict_result
+from .context import ContextRoutingResult, invalid_context_result, route_context
 from .entries import parse_structured_entries
-from .local_overlay import LocalStatus, inspect_overlay, project_identity, render_overlay_status
+from .local_overlay import LocalOverlay, LocalStatus, inspect_overlay, project_identity, render_overlay_status
 from .protocol import budget_for, resolve_memory_dir, resolve_project_root
 from .routes import ModuleDisposition, RouteReason, RoutedModule, RoutingCompleteness
 
@@ -42,8 +43,6 @@ def _render_modules(result: ContextRoutingResult, *, explain: bool) -> None:
     )
     for heading, disposition in groups:
         matches = [item for item in result.modules if item.disposition == disposition]
-        if not matches and heading not in {"Loaded"}:
-            continue
         print(f"{heading}:")
         if not matches:
             print("- none")
@@ -87,19 +86,35 @@ def _render_header(result: ContextRoutingResult, completeness: RoutingCompletene
 def run(args) -> int:
     project_root = resolve_project_root(args.project_root)
     memory_dir = resolve_memory_dir(project_root, args.memory_dir)
-    result = route_context(
-        project_root,
-        memory_dir,
-        supplied_task=args.task,
-        supplied_paths=getattr(args, "path", []),
-        rules=getattr(args, "rule", []),
-        profiles=args.profile,
-        areas=args.area,
-    )
-    overlay = inspect_overlay(
-        project_root,
-        project_identity(memory_dir),
-        disabled=getattr(args, "no_local", False),
+    routing_invalid = False
+    try:
+        result = route_context(
+            project_root,
+            memory_dir,
+            supplied_task=args.task,
+            supplied_paths=getattr(args, "path", []),
+            rules=getattr(args, "rule", []),
+            profiles=args.profile,
+            areas=args.area,
+        )
+    except ValueError as exc:
+        routing_invalid = True
+        result = invalid_context_result(
+            supplied_task=args.task,
+            supplied_paths=getattr(args, "path", []),
+            rules=getattr(args, "rule", []),
+            profiles=args.profile,
+            areas=args.area,
+            error=exc,
+        )
+    overlay = (
+        LocalOverlay(LocalStatus.DISABLED, Path("."), "")
+        if routing_invalid
+        else inspect_overlay(
+            project_root,
+            project_identity(memory_dir),
+            disabled=getattr(args, "no_local", False),
+        )
     )
     local_contents: list[tuple[str, str]] = []
     local_scope_warnings: list[str] = []
@@ -121,10 +136,14 @@ def run(args) -> int:
         for module in result.modules
         if module.loaded and module.module_id.startswith("areas/")
     )
-    conflicts = analyze_conflicts(
-        memory_dir,
-        matched_areas=matched_areas,
-        included_modules=tuple(module.module_id for module in result.modules if module.loaded),
+    conflicts = (
+        ConflictResult(ConflictStatus.INVALID, ())
+        if routing_invalid
+        else analyze_conflicts(
+            memory_dir,
+            matched_areas=matched_areas,
+            included_modules=tuple(module.module_id for module in result.modules if module.loaded),
+        )
     )
 
     _render_header(result, completeness)
@@ -139,6 +158,9 @@ def run(args) -> int:
                 print("  Precedence: below shared constraints, tombstones, decisions, and rules")
     _render_modules(result, explain=args.explain)
     if args.explain:
+        print("Policy exclusions:")
+        print("- inbox.md: candidate/maintenance-only; excluded from normal task context")
+        print("- archive/: explicit maintenance only; archive files were not enumerated")
         print("Incomplete dimensions:")
         dimensions = [*result.incomplete_dimensions]
         if overlay.status == LocalStatus.REVIEW:
@@ -167,6 +189,8 @@ def run(args) -> int:
         print("Warnings:")
         for warning in result.warnings:
             print(f"- {warning}")
+    if routing_invalid:
+        print(f"Error: {result.warnings[0]}", file=sys.stderr)
     for warning in local_scope_warnings:
         print(f"Warning: {warning}")
 
@@ -184,7 +208,7 @@ def run(args) -> int:
                 f"Strict routing rejected context: completeness={completeness.value}, conflict={conflicts.status.value}",
                 file=sys.stderr,
             )
-    elif conflicts.status in {ConflictStatus.CONFLICT, ConflictStatus.INVALID}:
+    elif not routing_invalid and conflicts.status in {ConflictStatus.CONFLICT, ConflictStatus.INVALID}:
         print("Context pack contains unresolved active-memory conflict")
 
     if not args.names_only:
@@ -207,6 +231,4 @@ def run(args) -> int:
         return 2
     if conflicts.status in {ConflictStatus.CONFLICT, ConflictStatus.INVALID}:
         return 2
-    if any(item.disposition == ModuleDisposition.MISSING_REQUIRED for item in result.modules):
-        return 1
     return 0

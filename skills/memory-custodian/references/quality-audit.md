@@ -27,6 +27,8 @@ memory-custodian check --conflicts --merge-base origin/main  # when Git/ref is a
 
 - For each active invariant, identify which normal task route loads it.
 - Treat an unreachable project-scoped hard constraint as an error; do not auto-promote, move, or invent a matcher.
+- Treat malformed or inconsistent reconciliation records as INVALID. Do not ignore malformed headings, duplicate
+  fields/blocks, unknown fields, unsorted Entry IDs, or missing admissible Evidence.
 - Keep cross-cutting decisions at root and subsystem-specific decisions in matched areas.
 - Treat memory that exists but is not loaded for its likely task as unavailable.
 

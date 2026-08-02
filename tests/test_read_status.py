@@ -20,10 +20,11 @@ class ReadStatusTests(unittest.TestCase):
                     out = StringIO()
                     err = StringIO()
                     with redirect_stdout(out), redirect_stderr(err):
-                        code = main(["read", "--project-root", tmp, option, "../backend"])
+                        code = main(["read", "--explain", "--project-root", tmp, option, "../backend"])
                     self.assertEqual(code, 2)
-                    self.assertEqual(out.getvalue(), "")
-                    self.assertIn("Error: Invalid explicit module name: ../backend", err.getvalue())
+                    self.assertIn("Routing completeness: INVALID", out.getvalue())
+                    self.assertIn("MC-ROUTE-INVALID", out.getvalue())
+                    self.assertIn("Error: Routing input or manifest is invalid", err.getvalue())
 
     def test_read_architecture_loads_task_specific_files(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -9,7 +9,7 @@ import re
 import subprocess
 import uuid
 
-from .entries import parse_structured_entries
+from .entries import ENTRY_ID_RE, parse_structured_entries
 from .locking import project_mutation_guard
 from .erasure import ErasureScope, render_apply_boundary, render_scope, scope_for_forget
 from .mutations import TextMutation, apply_mutations
@@ -86,18 +86,37 @@ def _history_check(project_root: Path, memory_dir: Path, selector: str, requeste
     return "reachable-copy-detected" if result.stdout.strip() else "no-reachable-copy-detected"
 
 
-def _remove_units(text: str, topic: str) -> tuple[str, tuple[MarkdownUnit, ...], tuple[MarkdownUnit, ...]]:
+def _remove_units(
+    text: str,
+    topic: str,
+    *,
+    exact_entry_id: str | None = None,
+) -> tuple[str, tuple[MarkdownUnit, ...], tuple[MarkdownUnit, ...]]:
     document = parse_markdown_units(text)
     needle = topic.casefold()
+
+    def matches_unit(unit: MarkdownUnit) -> bool:
+        if unit.kind not in {"h2", "bullet"}:
+            return False
+        if exact_entry_id:
+            if unit.kind != "h2":
+                return False
+            heading = ENTRY_ID_RE.search(unit.text.splitlines()[0])
+            return bool(heading and heading.group(0).casefold() == exact_entry_id.casefold())
+        return needle in unit.text.casefold() and not (
+            unit.kind == "h2" and len(unit.text.splitlines()) == 1
+        )
+
     matches = tuple(
         unit
         for unit in document.units
-        if unit.kind in {"h2", "bullet"}
-        and needle in unit.text.casefold()
-        and not (unit.kind == "h2" and len(unit.text.splitlines()) == 1)
+        if matches_unit(unit)
     )
     blockers = tuple(
-        unit for unit in document.units if unit.kind in {"preamble", "body"} and needle in unit.text.casefold()
+        unit for unit in document.units
+        if not exact_entry_id
+        and unit.kind in {"preamble", "body"}
+        and needle in unit.text.casefold()
     )
     kept = [unit for unit in document.units if unit not in matches]
     return render_markdown_document(document, kept), matches, blockers
@@ -265,6 +284,27 @@ def _subject_reference_blockers(
     ]
 
 
+def _entry_reference_blockers(memory_dir: Path, entry_id: str | None) -> list[str]:
+    if not entry_id:
+        return []
+    from .conflicts import canonical_entries
+
+    relation_fields = (
+        "Supersedes", "Superseded-By", "Promoted-From", "Promoted-To", "Exception-To"
+    )
+    blockers: list[str] = []
+    for entry in canonical_entries(memory_dir):
+        if entry.entry_id.casefold() == entry_id.casefold():
+            continue
+        for field in relation_fields:
+            if entry.fields.get(field, "").casefold() == entry_id.casefold():
+                relative = entry.path.relative_to(memory_dir).as_posix()
+                blockers.append(
+                    f"{relative}:{entry.entry_id} {field} references selected Entry {entry_id}"
+                )
+    return sorted(blockers)
+
+
 def _build_forget_mutation_plan(
     args,
     project_root: Path,
@@ -279,7 +319,11 @@ def _build_forget_mutation_plan(
     plans: list[FilePlan] = []
     for path in targets:
         original = read_text(path)
-        updated, matches, blockers = _remove_units(original, topic)
+        updated, matches, blockers = _remove_units(
+            original,
+            topic,
+            exact_entry_id=getattr(args, "entry_id", None),
+        )
         plans.append(FilePlan(path, updated, matches, blockers))
     matched_plans = [plan for plan in plans if plan.matches]
 
@@ -337,6 +381,7 @@ def _build_forget_mutation_plan(
         for unit in tombstone_blockers
     )
     blockers.extend(_subject_reference_blockers(memory_dir, plans, tombstone_updated))
+    blockers.extend(_entry_reference_blockers(memory_dir, getattr(args, "entry_id", None)))
     active_matches = any(
         plan.matches and not plan.path.relative_to(memory_dir).as_posix().startswith("archive/")
         for plan in plans
@@ -368,7 +413,9 @@ def _build_forget_mutation_plan(
         context={"erasure_scope": scope.canonical()},
         project_root=project_root,
         public_arguments={
-            "topic": "[redacted]",
+            ("entry_id" if getattr(args, "entry_id", None) else "topic"): (
+                args.entry_id if getattr(args, "entry_id", None) else "[redacted]"
+            ),
             "mode": args.mode,
             "allow_broad_match": args.allow_broad_match,
         }
@@ -378,7 +425,9 @@ def _build_forget_mutation_plan(
         if privacy_nonce is not None
         else None,
         sensitive=args.mode in {"hard", "purge"},
-        public_redactions=(topic,) if args.mode in {"hard", "purge"} else (),
+        public_redactions=(topic,)
+        if args.mode in {"hard", "purge"} and not getattr(args, "entry_id", None)
+        else (),
     )
 
 
@@ -450,7 +499,11 @@ def run(args) -> int:
     plans: list[FilePlan] = []
     for path in targets:
         original = read_text(path)
-        updated, matches, blockers = _remove_units(original, topic)
+        updated, matches, blockers = _remove_units(
+            original,
+            topic,
+            exact_entry_id=getattr(args, "entry_id", None),
+        )
         plans.append(FilePlan(path, updated, matches, blockers))
 
     matched_plans = [plan for plan in plans if plan.matches]
@@ -545,10 +598,10 @@ def run(args) -> int:
     structural_blockers = [
         blocker
         for blocker in public_blockers
-        if "cannot remove MC-SUBJ-" in blocker
+        if "cannot remove MC-SUBJ-" in blocker or "references selected Entry" in blocker
     ]
     if structural_blockers:
-        print(f"Manual rewrite required: {len(structural_blockers)} Subject relationship blocker(s)")
+        print(f"Manual rewrite required: {len(structural_blockers)} relationship blocker(s)")
         for blocker in structural_blockers:
             print(f"- {blocker}")
     effective_blockers = bool(mutation_plan.blockers)

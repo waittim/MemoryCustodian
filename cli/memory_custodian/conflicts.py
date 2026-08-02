@@ -5,9 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-import re
 
 from .entries import StructuredEntry, parse_structured_entries
+from .reconciliations import parse_reconciliations
 from .subjects import FACETS, load_subjects, normalize_alias, normalize_canonical_ref
 
 
@@ -227,9 +227,6 @@ def analyze_conflicts(
     return ConflictResult(_status(ordered), tuple(ordered))
 
 
-_REC_ID_RE = re.compile(r"^## (MC-REC-\d{8}-[0-9a-f]{8})\s+—\s+(.+)$", re.I)
-
-
 def _reconciliation_findings(
     memory_dir: Path,
     entries: dict[str, list[StructuredEntry]],
@@ -238,26 +235,24 @@ def _reconciliation_findings(
     path = memory_dir / "reconciliations.md"
     if not path.exists():
         return []
-    text = path.read_text(encoding="utf-8")
-    sections = re.split(r"(?m)(?=^## MC-REC-)", text)
+    records, parse_issues = parse_reconciliations(path, path.read_text(encoding="utf-8"))
     findings: list[ConflictFinding] = []
     identities: set[tuple[str, ...]] = set()
+    record_ids: set[str] = set()
     registry_subjects = {item.subject_id.casefold(): item for item in load_subjects(memory_dir)}
-    for section in sections:
-        lines = section.strip().splitlines()
-        if not lines or not _REC_ID_RE.fullmatch(lines[0]):
-            continue
-        status = next((line.split(":", 1)[1].strip() for line in lines if line.startswith("Status:")), "")
-        resolution = next((line.split(":", 1)[1].strip() for line in lines if line.startswith("Resolution:")), "")
-        entry_ids = tuple(sorted({line[2:].strip() for line in lines if line.startswith("- MC-")}))
-        evidence = tuple(line[2:].strip() for line in lines if line.startswith("- ") and not line.startswith("- MC-"))
-        resolved_entries = [entries[value.casefold()][0] for value in entry_ids if len(entries.get(value.casefold(), [])) == 1]
-        evidence_valid = bool(evidence) and all(
-            item == "user-confirmed"
-            or item == "legacy-unverified"
-            or item.split(":", 1)[0] in {"repo", "doc", "test", "issue", "pr", "migration"}
-            for item in evidence
+    findings.extend(
+        ConflictFinding(
+            "MC-CONFLICT-008", ConflictStatus.INVALID,
+            f"Invalid or inconsistent reconciliation record: {issue}",
         )
+        for issue in parse_issues
+    )
+    for record in records:
+        resolution = record.resolution
+        entry_ids = record.entries
+        duplicate_record_id = record.record_id.casefold() in record_ids
+        record_ids.add(record.record_id.casefold())
+        resolved_entries = [entries[value.casefold()][0] for value in entry_ids if len(entries.get(value.casefold(), [])) == 1]
         relation_valid = True
         if resolution == "superseded":
             relation_valid = any(
@@ -281,12 +276,9 @@ def _reconciliation_findings(
                 for left in resolved_entries for right in resolved_entries if left is not right
             )
         valid = (
-            status == "active"
-            and resolution in {"distinct", "superseded", "exception", "subject-merged"}
-            and len(entry_ids) >= 2
-            and evidence_valid
-            and all(len(entries.get(value.casefold(), [])) == 1 for value in entry_ids)
+            all(len(entries.get(value.casefold(), [])) == 1 for value in entry_ids)
             and entry_ids not in identities
+            and not duplicate_record_id
             and relation_valid
         )
         if not valid:

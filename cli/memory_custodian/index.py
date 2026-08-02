@@ -29,7 +29,7 @@ def _legacy_records(memory_dir: Path, *, include_archive: bool) -> list[IndexedE
     records: list[IndexedEntry] = []
     for path in iter_markdown_files(memory_dir, include_archive=include_archive):
         relative = path.relative_to(memory_dir).as_posix()
-        if relative in {"manifest.md", "subjects.md", "brief.md"} or path.name == "README.md":
+        if relative in {"manifest.md", "subjects.md", "brief.md", "reconciliations.md"} or path.name == "README.md":
             continue
         document = parse_markdown_units(path.read_text(encoding="utf-8"))
         semantic_ordinal = 0
@@ -159,7 +159,8 @@ def run_promote(args) -> int:
         raise ValueError("Transactional promotion apply requires Protocol 0.8.")
     project_root = resolve_project_root(args.project_root)
     memory_dir = resolve_memory_dir(project_root, args.memory_dir)
-    candidate = find_entry(build_index(project_root, memory_dir), args.entry_id)
+    records = build_index(project_root, memory_dir)
+    candidate = find_entry(records, args.entry_id)
     if candidate.status != "candidate" or not candidate.structured:
         raise ValueError(f"{candidate.entry_id} is not a promotable candidate.")
     evidence = validate_evidence(args.evidence, project_root)
@@ -174,8 +175,32 @@ def run_promote(args) -> int:
         "decision": "decisions.md", "constraint": "constraints.md",
         "preference": "preferences.md", "tombstone": "do-not-use.md", "do-not-use": "do-not-use.md",
     }[args.type]
+    if candidate.scope.startswith("area:"):
+        target = f"areas/{candidate.scope.removeprefix('area:')}.md"
     new_id = _promoted_id(candidate, args.type)
-    plan_seed = f"promote\0{candidate.entry_id}\0{new_id}\0{target}\0{'|'.join(evidence)}".encode("utf-8")
+    blockers: list[str] = []
+    if any(record.entry_id.casefold() == new_id.casefold() for record in records):
+        blockers.append(f"Generated active Entry ID already exists: {new_id}")
+    subject_id = candidate.structured.fields.get("Provisional-Subject", "")
+    facet = candidate.structured.fields.get("Provisional-Facet", "")
+    if subject_id and facet:
+        owners = [
+            record.entry_id
+            for record in records
+            if record.structured
+            and record.status == "active"
+            and record.scope.casefold() == candidate.scope.casefold()
+            and record.structured.fields.get("Subject", "").casefold() == subject_id.casefold()
+            and record.structured.fields.get("Facet", "").casefold() == facet.casefold()
+        ]
+        if owners:
+            blockers.append(
+                "Promotion would duplicate active structural owner(s): " + ", ".join(sorted(owners))
+            )
+    plan_seed = (
+        f"promote\0{candidate.entry_id}\0{new_id}\0{target}\0{'|'.join(evidence)}\0"
+        + "|".join(blockers)
+    ).encode("utf-8")
     print("Promotion preview:")
     print(f"- Candidate: {candidate.entry_id} ({candidate.source})")
     print(f"- New active Entry ID: {new_id}")
@@ -183,6 +208,11 @@ def run_promote(args) -> int:
     print(f"- New entry relation: Promoted-From: {candidate.entry_id}")
     print(f"- Evidence: {', '.join(evidence)}")
     print(f"- Target files: {candidate.source}, {target}")
+    if subject_id and facet:
+        print(f"- Resulting structural identity: {candidate.scope}+{subject_id}+{facet}")
+    print("Blockers:")
+    for blocker in blockers or ["none"]:
+        print(f"- {blocker}")
     print(f"Plan ID: {hashlib.sha256(plan_seed).hexdigest()[:16]}")
     print("Transactional promotion apply requires Protocol 0.8.")
     return 0

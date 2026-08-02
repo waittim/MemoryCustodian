@@ -7,6 +7,7 @@ from pathlib import Path
 import subprocess
 
 from .entries import StructuredEntry, parse_structured_entries
+from .reconciliations import ReconciliationRecord, parse_reconciliations
 from .subjects import Subject, normalize_alias, normalize_canonical_ref, parse_subjects
 
 
@@ -63,6 +64,13 @@ def _subjects(project_root: Path, revision: str, registry: str) -> dict[str, Sub
     }
 
 
+def _reconciliations(project_root: Path, revision: str, relative: str) -> tuple[ReconciliationRecord, ...]:
+    records, _issues = parse_reconciliations(
+        Path(relative), _show(project_root, revision, relative)
+    )
+    return records
+
+
 def _changed(base: dict[str, object], side: dict[str, object]) -> dict[str, object]:
     return {key: value for key, value in side.items() if key not in base or getattr(base[key], "text") != getattr(value, "text")}
 
@@ -83,12 +91,17 @@ def merge_review(project_root: Path, memory_dir: Path, target_ref: str) -> Merge
             + _files(project_root, target_ref, memory_relative)
         )))
         registry = f"{memory_relative}/subjects.md"
+        reconciliations = f"{memory_relative}/reconciliations.md"
         base_entries = _entries(project_root, base, all_files)
         head_entries = _entries(project_root, "HEAD", all_files)
         target_entries = _entries(project_root, target_ref, all_files)
         base_subjects = _subjects(project_root, base, registry)
         head_subjects = _subjects(project_root, "HEAD", registry)
         target_subjects = _subjects(project_root, target_ref, registry)
+        resolution_records = (
+            *_reconciliations(project_root, "HEAD", reconciliations),
+            *_reconciliations(project_root, target_ref, reconciliations),
+        )
         head_changed_files = _changed_files(project_root, base, "HEAD")
         target_changed_files = _changed_files(project_root, base, target_ref)
     except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
@@ -130,7 +143,7 @@ def merge_review(project_root: Path, memory_dir: Path, target_ref: str) -> Merge
         collision = next((left_aliases.get(normalize_alias(alias)) for alias in (subject.title, *subject.aliases) if left_aliases.get(normalize_alias(alias))), None)
         if collision and collision.casefold() != subject.subject_id.casefold():
             conflicts.append(f"MC-MERGE-002 exact alias collision: {collision}, {subject.subject_id}")
-        if not subject.canonical_ref and not collision and subject.subject_id.casefold() not in left_subjects:
+        if left_subjects and not subject.canonical_ref and not collision and subject.subject_id.casefold() not in left_subjects:
             reviews.append("MC-MERGE-REVIEW-003 both branches created differently named custom Subjects")
 
     def identity(entry: StructuredEntry) -> tuple[str, str, str] | None:
@@ -150,21 +163,35 @@ def merge_review(project_root: Path, memory_dir: Path, target_ref: str) -> Merge
                 f"MC-MERGE-003 concurrent structural owner {key}: {left.entry_id}, {right.entry_id}"
             )
 
+    resolved_identities = {
+        frozenset(value.casefold() for value in record.entries)
+        for record in resolution_records
+    }
+
+    def reconciled(left: StructuredEntry, right: StructuredEntry) -> bool:
+        pair = frozenset({left.entry_id.casefold(), right.entry_id.casefold()})
+        if any(pair <= identity for identity in resolved_identities):
+            return True
+        return (
+            left.fields.get("Exception-To", "").casefold() == right.entry_id.casefold()
+            or right.fields.get("Exception-To", "").casefold() == left.entry_id.casefold()
+        )
+
     for left in left_entries.values():
         for right in right_entries.values():
-            if left.path.as_posix() == right.path.as_posix() and identity(left) != identity(right):
+            if left.path.as_posix() == right.path.as_posix() and identity(left) != identity(right) and not reconciled(left, right):
                 reviews.append(
                     f"MC-MERGE-REVIEW-001 concurrent hard-memory changes in {left.path.as_posix()}"
                 )
             left_subject = left.fields.get("Subject", "").casefold()
             right_subject = right.fields.get("Subject", "").casefold()
-            if left_subject and left_subject == right_subject and left.fields.get("Facet") != right.fields.get("Facet"):
+            if left_subject and left_subject == right_subject and left.fields.get("Facet") != right.fields.get("Facet") and not reconciled(left, right):
                 reviews.append(
                     f"MC-MERGE-REVIEW-002 concurrent changes to different facets of Subject {left.fields.get('Subject')}"
                 )
-            if left.scope == "project" and right.scope.startswith("area:") and left.entry_id.split("-", 2)[1].upper() == "CON":
+            if left.scope == "project" and right.scope.startswith("area:") and left.entry_id.split("-", 2)[1].upper() == "CON" and not reconciled(left, right):
                 reviews.append("MC-MERGE-REVIEW-004 project constraint and area constraint changed concurrently")
-            if right.scope == "project" and left.scope.startswith("area:") and right.entry_id.split("-", 2)[1].upper() == "CON":
+            if right.scope == "project" and left.scope.startswith("area:") and right.entry_id.split("-", 2)[1].upper() == "CON" and not reconciled(left, right):
                 reviews.append("MC-MERGE-REVIEW-004 project constraint and area constraint changed concurrently")
 
     relation_fields = ("Supersedes", "Superseded-By", "Exception-To", "Promoted-From", "Promoted-To")

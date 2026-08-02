@@ -267,8 +267,11 @@ memory-custodian enable area/backend --path 'cli/**' --path 'tests/**/*.py'
 `read --explain` assigns every enabled module one disposition and a stable reason code, while separately listing
 whole entries omitted by budgets. If a substantial task has path-routed areas but supplies neither paths nor an
 explicit area, routing is `INCOMPLETE`. Ordinary inspection may show the safety baseline; `--strict-routing` rejects
-the pack for substantial work. `AMBIGUOUS` and `INVALID` also fail rather than falling back to natural-language
-guessing.
+the pack for substantial work. Ordinary `INCOMPLETE` inspection exits successfully with a structured warning;
+strict `INCOMPLETE` exits nonzero. `AMBIGUOUS` and `INVALID` fail rather than falling back to natural-language
+guessing, and invalid inputs are rendered through the same disposition/reason model instead of bypassing it with
+an unstructured parser error. Explain also makes the normal-context exclusion of inbox candidates and archives
+explicit.
 
 Record durable memory when a decision, constraint, preference, or rejected approach should survive the current chat:
 
@@ -361,7 +364,9 @@ Hard forget removes matching active managed memory and replaces matching topic-b
 redacted guard. Purge additionally searches managed `archive/` content and removes matching guards. Every preview
 states the selected managed scope and explicitly reports that Git history, clones, forks, backups, and caches are not
 modified or revoked. Forgetting controls what future agents receive through MemoryCustodian; it is not repository-wide
-erasure. `--history-check` optionally inspects reachable history in the current local Git repository without
+erasure. `forget --id` selects only the canonical unit whose heading owns that ID; live entries that relation-reference
+the selected entry become blockers and are never removed as incidental substring matches. `--history-check`
+optionally inspects reachable history in the current local Git repository without
 changing it. `unavailable` is not a PASS, and `no-reachable-copy-detected` is limited evidence—not proof that no
 copy exists in other refs, remotes, clones, forks, backups, caches, or dangling objects.
 
@@ -383,6 +388,10 @@ apply requires Protocol 0.8 and never claims to affect other machines or backups
 invalid Subjects, broken `Exception-To`, and inconsistent reconciliation records. A project/area overlap without an
 explicit exception is REVIEW; a deterministic duplicate owner is CONFLICT. `read` shows the matched-context status,
 and strict substantial reads refuse unresolved conflicts.
+
+Reconciliation records use a strict canonical parser: malformed headings, duplicate fields or blocks, unknown
+fields, unsorted/duplicate Entry IDs, invalid Evidence, duplicate record IDs, and inconsistent relations are
+`MC-CONFLICT-008 INVALID` rather than silently ignored.
 
 When Git is available, `check --conflicts --merge-base <ref>` compares semantic units changed on both sides. It
 distinguishes deterministic collisions from concurrent hard-memory changes requiring semantic reconciliation.
