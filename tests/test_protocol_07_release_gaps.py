@@ -59,13 +59,34 @@ def subject_unit(subject_id: str, title: str, canonical_ref: str = "") -> str:
 
 
 class RoutingAndQualityReleaseTests(unittest.TestCase):
-    def test_legacy_multi_mapping_task_is_reachably_ambiguous(self):
+    def test_mutually_exclusive_path_routes_are_reachably_ambiguous(self):
         with tempfile.TemporaryDirectory() as tmp:
             with redirect_stdout(StringIO()):
                 self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            memory = Path(tmp) / "docs/memory"
+            (memory / "areas").mkdir()
+            (memory / "areas/client.md").write_text("# Client\n", encoding="utf-8")
+            (memory / "areas/server.md").write_text("# Server\n", encoding="utf-8")
+            manifest = memory / "manifest.md"
+            manifest.write_text(
+                manifest.read_text(encoding="utf-8").replace(
+                    "### Enabled areas\n- None enabled.",
+                    "### Enabled areas\n"
+                    "- `areas/client.md`\n"
+                    "  - activation: path-or-explicit\n"
+                    "  - paths: `client/**`\n"
+                    "  - exclusive-group: runtime\n"
+                    "- `areas/server.md`\n"
+                    "  - activation: path-or-explicit\n"
+                    "  - paths: `server/**`\n"
+                    "  - exclusive-group: runtime",
+                ),
+                encoding="utf-8",
+            )
             code, output, error = capture([
-                "read", "--task", "development", "--explain", "--names-only",
-                "--project-root", tmp,
+                "read", "--task", "implementation", "--path", "client/app.py",
+                "--path", "server/app.py",
+                "--explain", "--names-only", "--project-root", tmp,
             ])
             self.assertEqual(code, 1)
             self.assertEqual(error, "")
@@ -73,10 +94,49 @@ class RoutingAndQualityReleaseTests(unittest.TestCase):
             self.assertIn("MC-ROUTE-AMBIGUOUS", output)
             self.assertIn("brief.md", output)
             self.assertIn("constraints.md", output)
+            self.assertIn("group 'runtime'", output)
+            self.assertIn("areas/client.md", output)
+            self.assertIn("Disposition: skipped", output)
+
+            selected_code, selected, _error = capture([
+                "read", "--task", "implementation", "--path", "client/app.py",
+                "--path", "server/app.py",
+                "--area", "client", "--explain", "--names-only",
+                "--project-root", tmp,
+            ])
+            self.assertEqual(selected_code, 0)
+            self.assertIn("Routing completeness: COMPLETE", selected)
+            self.assertIn("MC-SKIP-EXCLUSIVE-SELECTION", selected)
+            loaded_section = selected.split("Loaded:\n", 1)[1].split(
+                "Skipped optional:\n", 1,
+            )[0]
+            self.assertIn("areas/client.md", loaded_section)
+            self.assertNotIn("areas/server.md", loaded_section)
+
+            mixed_code, mixed, _error = capture([
+                "read", "--task", "implementation", "--path", "server/app.py",
+                "--area", "client", "--explain", "--names-only",
+                "--project-root", tmp,
+            ])
+            self.assertEqual(mixed_code, 0)
+            self.assertIn("Routing completeness: COMPLETE", mixed)
+            mixed_loaded = mixed.split("Loaded:\n", 1)[1].split(
+                "Skipped optional:\n", 1,
+            )[0]
+            self.assertIn("areas/client.md", mixed_loaded)
+            self.assertNotIn("areas/server.md", mixed_loaded)
+
+            explicit_code, explicit_output, _error = capture([
+                "read", "--task", "implementation", "--area", "client",
+                "--area", "server", "--names-only", "--project-root", tmp,
+            ])
+            self.assertEqual(explicit_code, 1)
+            self.assertIn("Routing completeness: AMBIGUOUS", explicit_output)
 
             strict_code, strict_output, strict_error = capture([
-                "read", "--task", "development", "--strict-routing",
-                "--names-only", "--project-root", tmp,
+                "read", "--task", "implementation", "--path", "client/app.py",
+                "--path", "server/app.py",
+                "--strict-routing", "--names-only", "--project-root", tmp,
             ])
             self.assertEqual(strict_code, 2)
             self.assertIn("Context pack not approved for substantial work", strict_output)
@@ -101,6 +161,30 @@ class RoutingAndQualityReleaseTests(unittest.TestCase):
             self.assertIn("Routing completeness: INVALID", output)
             self.assertIn("Disposition: invalid", output)
             self.assertIn("MC-ROUTE-INVALID", output)
+            self.assertIn("Error:", error)
+
+    def test_exclusive_group_requires_path_activated_area(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            manifest = Path(tmp) / "docs/memory/manifest.md"
+            manifest.write_text(
+                manifest.read_text(encoding="utf-8").replace(
+                    "### Enabled areas\n- None enabled.",
+                    "### Enabled areas\n"
+                    "- `areas/backend.md`\n"
+                    "  - activation: explicit-only\n"
+                    "  - exclusive-group: runtime",
+                ),
+                encoding="utf-8",
+            )
+            code, output, error = capture([
+                "read", "--task", "implementation", "--names-only",
+                "--project-root", tmp,
+            ])
+            self.assertEqual(code, 2)
+            self.assertIn("Routing completeness: INVALID", output)
+            self.assertIn("exclusive-group requires path activation", output)
             self.assertIn("Error:", error)
 
     def test_reachability_and_freshness_cover_hard_and_historical_entries(self):
@@ -424,6 +508,23 @@ class MergeAndDeterminismReleaseTests(unittest.TestCase):
             self.assertIn("Blockers:\n- none", first_preview)
             self.assertIn(f"Exception-To: {project_id}", first_preview)
             self.assertRegex(first_preview, r"Plan ID: [0-9a-f]{16}")
+            add_plan = re.search(r"Plan ID: ([0-9a-f]{16})", first_preview).group(1)
+            manifest = memory / "manifest.md"
+            original_manifest = manifest.read_text(encoding="utf-8")
+            manifest.write_text(
+                original_manifest.replace(
+                    "initialized_with: memory-custodian 0.11.0",
+                    "initialized_with: memory-custodian 0.11.0-audit",
+                ),
+                encoding="utf-8",
+            )
+            changed_code, changed_manifest_preview, _error = capture(command)
+            self.assertEqual(changed_code, 0)
+            self.assertNotEqual(
+                add_plan,
+                re.search(r"Plan ID: ([0-9a-f]{16})", changed_manifest_preview).group(1),
+            )
+            manifest.write_text(original_manifest, encoding="utf-8")
 
             reconcile = [
                 "reconcile", "preview", "--entry", area_id, "--entry", project_id,
@@ -436,6 +537,34 @@ class MergeAndDeterminismReleaseTests(unittest.TestCase):
             self.assertIn("Resolution: distinct", record_preview)
             self.assertIn("Blockers:\n- none", record_preview)
             self.assertRegex(record_preview, r"MC-REC-\d{8}-[0-9a-f]{8}")
+            record_plan = re.search(r"Plan ID: ([0-9a-f]{16})", record_preview).group(1)
+
+            subjects_path = memory / "subjects.md"
+            original_subjects = subjects_path.read_text(encoding="utf-8")
+            subjects_path.write_text(
+                original_subjects.replace(
+                    "- governance preview", "- governance preview revised",
+                ),
+                encoding="utf-8",
+            )
+            subject_code, subject_preview, _error = capture(reconcile)
+            self.assertEqual(subject_code, 0)
+            self.assertNotEqual(
+                record_plan,
+                re.search(r"Plan ID: ([0-9a-f]{16})", subject_preview).group(1),
+            )
+            subjects_path.write_text(original_subjects, encoding="utf-8")
+
+            changed_scope = area_entry.replace("Scope: area:backend", "Scope: area:frontend")
+            area_path.write_text("# Backend\n\n" + changed_scope + "\n", encoding="utf-8")
+            changed_code, changed_preview, _error = capture(reconcile)
+            self.assertEqual(changed_code, 0)
+            self.assertIn("area:frontend", changed_preview)
+            self.assertNotEqual(
+                record_plan,
+                re.search(r"Plan ID: ([0-9a-f]{16})", changed_preview).group(1),
+            )
+            area_path.write_text("# Backend\n\n" + area_entry + "\n", encoding="utf-8")
 
             duplicate_code, _output, duplicate_error = capture([
                 "reconcile", "preview", "--entry", area_id,
@@ -456,6 +585,164 @@ class MergeAndDeterminismReleaseTests(unittest.TestCase):
             self.assertEqual(code, 0)
             self.assertIn("MC-CONFLICT-002", remove_preview)
             self.assertIn("Blockers:\n- none", remove_preview)
+            remove_plan = re.search(r"Plan ID: ([0-9a-f]{16})", remove_preview).group(1)
+            constraints_path = memory / "constraints.md"
+            constraints_path.write_text(
+                constraints_path.read_text(encoding="utf-8").replace(
+                    "Status: active", "Status: superseded", 1,
+                ),
+                encoding="utf-8",
+            )
+            changed_code, changed_remove, _error = capture([
+                "exception", "remove", area_id, "--project-root", tmp,
+            ])
+            self.assertEqual(changed_code, 0)
+            self.assertNotIn("MC-CONFLICT-002", changed_remove)
+            self.assertNotEqual(
+                remove_plan,
+                re.search(r"Plan ID: ([0-9a-f]{16})", changed_remove).group(1),
+            )
+
+    def test_reconciliation_distinct_rejects_duplicate_structural_owner(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            memory = Path(tmp) / "docs/memory"
+            subject_id = "MC-SUBJ-20260801-a1b2c3d4"
+            first_id = "MC-CON-20260801-11111111"
+            second_id = "MC-CON-20260801-22222222"
+            (memory / "subjects.md").write_text(
+                "# Subject Registry\n\n" + subject_unit(subject_id, "Duplicate owner"),
+                encoding="utf-8",
+            )
+            entries = [
+                render_active_entry(
+                    "constraint", entry_id, title, body, None, "project",
+                    ("user-confirmed",), subject=subject_id, facet="behavior",
+                )
+                for entry_id, title, body in (
+                    (first_id, "First owner", "First."),
+                    (second_id, "Second owner", "Second."),
+                )
+            ]
+            (memory / "constraints.md").write_text(
+                "# Constraints\n\n" + "\n\n".join(entries) + "\n", encoding="utf-8",
+            )
+            code, output, _error = capture([
+                "reconcile", "preview", "--entry", first_id, "--entry", second_id,
+                "--resolution", "distinct", "--title", "Not actually distinct",
+                "--evidence", "user-confirmed", "--project-root", tmp,
+            ])
+            self.assertEqual(code, 0)
+            self.assertNotIn("Blockers:\n- none", output)
+            self.assertIn("different Scope + Subject + Facet identities", output)
+            self.assertEqual(analyze_conflicts(memory).status.value, "CONFLICT")
+
+    def test_exception_validation_rejects_invalid_structural_operands(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            memory = Path(tmp) / "docs/memory"
+            missing_subject = "MC-SUBJ-20260801-deadbeef"
+            project_id = "MC-CON-20260801-11111111"
+            area_id = "MC-CON-20260801-22222222"
+            project_entry = render_active_entry(
+                "constraint", project_id, "Invalid baseline", "Baseline.", None,
+                "project", ("user-confirmed",), subject=missing_subject,
+                facet="not-a-facet",
+            )
+            area_entry = render_active_entry(
+                "constraint", area_id, "Invalid exception", "Exception.", None,
+                "area:backend", ("user-confirmed",), subject=missing_subject,
+                facet="not-a-facet",
+            )
+            (memory / "constraints.md").write_text(
+                "# Constraints\n\n" + project_entry + "\n", encoding="utf-8",
+            )
+            (memory / "areas").mkdir()
+            area_path = memory / "areas/backend.md"
+            area_path.write_text("# Backend\n\n" + area_entry + "\n", encoding="utf-8")
+
+            code, preview, _error = capture([
+                "exception", "add", area_id, "--to", project_id,
+                "--project-root", tmp,
+            ])
+            self.assertEqual(code, 0)
+            self.assertNotIn("Blockers:\n- none", preview)
+            self.assertIn("Subject must resolve exactly once", preview)
+            self.assertIn("Invalid Facet 'not-a-facet'", preview)
+            first_plan = re.search(r"Plan ID: ([0-9a-f]{16})", preview).group(1)
+            (memory / "subjects.md").write_text(
+                "# Subject Registry\n\n" + subject_unit(missing_subject, "Now registered"),
+                encoding="utf-8",
+            )
+            _code, registered_preview, _error = capture([
+                "exception", "add", area_id, "--to", project_id,
+                "--project-root", tmp,
+            ])
+            self.assertNotEqual(
+                first_plan,
+                re.search(r"Plan ID: ([0-9a-f]{16})", registered_preview).group(1),
+            )
+
+            with_relation = area_entry.replace(
+                "Evidence:\n", f"Exception-To: {project_id}\nEvidence:\n",
+            )
+            area_path.write_text("# Backend\n\n" + with_relation + "\n", encoding="utf-8")
+            (memory / "reconciliations.md").write_text(
+                "# Reconciliations\n\n"
+                "## MC-REC-20260801-abcdef12 — Invalid operands\n\n"
+                "Status: active\nEntries:\n"
+                f"- {project_id}\n- {area_id}\n"
+                "Resolution: exception\nEvidence:\n- user-confirmed\n",
+                encoding="utf-8",
+            )
+            result = analyze_conflicts(memory)
+            self.assertEqual(result.status.value, "INVALID")
+            self.assertTrue(any(item.code == "MC-CONFLICT-008" for item in result.findings))
+
+    def test_governance_preview_requires_exact_protocol_and_schema(self):
+        cases = (
+            (lambda text: text.replace("protocol_version: 0.7", "protocol_version: 0.6"), "requires Protocol 0.7"),
+            (lambda text: text.replace("protocol_version: 0.7", "protocol_version: 0.8"), "newer than this CLI"),
+            (lambda text: re.sub(r"(?m)^- entry_schema_version:.*\n", "", text), "entry_schema_version: 1"),
+            (
+                lambda text: text.replace(
+                    "- protocol_version: 0.7",
+                    "- protocol_version: 0.6\n- protocol_version: 0.7",
+                ),
+                "Duplicate protocol metadata field: protocol_version",
+            ),
+            (
+                lambda text: text.replace(
+                    "- entry_schema_version: 1",
+                    "- entry_schema_version: 1\n- entry_schema_version: 1",
+                ),
+                "Duplicate protocol metadata field: entry_schema_version",
+            ),
+            (
+                lambda text: re.sub(
+                    r"(?m)^(- project_id: .+)$", r"\1\n\1", text,
+                ),
+                "Duplicate protocol metadata field: project_id",
+            ),
+            (
+                lambda text: re.sub(r"(?m)^- project_id:.*\n", "", text),
+                "missing a valid UUIDv4 project_id",
+            ),
+        )
+        for mutate, expected in cases:
+            with self.subTest(expected=expected), tempfile.TemporaryDirectory() as tmp:
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["init", "--project-root", tmp]), 0)
+                manifest = Path(tmp) / "docs/memory/manifest.md"
+                manifest.write_text(mutate(manifest.read_text(encoding="utf-8")), encoding="utf-8")
+                code, _output, error = capture([
+                    "exception", "remove", "MC-CON-20260801-11111111",
+                    "--project-root", tmp,
+                ])
+                self.assertEqual(code, 2)
+                self.assertIn(expected, error)
 
     def test_invalid_target_reconciliation_cannot_suppress_merge_review(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -505,6 +792,75 @@ class MergeAndDeterminismReleaseTests(unittest.TestCase):
             self.assertIn("Merge review status: CONFLICT", output)
             self.assertIn("MC-MERGE-006", output)
             self.assertIn("must each resolve exactly once", output)
+
+    def test_partial_three_entry_relation_cannot_suppress_merge_review(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = initialize_git_project(tmp)
+            subject_id = "MC-SUBJ-20260801-a1b2c3d4"
+            old_id = "MC-DEC-20260801-11111111"
+            new_id = "MC-DEC-20260801-22222222"
+            unrelated_id = "MC-DEC-20260801-33333333"
+            (memory / "subjects.md").write_text(
+                "# Subject Registry\n\n" + subject_unit(subject_id, "Partial relation"),
+                encoding="utf-8",
+            )
+            old = (
+                f"## {old_id} — Old\n\nStatus: superseded\nScope: project\n"
+                f"Subject: {subject_id}\nFacet: behavior\nEvidence:\n- user-confirmed\n"
+                f"Superseded-By: {new_id}\n\nDecision:\nOld.\n"
+            )
+            new = render_active_entry(
+                "decision", new_id, "New", "New.", None, "project",
+                ("user-confirmed",), subject=subject_id, facet="behavior",
+                supersedes=old_id,
+            )
+            unrelated = render_active_entry(
+                "decision", unrelated_id, "Unrelated", "Unrelated.", None, "project",
+                ("user-confirmed",), subject=subject_id, facet="interface",
+            )
+            decisions = memory / "decisions.md"
+            decisions.write_text(
+                "# Decisions\n\n" + old + "\n" + new + "\n\n" + unrelated + "\n",
+                encoding="utf-8",
+            )
+            git(tmp, "add", ".")
+            git(tmp, "commit", "-qm", "base relation")
+            base = git(tmp, "rev-parse", "HEAD")
+
+            git(tmp, "checkout", "-qb", "left")
+            decisions.write_text(
+                decisions.read_text(encoding="utf-8").replace("Decision:\nOld.", "Decision:\nOld changed on left."),
+                encoding="utf-8",
+            )
+            git(tmp, "add", ".")
+            git(tmp, "commit", "-qm", "left changes old")
+
+            git(tmp, "checkout", "-qb", "right", base)
+            decisions.write_text(
+                decisions.read_text(encoding="utf-8").replace(
+                    "Decision:\nUnrelated.", "Decision:\nUnrelated changed on right.",
+                ),
+                encoding="utf-8",
+            )
+            (memory / "reconciliations.md").write_text(
+                "# Reconciliations\n\n"
+                "## MC-REC-20260801-abcdef12 — Partial supersession\n\n"
+                "Status: active\nEntries:\n"
+                f"- {old_id}\n- {new_id}\n- {unrelated_id}\n"
+                "Resolution: superseded\nEvidence:\n- user-confirmed\n",
+                encoding="utf-8",
+            )
+            git(tmp, "add", ".")
+            git(tmp, "commit", "-qm", "right partial reconciliation")
+            git(tmp, "checkout", "-q", "left")
+
+            code, output, _error = capture([
+                "check", "--conflicts", "--merge-base", "right", "--project-root", tmp,
+            ])
+            self.assertEqual(code, 1)
+            self.assertIn("MC-MERGE-006", output)
+            self.assertIn("requires exactly two Entry IDs", output)
+            self.assertIn("MC-MERGE-REVIEW-001", output)
 
     def test_merge_review_detects_exact_owner_conflict(self):
         with tempfile.TemporaryDirectory() as tmp:

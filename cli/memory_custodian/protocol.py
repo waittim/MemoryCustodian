@@ -295,6 +295,22 @@ def protocol_metadata(manifest: str) -> dict[str, str]:
     return metadata
 
 
+def strict_protocol_metadata(manifest: str) -> dict[str, str]:
+    """Parse protocol scalars without the permissive last-value-wins fallback."""
+
+    metadata: dict[str, str] = {}
+    lines = _section_lines(manifest, "##", lambda heading: heading == PROTOCOL_SECTION_NAME)
+    for line in lines:
+        match = PROTOCOL_FIELD_RE.match(line.strip())
+        if not match:
+            continue
+        key, value = match.groups()
+        if key in metadata:
+            raise ValueError(f"Duplicate protocol metadata field: {key}")
+        metadata[key] = value.strip()
+    return metadata
+
+
 def valid_project_id(value: str | None) -> bool:
     if not value:
         return False

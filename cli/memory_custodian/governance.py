@@ -2,18 +2,28 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import hashlib
 import json
 from pathlib import Path
 
+from . import (
+    __conflict_schema_version__,
+    __entry_schema_version__,
+    __routing_schema_version__,
+    __subject_schema_version__,
+)
 from .conflicts import canonical_entries
 from .entries import ENTRY_ID_RE, StructuredEntry, validate_evidence
 from .plans import digest_text
 from .protocol import (
+    CURRENT_PROTOCOL_VERSION,
+    compare_versions,
     project_id_from_manifest,
     read_text,
     resolve_memory_dir,
     resolve_project_root,
+    strict_protocol_metadata,
     today,
 )
 from .reconciliations import (
@@ -22,16 +32,72 @@ from .reconciliations import (
     parse_reconciliations,
     validate_reconciliations,
 )
-from .subjects import load_subjects
+from .structural import active_structural_operand_issues, subject_index
+from .subjects import Subject, load_subjects
 
 
-def _project(args) -> tuple[Path, Path, str]:
+@dataclass(frozen=True)
+class GovernanceProject:
+    project_root: Path
+    memory_dir: Path
+    project_id: str
+    manifest_sha256: str
+
+
+def _project(args) -> GovernanceProject:
     project_root = resolve_project_root(args.project_root)
     memory_dir = resolve_memory_dir(project_root, args.memory_dir)
-    project_id = project_id_from_manifest(read_text(memory_dir / "manifest.md"))
+    manifest = read_text(memory_dir / "manifest.md")
+    metadata = strict_protocol_metadata(manifest)
+    version = metadata.get("protocol_version")
+    if version is None:
+        raise ValueError(
+            "Governance preview requires protocol_version metadata; run `memory-custodian migrate`."
+        )
+    comparison = compare_versions(version, CURRENT_PROTOCOL_VERSION)
+    if comparison is None:
+        raise ValueError(f"Invalid protocol version {version!r} in manifest.md.")
+    if comparison < 0:
+        raise ValueError(
+            f"Governance preview requires Protocol {CURRENT_PROTOCOL_VERSION}; "
+            f"project uses {version}. Run `memory-custodian migrate`."
+        )
+    if comparison > 0:
+        raise ValueError(
+            f"Project protocol {version} is newer than this CLI supports "
+            f"({CURRENT_PROTOCOL_VERSION}); update MemoryCustodian."
+        )
+    required = {
+        "entry_schema_version": __entry_schema_version__,
+        "subject_schema_version": __subject_schema_version__,
+        "routing_schema_version": __routing_schema_version__,
+        "conflict_schema_version": __conflict_schema_version__,
+        "subject_registry": "subjects.md",
+    }
+    for key, expected in required.items():
+        actual = metadata.get(key)
+        if actual != expected:
+            raise ValueError(
+                f"Governance preview requires {key}: {expected}; "
+                f"manifest has {actual or 'missing'}. Run `memory-custodian migrate`."
+            )
+    if not (memory_dir / "subjects.md").is_file():
+        raise ValueError(
+            "Governance preview requires the declared subjects.md registry; "
+            "run `memory-custodian init --repair`."
+        )
+    project_id = project_id_from_manifest(manifest)
     if not project_id:
-        raise ValueError("Protocol 0.7 governance preview requires manifest project_id metadata.")
-    return project_root, memory_dir, project_id
+        raise ValueError(
+            "Governance preview requires manifest project_id metadata; "
+            "run `memory-custodian migrate`."
+        )
+    return GovernanceProject(
+        project_root,
+        memory_dir,
+        project_id,
+        digest_text(manifest),
+    )
 
 
 def _entry(entries: tuple[StructuredEntry, ...], entry_id: str) -> StructuredEntry:
@@ -50,32 +116,60 @@ def _plan_id(command: str, project_id: str, payload: dict[str, object]) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
 
 
+def _entry_state(entry: StructuredEntry, memory_dir: Path) -> dict[str, str]:
+    return {
+        "entry_id": entry.entry_id,
+        "path": entry.path.relative_to(memory_dir).as_posix(),
+        "text_sha256": digest_text(entry.text),
+    }
+
+
+def _exception_relation_blockers(
+    area: StructuredEntry,
+    baseline: StructuredEntry,
+    subjects: dict[str, tuple[Subject, ...]],
+) -> list[str]:
+    blockers = [
+        f"{label} {issue.field}: {issue.message}"
+        for label, entry in (("Source", area), ("Target", baseline))
+        for issue in active_structural_operand_issues(entry, subjects)
+    ]
+    if not area.scope.startswith("area:"):
+        blockers.append("Exception source must be area-scoped.")
+    if baseline.scope != "project":
+        blockers.append("Exception target must be project-scoped.")
+    for field in ("Subject", "Facet"):
+        if area.fields.get(field, "").casefold() != baseline.fields.get(field, "").casefold():
+            blockers.append(f"Source and target must have the same {field}.")
+    if baseline.fields.get("Exception-To"):
+        blockers.append("Exception target must not itself declare Exception-To.")
+    return blockers
+
+
 def _exception_add(args) -> int:
-    _project_root, memory_dir, project_id = _project(args)
+    project = _project(args)
+    memory_dir = project.memory_dir
     entries = canonical_entries(memory_dir)
+    subjects_path = memory_dir / "subjects.md"
+    subjects = subject_index(load_subjects(memory_dir))
     area = _entry(entries, args.entry_id)
     baseline = _entry(entries, args.target_entry_id)
-    blockers: list[str] = []
-    if area.status != "active" or not area.scope.startswith("area:"):
-        blockers.append("Exception source must be an active area-scoped entry.")
-    if baseline.status != "active" or baseline.scope != "project":
-        blockers.append("Exception target must be an active project-scoped entry.")
-    for field in ("Subject", "Facet"):
-        if (
-            not area.fields.get(field)
-            or area.fields.get(field, "").casefold()
-            != baseline.fields.get(field, "").casefold()
-        ):
-            blockers.append(f"Source and target must have the same {field}.")
+    blockers = _exception_relation_blockers(area, baseline, subjects)
     current = area.fields.get("Exception-To", "")
     if current and current.casefold() != baseline.entry_id.casefold():
         blockers.append(f"Source already has Exception-To: {current}.")
+    blockers = list(dict.fromkeys(blockers))
 
     payload = {
         "source": area.entry_id,
         "target": baseline.entry_id,
         "source_sha256": digest_text(area.text),
         "target_sha256": digest_text(baseline.text),
+        "dependencies": [
+            _entry_state(area, memory_dir), _entry_state(baseline, memory_dir),
+        ],
+        "manifest_sha256": project.manifest_sha256,
+        "subjects_sha256": digest_text(read_text(subjects_path)),
         "blockers": sorted(blockers),
     }
     print("Exception-To add preview:")
@@ -95,22 +189,33 @@ def _exception_add(args) -> int:
     print("Blockers:")
     for blocker in blockers or ["none"]:
         print(f"- {blocker}")
-    print(f"Plan ID: {_plan_id('exception add', project_id, payload)}")
+    print(f"Plan ID: {_plan_id('exception add', project.project_id, payload)}")
     print("Transactional Exception-To apply requires Protocol 0.8.")
     return 0
 
 
 def _exception_remove(args) -> int:
-    _project_root, memory_dir, project_id = _project(args)
+    project = _project(args)
+    memory_dir = project.memory_dir
     entries = canonical_entries(memory_dir)
+    subjects_path = memory_dir / "subjects.md"
+    subjects = subject_index(load_subjects(memory_dir))
     area = _entry(entries, args.entry_id)
     current = area.fields.get("Exception-To", "")
-    blockers: list[str] = []
-    if area.status != "active" or not area.scope.startswith("area:"):
-        blockers.append("Exception source must be an active area-scoped entry.")
+    blockers = [
+        f"Source {issue.field}: {issue.message}"
+        for issue in active_structural_operand_issues(area, subjects)
+    ]
+    if not area.scope.startswith("area:"):
+        blockers.append("Exception source must be area-scoped.")
     if not current:
         blockers.append("Source does not have an Exception-To relation.")
     targets = [item for item in entries if item.entry_id.casefold() == current.casefold()]
+    if current and len(targets) != 1:
+        blockers.append("Exception-To target must resolve exactly once.")
+    elif len(targets) == 1:
+        blockers.extend(_exception_relation_blockers(area, targets[0], subjects))
+    blockers = list(dict.fromkeys(blockers))
     target_label = current or "none"
     resulting_review = bool(
         len(targets) == 1
@@ -123,6 +228,11 @@ def _exception_remove(args) -> int:
         "source": area.entry_id,
         "current_target": current,
         "source_sha256": digest_text(area.text),
+        "dependencies": [
+            _entry_state(entry, memory_dir) for entry in (area, *targets)
+        ],
+        "manifest_sha256": project.manifest_sha256,
+        "subjects_sha256": digest_text(read_text(subjects_path)),
         "blockers": sorted(blockers),
     }
     print("Exception-To remove preview:")
@@ -137,13 +247,15 @@ def _exception_remove(args) -> int:
     print("Blockers:")
     for blocker in blockers or ["none"]:
         print(f"- {blocker}")
-    print(f"Plan ID: {_plan_id('exception remove', project_id, payload)}")
+    print(f"Plan ID: {_plan_id('exception remove', project.project_id, payload)}")
     print("Transactional Exception-To apply requires Protocol 0.8.")
     return 0
 
 
 def _reconcile_preview(args) -> int:
-    project_root, memory_dir, project_id = _project(args)
+    project = _project(args)
+    project_root = project.project_root
+    memory_dir = project.memory_dir
     normalized_entries: dict[str, str] = {}
     for value in args.entry:
         candidate = value.strip().upper()
@@ -159,7 +271,9 @@ def _reconcile_preview(args) -> int:
     title = " ".join(args.title.split())
     if not title:
         raise ValueError("Reconciliation title must not be empty.")
-    record_seed = "\0".join([project_id, args.resolution, title, *requested, *evidence])
+    record_seed = "\0".join([
+        project.project_id, args.resolution, title, *requested, *evidence,
+    ])
     suffix = hashlib.sha256(record_seed.encode()).hexdigest()[:8]
     record_id = f"MC-REC-{today().replace('-', '')}-{suffix}"
     unit = (
@@ -187,6 +301,17 @@ def _reconcile_preview(args) -> int:
     payload = {
         "record": unit,
         "base_sha256": digest_text(read_text(path) if path.exists() else ""),
+        "entry_dependencies": [
+            _entry_state(entry, memory_dir)
+            for entry in sorted(
+                entries,
+                key=lambda item: (
+                    item.entry_id.casefold(), item.path.as_posix(), digest_text(item.text),
+                ),
+            )
+        ],
+        "manifest_sha256": project.manifest_sha256,
+        "subjects_sha256": digest_text(read_text(memory_dir / "subjects.md")),
         "blockers": blockers,
     }
     print("Reconciliation record preview:")
@@ -205,7 +330,7 @@ def _reconcile_preview(args) -> int:
     print("Blockers:")
     for blocker in blockers or ["none"]:
         print(f"- {blocker}")
-    print(f"Plan ID: {_plan_id('reconcile preview', project_id, payload)}")
+    print(f"Plan ID: {_plan_id('reconcile preview', project.project_id, payload)}")
     print("Transactional reconciliation apply requires Protocol 0.8.")
     return 0
 

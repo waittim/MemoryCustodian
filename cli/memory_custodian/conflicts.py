@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
 from .entries import StructuredEntry, parse_structured_entries
 from .reconciliations import parse_reconciliations, validate_reconciliations
-from .subjects import FACETS, load_subjects, normalize_alias, normalize_canonical_ref
+from .structural import active_structural_operand_issues, subject_index
+from .subjects import Subject, load_subjects, normalize_alias, normalize_canonical_ref
 
 
 class ConflictStatus(str, Enum):
@@ -54,12 +56,12 @@ def canonical_entries(memory_dir: Path, *, include_archive: bool = False) -> tup
     return tuple(entries)
 
 
-def _subject_findings(memory_dir: Path) -> tuple[list[ConflictFinding], dict[str, object]]:
+def _subject_findings(subject_records: Sequence[Subject]) -> tuple[list[ConflictFinding], dict[str, object]]:
     findings: list[ConflictFinding] = []
     active: dict[str, object] = {}
     refs: dict[str, str] = {}
     aliases: dict[str, str] = {}
-    for subject in load_subjects(memory_dir):
+    for subject in subject_records:
         key = subject.subject_id.casefold()
         if subject.status == "active":
             active[key] = subject
@@ -107,7 +109,9 @@ def analyze_conflicts(
     matched_areas: tuple[str, ...] = (),
     included_modules: tuple[str, ...] | None = None,
 ) -> ConflictResult:
-    findings, subjects = _subject_findings(memory_dir)
+    subject_records = load_subjects(memory_dir)
+    findings, subjects = _subject_findings(subject_records)
+    structural_subjects = subject_index(subject_records)
     entries = canonical_entries(memory_dir)
     selected_modules = set(included_modules) if included_modules is not None else None
     by_id = _entry_index(entries)
@@ -137,26 +141,16 @@ def analyze_conflicts(
             continue
         subject_id = entry.fields.get("Subject", "")
         facet = entry.fields.get("Facet", "")
-        if not subject_id or not facet:
+        operand_issues = active_structural_operand_issues(entry, structural_subjects)
+        for issue in operand_issues:
+            code = "MC-CONFLICT-005" if issue.field == "Subject" else "MC-CONFLICT-007"
             findings.append(ConflictFinding(
-                "MC-CONFLICT-007", ConflictStatus.INVALID,
-                "Managed hard-memory entry lacks Subject or Facet.",
+                code, ConflictStatus.INVALID,
+                issue.message,
                 (entry.entry_id,), subject_id, facet, (entry.scope,),
             ))
+        if operand_issues:
             continue
-        subject = subjects.get(subject_id.casefold())
-        if subject is None:
-            findings.append(ConflictFinding(
-                "MC-CONFLICT-005", ConflictStatus.INVALID,
-                "Subject reference is missing, inactive, or merged.",
-                (entry.entry_id,), subject_id, facet, (entry.scope,),
-            ))
-        if facet not in FACETS:
-            findings.append(ConflictFinding(
-                "MC-CONFLICT-007", ConflictStatus.INVALID,
-                f"Managed hard-memory entry has invalid Facet {facet!r}.",
-                (entry.entry_id,), subject_id, facet, (entry.scope,),
-            ))
         identity = (entry.scope.casefold(), subject_id.casefold(), facet.casefold())
         owners.setdefault(identity, []).append(entry)
         by_subject_facet.setdefault((subject_id.casefold(), facet.casefold()), []).append(entry)

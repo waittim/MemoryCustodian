@@ -3,10 +3,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from itertools import combinations
 from pathlib import Path
 import re
 
 from .entries import ENTRY_ID_RE, StructuredEntry
+from .structural import (
+    active_structural_operand_issues,
+    structural_identity,
+    subject_index,
+)
 from .subjects import Subject
 
 
@@ -30,6 +36,17 @@ class ReconciliationIssue:
     message: str
     record_id: str = ""
     entries: tuple[str, ...] = ()
+
+
+def reconciliation_pairs(
+    record: ReconciliationRecord,
+) -> tuple[frozenset[str], ...]:
+    """Return only the exact Entry pairs acknowledged by a valid record."""
+
+    return tuple(
+        frozenset((left.casefold(), right.casefold()))
+        for left, right in combinations(record.entries, 2)
+    )
 
 
 def _admissible_evidence(value: str) -> bool:
@@ -136,7 +153,7 @@ def validate_reconciliations(
     by_id: dict[str, list[StructuredEntry]] = {}
     for entry in entries:
         by_id.setdefault(entry.entry_id.casefold(), []).append(entry)
-    by_subject = {subject.subject_id.casefold(): subject for subject in subjects}
+    subjects_by_id = subject_index(subjects)
     issues = [ReconciliationIssue(issue) for issue in parse_issues]
     valid_records: list[ReconciliationRecord] = []
     identities: set[tuple[str, ...]] = set()
@@ -155,19 +172,27 @@ def validate_reconciliations(
         ]
         missing_or_duplicate = len(resolved) != len(record.entries)
         relation_valid = True
-        if record.resolution == "superseded":
+        relationship_resolution = record.resolution in {
+            "superseded", "exception", "subject-merged",
+        }
+        if relationship_resolution and len(record.entries) != 2:
+            relation_valid = False
+        elif record.resolution == "superseded":
             relation_valid = any(
-                left.fields.get("Superseded-By", "").casefold() == right.entry_id.casefold()
+                left.status == "superseded"
+                and right.status == "active"
+                and left.fields.get("Superseded-By", "").casefold() == right.entry_id.casefold()
                 and right.fields.get("Supersedes", "").casefold() == left.entry_id.casefold()
                 for left in resolved for right in resolved if left is not right
             )
         elif record.resolution == "exception":
             relation_valid = any(
-                left.fields.get("Exception-To", "").casefold() == right.entry_id.casefold()
-                and left.status == "active"
-                and right.status == "active"
+                not active_structural_operand_issues(left, subjects_by_id)
+                and not active_structural_operand_issues(right, subjects_by_id)
+                and left.fields.get("Exception-To", "").casefold() == right.entry_id.casefold()
                 and left.scope.startswith("area:")
                 and right.scope == "project"
+                and not right.fields.get("Exception-To")
                 and left.fields.get("Subject", "").casefold()
                 == right.fields.get("Subject", "").casefold()
                 and left.fields.get("Facet", "").casefold()
@@ -176,14 +201,32 @@ def validate_reconciliations(
             )
         elif record.resolution == "subject-merged":
             relation_valid = any(
-                getattr(by_subject.get(left.fields.get("Subject", "").casefold()), "status", "") == "merged"
+                len(subjects_by_id.get(left.fields.get("Subject", "").casefold(), ())) == 1
                 and getattr(
-                    by_subject.get(left.fields.get("Subject", "").casefold()),
+                    subjects_by_id[left.fields.get("Subject", "").casefold()][0],
+                    "status",
+                    "",
+                ) == "merged"
+                and getattr(
+                    subjects_by_id[left.fields.get("Subject", "").casefold()][0],
                     "merged_into",
                     "",
                 ).casefold() == right.fields.get("Subject", "").casefold()
+                and len(subjects_by_id.get(right.fields.get("Subject", "").casefold(), ())) == 1
+                and subjects_by_id[right.fields.get("Subject", "").casefold()][0].status == "active"
                 for left in resolved for right in resolved if left is not right
             )
+
+        distinct_valid = True
+        if record.resolution == "distinct" and not missing_or_duplicate:
+            structural_identities: list[tuple[str, str, str]] = []
+            for entry in resolved:
+                if active_structural_operand_issues(entry, subjects_by_id):
+                    distinct_valid = False
+                    break
+                structural_identities.append(structural_identity(entry))
+            if len(set(structural_identities)) != len(structural_identities):
+                distinct_valid = False
 
         reasons: list[str] = []
         if duplicate_id:
@@ -192,8 +235,19 @@ def validate_reconciliations(
             reasons.append("duplicate active reconciliation identity")
         if missing_or_duplicate:
             reasons.append("referenced Entry IDs must each resolve exactly once")
-        if not relation_valid:
+        if relationship_resolution and len(record.entries) != 2:
+            reasons.append(
+                f"{record.resolution} resolution requires exactly two Entry IDs"
+            )
+        if not relation_valid and not (
+            relationship_resolution and len(record.entries) != 2
+        ):
             reasons.append(f"{record.resolution} resolution is inconsistent with current relations")
+        if not distinct_valid:
+            reasons.append(
+                "distinct resolution requires active entries with different "
+                "Scope + Subject + Facet identities; change identity or lifecycle relations"
+            )
         if reasons:
             issues.append(ReconciliationIssue(
                 "; ".join(reasons), record.record_id, record.entries,

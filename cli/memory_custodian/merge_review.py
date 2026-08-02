@@ -11,6 +11,7 @@ from .reconciliations import (
     ReconciliationIssue,
     ReconciliationRecord,
     parse_reconciliations,
+    reconciliation_pairs,
     validate_reconciliations,
 )
 from .subjects import Subject, normalize_alias, normalize_canonical_ref, parse_subjects
@@ -206,14 +207,13 @@ def merge_review(project_root: Path, memory_dir: Path, target_ref: str) -> Merge
                 f"MC-MERGE-003 concurrent structural owner {key}: {left.entry_id}, {right.entry_id}"
             )
 
-    resolved_identities = {
-        frozenset(value.casefold() for value in record.entries)
-        for record in resolution_records
+    resolved_pairs = {
+        pair for record in resolution_records for pair in reconciliation_pairs(record)
     }
 
     def reconciled(left: StructuredEntry, right: StructuredEntry) -> bool:
         pair = frozenset({left.entry_id.casefold(), right.entry_id.casefold()})
-        if any(pair <= identity for identity in resolved_identities):
+        if pair in resolved_pairs:
             return True
         return (
             left.fields.get("Exception-To", "").casefold() == right.entry_id.casefold()

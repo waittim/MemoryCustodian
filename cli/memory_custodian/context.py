@@ -28,7 +28,6 @@ from .routes import (
     merge_routed_modules,
     normalize_input_path,
     parse_optional_module_index,
-    task_interpretations,
 )
 
 
@@ -221,12 +220,7 @@ def route_context(
     }
     version = protocol_metadata(manifest).get("protocol_version", "0.5")
     declarations = parse_optional_module_index(manifest, legacy_compatible=version != "0.7")
-    interpretations = task_interpretations(supplied_task)
-    ambiguous = len(interpretations) > 1
-    canonical = (
-        f"<ambiguous: {', '.join(interpretations)}>"
-        if ambiguous else interpretations[0]
-    )
+    canonical = canonical_task(supplied_task)
     declared_slugs = {
         kind: {item.slug for item in declarations if item.module_type == kind}
         for kind in ("rules", "profiles", "areas")
@@ -249,14 +243,13 @@ def route_context(
         item for item in declarations
         if item.module_type == "areas" and "path" in item.activation
     ]
-    substantial = any(item in SUBSTANTIAL_TASKS for item in interpretations)
-    if substantial and path_routed and not normalized_paths and not requested["areas"]:
+    if canonical in SUBSTANTIAL_TASKS and path_routed and not normalized_paths and not requested["areas"]:
         incomplete.append("area-path-scope")
         warnings.append(
             "Enabled path-routed areas were not evaluated because no paths or explicit areas were supplied."
         )
 
-    base = manifest_task_modules(memory_dir, "default" if ambiguous else supplied_task)
+    base = manifest_task_modules(memory_dir, supplied_task)
     optional = [
         _optional_route(
             declaration,
@@ -266,22 +259,67 @@ def route_context(
         )
         for declaration in declarations
     ]
-    if ambiguous:
+    exclusive_declarations: dict[str, list[ModuleDeclaration]] = {}
+    path_activated: dict[str, list[str]] = {}
+    for declaration in declarations:
+        if not declaration.exclusive_group:
+            continue
+        exclusive_declarations.setdefault(declaration.exclusive_group, []).append(declaration)
+        if any(
+            glob_matches(pattern, path.value)
+            for pattern in declaration.paths for path in normalized_paths
+        ):
+            path_activated.setdefault(declaration.exclusive_group, []).append(
+                declaration.module_id
+            )
+    ambiguous_groups: dict[str, tuple[str, ...]] = {}
+    selected_groups: dict[str, str] = {}
+    active_by_group: dict[str, set[str]] = {}
+    for group, group_declarations in exclusive_declarations.items():
+        explicit_ids = [
+            declaration.module_id
+            for declaration in group_declarations
+            if declaration.slug in requested["areas"]
+            and declaration.activation == "path-or-explicit"
+        ]
+        active_ids = {*path_activated.get(group, ()), *explicit_ids}
+        active_by_group[group] = active_ids
+        if len(explicit_ids) == 1:
+            selected_groups[group] = explicit_ids[0]
+        elif len(active_ids) > 1:
+            ambiguous_groups[group] = tuple(sorted(active_ids))
+    suppressed_modules = {
+        module_id
+        for group, selected in selected_groups.items()
+        for module_id in active_by_group[group]
+        if module_id != selected
+    }
+    if suppressed_modules:
+        optional = [
+            replace(
+                module,
+                reasons=(RouteReason.EXCLUSIVE_SELECTION,),
+                disposition=ModuleDisposition.SKIPPED,
+                details=("another area in the exclusive group was explicitly selected",),
+            )
+            if module.module_id in suppressed_modules else module
+            for module in optional
+        ]
+    if ambiguous_groups:
+        ambiguous_modules = {
+            module_id for module_ids in ambiguous_groups.values() for module_id in module_ids
+        }
         optional = [
             replace(
                 module,
                 reasons=(RouteReason.AMBIGUOUS,),
+                disposition=ModuleDisposition.SKIPPED,
                 details=(
-                    "legacy task alias maps to mutually exclusive canonical tasks: "
-                    + ", ".join(interpretations),
+                    "multiple activation sources selected mutually exclusive area routes",
                 ),
             )
-            if declaration.module_type == "rules"
-            and "task" in declaration.activation
-            and any(task in declaration.tasks for task in interpretations)
-            and module.disposition == ModuleDisposition.SKIPPED
-            else module
-            for declaration, module in zip(declarations, optional)
+            if module.module_id in ambiguous_modules else module
+            for module in optional
         ]
     modules = merge_routed_modules([*base, *optional, *missing_explicit])
     results: list[RoutedModule] = []
@@ -312,16 +350,17 @@ def route_context(
     if any(item.disposition == ModuleDisposition.MISSING_REQUIRED for item in results):
         incomplete.append("required-module-missing")
         warnings.append("One or more required routed modules are missing.")
-    if ambiguous:
-        incomplete.append("task-route-interpretation")
-        warnings.append(
-            f"{RouteReason.AMBIGUOUS.value}: Legacy task alias has multiple canonical route interpretations: "
-            + ", ".join(interpretations)
-            + ". Supply a canonical --task value."
-        )
+    if ambiguous_groups:
+        incomplete.append("mutually-exclusive-area-routes")
+        for group, module_ids in sorted(ambiguous_groups.items()):
+            warnings.append(
+                f"{RouteReason.AMBIGUOUS.value}: Multiple activations select mutually exclusive "
+                f"area routes in group {group!r}: {', '.join(module_ids)}. "
+                "Supply an explicit area or narrower paths."
+            )
     completeness = (
         RoutingCompleteness.AMBIGUOUS
-        if ambiguous else RoutingCompleteness.INCOMPLETE if incomplete else RoutingCompleteness.COMPLETE
+        if ambiguous_groups else RoutingCompleteness.INCOMPLETE if incomplete else RoutingCompleteness.COMPLETE
     )
     if any(item.disposition == ModuleDisposition.INVALID for item in results):
         completeness = RoutingCompleteness.INVALID

@@ -43,14 +43,7 @@ TASK_ALIASES = {
     "forget": "maintenance",
 }
 
-# Reserved Protocol 0.7 compatibility aliases are accepted inputs but do not
-# silently choose one canonical interpretation. Default manifests define no
-# mutually-exclusive route policy, so this explicit table is the normative
-# reachable AMBIGUOUS case.
-AMBIGUOUS_TASK_ALIASES = {
-    "development": ("planning", "implementation"),
-}
-TASK_INPUTS = tuple(sorted((*TASK_ALIASES, *AMBIGUOUS_TASK_ALIASES)))
+TASK_INPUTS = tuple(sorted(TASK_ALIASES))
 
 SUBSTANTIAL_TASKS = frozenset({"planning", "implementation", "artifact", "history"})
 
@@ -73,6 +66,7 @@ class RouteReason(str, Enum):
     NO_PATH_MATCH = "MC-SKIP-NO-PATH-MATCH"
     NOT_REQUESTED = "MC-SKIP-NOT-REQUESTED"
     SCOPE_MISSING = "MC-SKIP-SCOPE-MISSING"
+    EXCLUSIVE_SELECTION = "MC-SKIP-EXCLUSIVE-SELECTION"
     MISSING_REQUIRED = "MC-MISSING-REQUIRED"
     OPTIONAL_ABSENT = "MC-MISSING-OPTIONAL"
     BUDGET_OMISSION = "MC-OMIT-BUDGET"
@@ -96,6 +90,7 @@ class ModuleDeclaration:
     tasks: tuple[str, ...] = ()
     paths: tuple[str, ...] = ()
     description: str = ""
+    exclusive_group: str = ""
 
     @property
     def slug(self) -> str:
@@ -163,16 +158,6 @@ def canonical_task(value: str) -> str:
         raise ValueError(f"Unsupported task route: {value}") from exc
 
 
-def task_interpretations(value: str) -> tuple[str, ...]:
-    try:
-        normalized = value.casefold()
-    except AttributeError as exc:
-        raise ValueError(f"Unsupported task route: {value}") from exc
-    if normalized in AMBIGUOUS_TASK_ALIASES:
-        return AMBIGUOUS_TASK_ALIASES[normalized]
-    return (canonical_task(normalized),)
-
-
 def normalize_module_identity(value: str) -> str:
     raw = value.replace("\\", "/")
     path = PurePosixPath(raw)
@@ -213,7 +198,7 @@ def merge_routed_modules(modules: list[RoutedModule]) -> list[RoutedModule]:
 _MODULE_LINE_RE = re.compile(r"^- `([^`]+)`(?:\s*:\s*(.*))?$")
 _META_LINE_RE = re.compile(r"^  - ([a-z-]+):\s*(.*)$")
 _CODE_SPAN_RE = re.compile(r"`([^`]+)`")
-_ALLOWED_KEYS = {"activation", "tasks", "paths", "description"}
+_ALLOWED_KEYS = {"activation", "tasks", "paths", "description", "exclusive-group"}
 _ACTIVATIONS = {"task", "explicit-only", "task-or-explicit", "path", "path-or-explicit"}
 _SECTION_TYPES = {
     "### Enabled rules": "rules",
@@ -295,7 +280,9 @@ def normalize_input_path(project_root: Path, value: str) -> NormalizedPath:
     return NormalizedPath(normalized, not candidate.exists())
 
 
-def _metadata_values(raw: dict[str, str], module_id: str) -> tuple[str, tuple[str, ...], tuple[str, ...], str]:
+def _metadata_values(
+    raw: dict[str, str], module_id: str,
+) -> tuple[str, tuple[str, ...], tuple[str, ...], str, str]:
     activation = raw.get("activation", "")
     if activation not in _ACTIVATIONS:
         raise ValueError(f"{module_id}: invalid activation {activation!r}")
@@ -314,7 +301,10 @@ def _metadata_values(raw: dict[str, str], module_id: str) -> tuple[str, tuple[st
             raise ValueError(f"{module_id}: paths must be comma-separated Markdown code spans")
         paths = tuple(dict.fromkeys(validate_glob(item) for item in spans))
     description = raw.get("description", "")
-    return activation, tasks, paths, description
+    exclusive_group = raw.get("exclusive-group", "")
+    if exclusive_group and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", exclusive_group):
+        raise ValueError(f"{module_id}: invalid exclusive-group {exclusive_group!r}")
+    return activation, tasks, paths, description, exclusive_group
 
 
 def _validate_declaration(declaration: ModuleDeclaration) -> None:
@@ -327,11 +317,15 @@ def _validate_declaration(declaration: ModuleDeclaration) -> None:
             raise ValueError(f"{declaration.module_id}: task activation requires tasks metadata")
         if declaration.paths:
             raise ValueError(f"{declaration.module_id}: rules forbid paths metadata")
+        if declaration.exclusive_group:
+            raise ValueError(f"{declaration.module_id}: rules forbid exclusive-group metadata")
     elif kind == "profiles":
         if activation != "explicit-only":
             raise ValueError(f"{declaration.module_id}: profiles must use explicit-only activation")
         if declaration.tasks or declaration.paths:
             raise ValueError(f"{declaration.module_id}: profiles forbid tasks and paths metadata")
+        if declaration.exclusive_group:
+            raise ValueError(f"{declaration.module_id}: profiles forbid exclusive-group metadata")
     elif kind == "areas":
         if activation not in {"path", "path-or-explicit", "explicit-only"}:
             raise ValueError(f"{declaration.module_id}: areas do not support {activation!r}")
@@ -339,6 +333,10 @@ def _validate_declaration(declaration: ModuleDeclaration) -> None:
             raise ValueError(f"{declaration.module_id}: path activation requires paths metadata")
         if declaration.tasks:
             raise ValueError(f"{declaration.module_id}: areas forbid tasks metadata")
+        if declaration.exclusive_group and "path" not in activation:
+            raise ValueError(
+                f"{declaration.module_id}: exclusive-group requires path activation"
+            )
 
 
 def parse_optional_module_index(manifest: str, *, legacy_compatible: bool = False) -> tuple[ModuleDeclaration, ...]:
@@ -377,8 +375,13 @@ def parse_optional_module_index(manifest: str, *, legacy_compatible: bool = Fals
                 module_id, current_type, "explicit-only", description=legacy_description
             )
         else:
-            activation, tasks, paths, description = _metadata_values(current_meta, module_id)
-            declaration = ModuleDeclaration(module_id, current_type, activation, tasks, paths, description)
+            activation, tasks, paths, description, exclusive_group = _metadata_values(
+                current_meta, module_id,
+            )
+            declaration = ModuleDeclaration(
+                module_id, current_type, activation, tasks, paths, description,
+                exclusive_group,
+            )
         _validate_declaration(declaration)
         declarations.append(declaration)
         seen.add(module_id)
@@ -429,4 +432,6 @@ def render_optional_declaration(declaration: ModuleDeclaration) -> str:
         lines.append("  - paths: " + ", ".join(f"`{item}`" for item in declaration.paths))
     if declaration.description:
         lines.append(f"  - description: {declaration.description}")
+    if declaration.exclusive_group:
+        lines.append(f"  - exclusive-group: {declaration.exclusive_group}")
     return "\n".join(lines)
