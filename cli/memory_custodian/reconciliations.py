@@ -78,7 +78,7 @@ def _subject_merged_pair_valid(
         historical.fields.get("Subject", "").casefold(), (),
     )
     return (
-        historical.status in {"superseded", "promoted"}
+        historical.status == "superseded"
         and VALID_SCOPES_RE.fullmatch(historical.scope) is not None
         and historical.fields.get("Facet", "") in FACETS
         and len(source_subjects) == 1

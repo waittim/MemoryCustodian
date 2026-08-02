@@ -11,9 +11,9 @@ from .protocol import (
     estimate_tokens,
     manifest_task_modules,
     parse_markdown_units,
-    protocol_metadata,
     render_markdown_document,
     resolve_manifest_memory_path,
+    strict_protocol_metadata,
 )
 from .routes import (
     ModuleDeclaration,
@@ -218,7 +218,9 @@ def route_context(
         "profiles": _requested(profiles),
         "areas": _requested(areas),
     }
-    version = protocol_metadata(manifest).get("protocol_version", "0.5")
+    version = strict_protocol_metadata(
+        manifest, allow_missing_section=True,
+    ).get("protocol_version", "0.5")
     declarations = parse_optional_module_index(manifest, legacy_compatible=version != "0.7")
     canonical = canonical_task(supplied_task)
     declared_slugs = {

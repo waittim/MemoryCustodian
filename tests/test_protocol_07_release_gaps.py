@@ -59,6 +59,60 @@ def subject_unit(subject_id: str, title: str, canonical_ref: str = "") -> str:
 
 
 class RoutingAndQualityReleaseTests(unittest.TestCase):
+    def test_pre_metadata_legacy_routing_remains_compatible(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            manifest = Path(tmp) / "docs/memory/manifest.md"
+            manifest.write_text(
+                re.sub(
+                    r"(?ms)^## MemoryCustodian Protocol\n.*?(?=^## Trust boundary)",
+                    "",
+                    manifest.read_text(encoding="utf-8"),
+                ),
+                encoding="utf-8",
+            )
+
+            read_code, read_output, _read_error = capture([
+                "read", "--task", "implementation", "--strict-routing",
+                "--names-only", "--project-root", tmp,
+            ])
+            self.assertEqual(read_code, 0)
+            self.assertIn("Routing completeness: COMPLETE", read_output)
+
+            check_code, check_output, _check_error = capture([
+                "check", "--routing", "--project-root", tmp,
+            ])
+            self.assertEqual(check_code, 0)
+            self.assertNotIn("MC-ROUTING-007", check_output)
+
+    def test_duplicate_protocol_section_invalidates_strict_read_and_routing_check(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            manifest = Path(tmp) / "docs/memory/manifest.md"
+            manifest.write_text(
+                manifest.read_text(encoding="utf-8").rstrip()
+                + "\n\n## MEMORYCUSTODIAN PROTOCOL\n- protocol_version: 0.6\n",
+                encoding="utf-8",
+            )
+
+            read_code, read_output, read_error = capture([
+                "read", "--task", "implementation", "--strict-routing",
+                "--explain", "--names-only", "--project-root", tmp,
+            ])
+            self.assertEqual(read_code, 2)
+            self.assertIn("Routing completeness: INVALID", read_output)
+            self.assertIn("MC-ROUTE-INVALID", read_output)
+            self.assertIn("exactly one MemoryCustodian Protocol H2 section", read_error)
+
+            check_code, check_output, _check_error = capture([
+                "check", "--routing", "--project-root", tmp,
+            ])
+            self.assertEqual(check_code, 1)
+            self.assertIn("MC-ROUTING-007 ERROR", check_output)
+            self.assertIn("exactly one MemoryCustodian Protocol H2 section", check_output)
+
     def test_mutually_exclusive_path_routes_are_reachably_ambiguous(self):
         with tempfile.TemporaryDirectory() as tmp:
             with redirect_stdout(StringIO()):
@@ -748,6 +802,11 @@ class MergeAndDeterminismReleaseTests(unittest.TestCase):
                 ),
                 "Malformed protocol metadata line",
             ),
+            (
+                lambda text: text.rstrip()
+                + "\n\n## MEMORYCUSTODIAN PROTOCOL\n- protocol_version: 0.6\n",
+                "exactly one MemoryCustodian Protocol H2 section",
+            ),
         )
         for mutate, expected in cases:
             with self.subTest(expected=expected), tempfile.TemporaryDirectory() as tmp:
@@ -875,6 +934,18 @@ class MergeAndDeterminismReleaseTests(unittest.TestCase):
             valid_result = analyze_conflicts(memory)
             self.assertFalse(
                 any(item.code == "MC-CONFLICT-008" for item in valid_result.findings)
+            )
+
+            unsupported_promoted = historical.replace(
+                "Status: superseded", "Status: promoted",
+            )
+            (memory / "decisions.md").write_text(
+                "# Decisions\n\n" + unsupported_promoted + "\n" + valid_current + "\n",
+                encoding="utf-8",
+            )
+            promoted_result = analyze_conflicts(memory)
+            self.assertTrue(
+                any(item.code == "MC-CONFLICT-008" for item in promoted_result.findings)
             )
 
     def test_invalid_target_reconciliation_cannot_suppress_merge_review(self):

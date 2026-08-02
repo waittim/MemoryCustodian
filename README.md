@@ -417,17 +417,20 @@ different active `Scope + Subject + Facet` identities; it cannot waive an exact 
 Conflict analysis, reconciliation validation, and governance previews share the same active structural-operand
 checks for scope, uniquely resolved active Subject, and canonical Facet.
 `superseded` additionally requires a structurally valid active replacement with the same identity as the historical
-entry. `subject-merged` permits a historical source to retain its merged Subject, but requires a structurally valid
-active target with matching Scope and Facet.
+entry. `subject-merged` permits a superseded historical source to retain its merged Subject, but requires a
+structurally valid active target with matching Scope and Facet. Promoted provisional identity is not part of the
+Protocol 0.7 reconciliation contract.
 
 `exception add` and `exception remove` provide stable, blocker-aware `Exception-To` previews. `reconcile preview`
 renders a canonical record, complete entry inventory, relation-consistency blockers, and stable Plan ID. These are
 read-only Protocol 0.7 workflows: cross-file apply still requires the Protocol 0.8 transaction journal. They reject
-older/newer protocols, empty or malformed protocol scalars, duplicate protocol fields, and missing or mismatched
-Entry, Subject, routing, or conflict schema metadata. Exception removal only predicts the resulting overlap review
-after the current relation passes all blockers. Their Plan IDs
+older/newer protocols, duplicate Protocol H2 sections, empty or malformed protocol scalars, duplicate protocol
+fields, and missing or mismatched Entry, Subject, routing, or conflict schema metadata. Exception removal only
+predicts the resulting overlap review after the current relation passes all blockers. Their Plan IDs
 bind the manifest plus every Entry, registry, and reconciliation dependency used to render the preview, so the
 identifier changes whenever its observable decision state changes.
+The same strict Protocol metadata parser gates `read --strict-routing`, `check --routing`, and governance previews;
+one manifest cannot be valid in routing while invalid in governance.
 
 When Git is available, `check --conflicts --merge-base <ref>` compares semantic units changed on both sides. It
 distinguishes deterministic collisions from concurrent hard-memory changes requiring semantic reconciliation.

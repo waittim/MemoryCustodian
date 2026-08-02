@@ -296,9 +296,25 @@ def protocol_metadata(manifest: str) -> dict[str, str]:
     return metadata
 
 
-def strict_protocol_metadata(manifest: str) -> dict[str, str]:
+def strict_protocol_metadata(
+    manifest: str,
+    *,
+    allow_missing_section: bool = False,
+) -> dict[str, str]:
     """Parse protocol scalars without silent malformed or duplicate fields."""
 
+    section_count = sum(
+        1
+        for line in manifest.splitlines()
+        if line.strip().startswith("## ")
+        and _normalize_heading(line) == PROTOCOL_SECTION_NAME
+    )
+    if section_count == 0 and allow_missing_section:
+        return {}
+    if section_count != 1:
+        raise ValueError(
+            "manifest.md must contain exactly one MemoryCustodian Protocol H2 section"
+        )
     metadata: dict[str, str] = {}
     lines = _section_lines(manifest, "##", lambda heading: heading == PROTOCOL_SECTION_NAME)
     for line in lines:

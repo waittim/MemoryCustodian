@@ -59,14 +59,16 @@ memory-custodian check --conflicts --merge-base origin/main  # when Git/ref is a
 - Use one active structural-operand validator across conflict analysis, reconciliation, and governance previews:
   each current owner must be active, have valid scope and Facet, and resolve to exactly one active Subject.
 - Apply lifecycle-aware variants for historical relations: validate the active supersession replacement; for
-  Subject merge, allow the historical source's merged Subject but validate the active target and matching identity.
+  Subject merge, allow only a superseded historical source's merged Subject and validate the active target and
+  matching identity. Do not treat promoted Provisional-Subject/Provisional-Facet as Protocol 0.7 reconciliation input.
 - In merge review, validate reconciliation records against each branch's own Entry and Subject graph. Do not reuse
   a syntax-only or merge-base acknowledgement to suppress review of later changes, and exempt only exact validated
   Entry pairs rather than arbitrary subsets of a record.
 - Governance preview Plan IDs must bind the exact protocol/schema metadata and every manifest, Entry, Subject, path,
   and reconciliation dependency used in the rendered result. Reject duplicate protocol scalar fields before Entry
-  lookup instead of accepting the last value, and reject empty or malformed protocol bullets rather than skipping
-  them. Do not claim a resulting governance state while blockers remain.
+  lookup instead of accepting the last value. Require exactly one normalized Protocol H2 section, and reject empty
+  or malformed protocol bullets rather than skipping them. Do not claim a resulting governance state while blockers
+  remain. Apply the same metadata gate to strict reads, routing checks, and governance previews.
 
 ## Scope And Portability
 

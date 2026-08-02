@@ -17,6 +17,7 @@ from .protocol import (
     optional_index_paths,
     parse_manifest_task_file_specs,
     protocol_metadata,
+    strict_protocol_metadata,
     valid_project_id,
     resolve_manifest_memory_path,
     resolve_memory_dir,
@@ -79,9 +80,13 @@ def _manifest_mentions_required_policy(text: str) -> list[str]:
 
 def _check_protocol_metadata(text: str) -> list[str]:
     issues: list[str] = []
-    metadata = protocol_metadata(text)
-    if not metadata:
+    permissive = protocol_metadata(text)
+    if not permissive:
         return ["manifest.md: missing MemoryCustodian Protocol metadata; run `memory-custodian migrate --apply`"]
+    try:
+        metadata = strict_protocol_metadata(text)
+    except ValueError as exc:
+        return [f"manifest.md: invalid protocol metadata: {exc}"]
     version = metadata.get("protocol_version")
     if not version:
         return ["manifest.md: missing protocol_version; run `memory-custodian migrate --apply`"]
