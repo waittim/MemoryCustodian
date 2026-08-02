@@ -66,6 +66,8 @@ class Subject:
     evidence: tuple[str, ...]
     text: str
     path: Path
+    merged_into: str | None = None
+    merged_from: tuple[str, ...] = ()
 
 
 def normalize_alias(value: str) -> str:
@@ -153,18 +155,21 @@ def parse_subjects(path: Path, text: str) -> list[Subject]:
         fields: dict[str, str] = {}
         aliases: list[str] = []
         evidence: list[str] = []
+        merged_from: list[str] = []
         list_field: str | None = None
         for line in section.splitlines()[1:]:
             field = _FIELD_RE.match(line)
             if field:
                 key, field_value = field.group(1), (field.group(2) or "").strip()
                 fields[key] = field_value
-                list_field = key if key in {"Aliases", "Evidence"} else None
+                list_field = key if key in {"Aliases", "Evidence", "Merged-From"} else None
                 continue
             if line.startswith("- ") and list_field == "Aliases":
                 aliases.append(line[2:].strip())
             elif line.startswith("- ") and list_field == "Evidence":
                 evidence.append(line[2:].strip())
+            elif line.startswith("- ") and list_field == "Merged-From":
+                merged_from.append(line[2:].strip())
             elif line.strip():
                 list_field = None
         subjects.append(
@@ -178,6 +183,8 @@ def parse_subjects(path: Path, text: str) -> list[Subject]:
                 tuple(evidence),
                 section,
                 path,
+                fields.get("Merged-Into") or None,
+                tuple(merged_from),
             )
         )
     return subjects
@@ -242,8 +249,10 @@ def validate_subject_registry(memory_dir: Path, project_root: Path) -> list[str]
         if key in ids:
             issues.append(f"subjects.md: duplicate Subject ID {subject.subject_id}")
         ids[key] = subject.subject_id
-        if subject.status != "active":
+        if subject.status not in {"active", "merged"}:
             issues.append(f"subjects.md: {subject.subject_id} has invalid Status {subject.status!r}")
+        if subject.status == "merged" and not subject.merged_into:
+            issues.append(f"subjects.md: {subject.subject_id} merged Subject lacks Merged-Into")
         try:
             validate_subject_kind(subject.kind)
         except ValueError as exc:
@@ -252,6 +261,8 @@ def validate_subject_registry(memory_dir: Path, project_root: Path) -> list[str]
             validate_evidence(subject.evidence, project_root, allow_missing=True)
         except ValueError as exc:
             issues.append(f"subjects.md: {subject.subject_id}: {exc}")
+        if subject.status != "active":
+            continue
         for alias in (subject.title, *subject.aliases):
             normalized = normalize_alias(alias)
             owner = aliases.get(normalized)
@@ -272,4 +283,13 @@ def validate_subject_registry(memory_dir: Path, project_root: Path) -> list[str]
                     f"subjects.md: Canonical-Ref {normalized_ref!r} is owned by both {owner} and {subject.subject_id}"
                 )
             refs[normalized_ref] = subject.subject_id
+    by_id = {item.subject_id.casefold(): item for item in subjects}
+    for subject in subjects:
+        if subject.status != "merged" or not subject.merged_into:
+            continue
+        target = by_id.get(subject.merged_into.casefold())
+        if target is None or target.status != "active" or target.subject_id.casefold() == subject.subject_id.casefold():
+            issues.append(
+                f"subjects.md: {subject.subject_id} Merged-Into must reference a different active Subject"
+            )
     return issues

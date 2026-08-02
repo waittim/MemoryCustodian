@@ -24,6 +24,7 @@ from .protocol import (
     manifest_with_current_protocol_metadata,
     manifest_with_current_task_routing,
     manifest_with_optional_index,
+    manifest_with_protocol_07_optional_routes,
     optional_index_paths,
     project_id_from_manifest,
     protocol_metadata,
@@ -161,7 +162,8 @@ def _build_plan(project_root: Path, memory_dir: Path) -> tuple[MutationPlan, lis
                 "",
             ]
             seeded = "\n".join(lines).rstrip() + "\n"
-    updated, metadata_changed = manifest_with_current_protocol_metadata(seeded)
+    routed, optional_routes_changed, legacy_optional_count = manifest_with_protocol_07_optional_routes(seeded)
+    updated, metadata_changed = manifest_with_current_protocol_metadata(routed)
     updated, routing_changed = manifest_with_current_task_routing(updated)
     updated, index_changed = manifest_with_optional_index(updated)
     mutations: list[TextMutation] = []
@@ -169,11 +171,13 @@ def _build_plan(project_root: Path, memory_dir: Path) -> tuple[MutationPlan, lis
     if updated != original:
         mutations.append(TextMutation(manifest_path, updated))
     if metadata_changed or updated != original:
-        changes.append("manifest.md: upgrade protocol metadata to 0.6 and preserve/generate project_id")
+        changes.append("manifest.md: upgrade protocol metadata to 0.7 and preserve/generate project_id")
     if routing_changed:
         changes.append("manifest.md: load decisions.md for implementation, execution, and debugging")
     if index_changed:
         changes.append("manifest.md: add optional module index")
+    if optional_routes_changed and legacy_optional_count:
+        changes.append("manifest.md: preserve legacy optional descriptions with explicit-only activation")
 
     subjects_path = memory_dir / "subjects.md"
     if not subjects_path.exists():
@@ -225,7 +229,7 @@ def _build_plan(project_root: Path, memory_dir: Path) -> tuple[MutationPlan, lis
                 changelog,
                 changelog_text(
                     changelog.read_text(encoding="utf-8"),
-                    "Migrated project memory to Protocol 0.6 without rewriting legacy freeform units.",
+                    "Migrated project memory to Protocol 0.7 without rewriting legacy freeform units.",
                 ),
             )
         )
@@ -233,6 +237,8 @@ def _build_plan(project_root: Path, memory_dir: Path) -> tuple[MutationPlan, lis
     for report in manual_reports:
         warnings.append(f"Manual migration recommended for {report}.")
     warnings.append("Legacy top-level bullets remain readable and are not mechanically rewritten.")
+    if legacy_optional_count:
+        warnings.append("Manual automatic-route mapping required for migrated optional modules.")
     if migrated_count or any("stable area IDs" in change for change in changes):
         warnings.append(
             "Manual Subject assignment required: review migrated managed entries, create explicit Subjects, "
@@ -274,7 +280,7 @@ def run(args) -> int:
         print("Dry run only. Re-run with --apply --confirm-plan <PLAN_ID>.")
         return 0
     if not args.confirm_plan:
-        raise ValueError("Protocol 0.6 migration apply requires --confirm-plan <PLAN_ID>.")
+        raise ValueError("Protocol 0.7 migration apply requires --confirm-plan <PLAN_ID>.")
 
     with project_mutation_guard(
         project_root,

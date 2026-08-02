@@ -6,6 +6,7 @@ from dataclasses import dataclass
 import hashlib
 from pathlib import Path
 import re
+import subprocess
 import uuid
 
 from .entries import parse_structured_entries
@@ -47,7 +48,7 @@ class FilePlan:
     blockers: tuple[MarkdownUnit, ...]
 
 
-def _target_files(memory_dir: Path, mode: str) -> list[Path]:
+def _target_files(memory_dir: Path, mode: str, *, include_do_not_use: bool = False) -> list[Path]:
     excluded = {"manifest.md", "do-not-use.md"}
     if mode == "purge":
         candidates = iter_markdown_files(memory_dir, include_archive=True)
@@ -63,7 +64,26 @@ def _target_files(memory_dir: Path, mode: str) -> list[Path]:
         relative = path.relative_to(memory_dir).as_posix()
         if relative in active_core or relative in enabled:
             candidates.add(path)
-    return sorted(path for path in candidates if path.name != "README.md" and path.name != "do-not-use.md")
+    return sorted(
+        path for path in candidates
+        if path.name != "README.md" and (include_do_not_use or path.name != "do-not-use.md")
+    )
+
+
+def _history_check(project_root: Path, memory_dir: Path, selector: str, requested: bool) -> str:
+    if not requested:
+        return "not-requested"
+    try:
+        relative = memory_dir.relative_to(project_root).as_posix()
+        result = subprocess.run(
+            ["git", "log", "--all", "--format=%H", f"-S{selector}", "--", relative],
+            cwd=project_root, text=True, capture_output=True, check=False, timeout=30,
+        )
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return "unavailable"
+    if result.returncode != 0:
+        return "unavailable"
+    return "reachable-copy-detected" if result.stdout.strip() else "no-reachable-copy-detected"
 
 
 def _remove_units(text: str, topic: str) -> tuple[str, tuple[MarkdownUnit, ...], tuple[MarkdownUnit, ...]]:
@@ -255,7 +275,7 @@ def _build_forget_mutation_plan(
     privacy_nonce: str | None = None,
 ) -> MutationPlan:
     topic = args.topic.strip()
-    targets = _target_files(memory_dir, args.mode)
+    targets = _target_files(memory_dir, args.mode, include_do_not_use=bool(getattr(args, "entry_id", None)))
     plans: list[FilePlan] = []
     for path in targets:
         original = read_text(path)
@@ -330,6 +350,7 @@ def _build_forget_mutation_plan(
         active_matches=active_matches or bool(tombstone_updated),
         archive_matches=archive_matches,
         has_mutations=bool(writes),
+        history_check_status=getattr(args, "history_check_status", "not-requested"),
     )
     return MutationPlan(
         "forget",
@@ -362,11 +383,20 @@ def _build_forget_mutation_plan(
 
 
 def run(args) -> int:
+    if bool(args.topic) == bool(getattr(args, "entry_id", None)):
+        raise ValueError("Provide exactly one forget selector: a topic or --id <ENTRY_ID>.")
+    project_root = resolve_project_root(args.project_root)
+    memory_dir = resolve_memory_dir(project_root, args.memory_dir)
+    if getattr(args, "entry_id", None):
+        from .index import build_index, find_entry
+        record = find_entry(
+            build_index(project_root, memory_dir, include_archive=args.mode == "purge"),
+            args.entry_id,
+        )
+        args.topic = record.entry_id
     topic = args.topic.strip()
     if not topic:
         raise ValueError("Forget topic must not be empty.")
-    project_root = resolve_project_root(args.project_root)
-    memory_dir = resolve_memory_dir(project_root, args.memory_dir)
     if not memory_dir.exists():
         raise FileNotFoundError(f"Memory directory not found: {memory_dir}")
     if not (memory_dir / "manifest.md").exists():
@@ -374,6 +404,9 @@ def run(args) -> int:
     if not (memory_dir / "do-not-use.md").exists():
         raise ValueError("do-not-use.md is missing; forgetting cannot safely record removal guards")
     manifest_text = read_text(memory_dir / "manifest.md")
+    args.history_check_status = _history_check(
+        project_root, memory_dir, topic, getattr(args, "history_check", False)
+    )
     metadata = protocol_metadata(manifest_text)
     comparison = compare_versions(
         metadata.get("protocol_version", "0.5"),
@@ -413,7 +446,7 @@ def run(args) -> int:
         else:
             privacy_nonce = uuid.uuid4().hex
 
-    targets = _target_files(memory_dir, args.mode)
+    targets = _target_files(memory_dir, args.mode, include_do_not_use=bool(getattr(args, "entry_id", None)))
     plans: list[FilePlan] = []
     for path in targets:
         original = read_text(path)
@@ -535,7 +568,7 @@ def run(args) -> int:
         return 1
 
     if protocol_06 and not args.confirm_plan:
-        raise ValueError("Protocol 0.6 forget apply requires --confirm-plan <PLAN_ID>.")
+        raise ValueError("Protocol 0.7 forget apply requires --confirm-plan <PLAN_ID>.")
     with project_mutation_guard(
         project_root,
         memory_dir / "manifest.md",
@@ -576,7 +609,7 @@ def run(args) -> int:
                 )
         elif current_protocol_06:
             raise ValueError(
-                "Project migrated to Protocol 0.6 before compatibility forget apply; "
+                "Project migrated to Protocol 0.7 before compatibility forget apply; "
                 "preview again and confirm the new Plan ID."
             )
         elif current_comparison > 0:

@@ -37,6 +37,9 @@ from .entries import (
 from .scanning import scan_text
 from .subjects import FACETS, load_subjects, subject_indexes, validate_subject_registry
 from .templates import CORE_FILES, brief_needs_curation
+from .conflicts import ConflictStatus, analyze_conflicts, render_conflict_result
+from .quality import freshness_findings, reachability_findings, render_quality, routing_findings
+from .local_overlay import LocalStatus, inspect_overlay, project_identity
 
 
 def _read(path: Path) -> str:
@@ -108,23 +111,44 @@ def _check_protocol_metadata(text: str) -> list[str]:
             issues.append("manifest.md: missing or invalid UUIDv4 project_id; run `memory-custodian migrate`")
         if metadata.get("admission_policy") != "evidence-required":
             issues.append("manifest.md: admission_policy must be evidence-required")
-        if metadata.get("conflict_identity_policy") != "scope-subject-facet":
-            issues.append("manifest.md: conflict_identity_policy must be scope-subject-facet")
+        if metadata.get("routing_schema_version") != "1":
+            issues.append("manifest.md: routing_schema_version must be 1")
+        if metadata.get("conflict_schema_version") != "1":
+            issues.append("manifest.md: conflict_schema_version must be 1")
+        if metadata.get("routing_policy") != "explicit-task-and-scope":
+            issues.append("manifest.md: routing_policy must be explicit-task-and-scope")
+        if metadata.get("conflict_policy") != "canonical-subject-and-review":
+            issues.append("manifest.md: conflict_policy must be canonical-subject-and-review")
     return issues
 
 
 def run(args) -> int:
     project_root = resolve_project_root(args.project_root)
     memory_dir = resolve_memory_dir(project_root, args.memory_dir)
+    if not memory_dir.exists():
+        print(f"Memory directory missing: {memory_dir}")
+        return 1
+    if getattr(args, "conflicts", False):
+        result = analyze_conflicts(memory_dir)
+        render_conflict_result(result)
+        if getattr(args, "merge_base", None):
+            from .merge_review import merge_review
+            merge_result = merge_review(project_root, memory_dir, args.merge_base)
+            print(merge_result.text)
+            if merge_result.blocking:
+                return 1
+        return 1 if result.status in {ConflictStatus.CONFLICT, ConflictStatus.INVALID} else 0
+    if getattr(args, "routing", False):
+        return render_quality("routing check", routing_findings(memory_dir))
+    if getattr(args, "reachability", False):
+        return render_quality("reachability check", reachability_findings(memory_dir))
+    if getattr(args, "freshness", False):
+        return render_quality("freshness check", freshness_findings(project_root, memory_dir))
     issues: list[str] = []
     warnings: list[str] = []
     detailed_findings = []
     structured_by_id: dict[str, list] = {}
     active_identities: dict[tuple[str, str, str], tuple[str, str]] = {}
-
-    if not memory_dir.exists():
-        print(f"Memory directory missing: {memory_dir}")
-        return 1
 
     for name in CORE_FILES:
         if not (memory_dir / name).exists():
@@ -307,6 +331,22 @@ def run(args) -> int:
                 "shorten it semantically and move supporting detail outside the decision entry"
             )
 
+    overlay = inspect_overlay(project_root, project_identity(memory_dir))
+    local_paths: set[Path] = set()
+    if overlay.status == LocalStatus.REVIEW:
+        warnings.extend(f"local overlay: {warning}" for warning in overlay.warnings)
+    if overlay.status in {LocalStatus.BOUND, LocalStatus.REVIEW}:
+        for path in overlay.modules:
+            local_paths.add(path)
+            text = _read(path)
+            detailed_findings.extend(scan_text(path, text))
+            for entry in parse_structured_entries(path, text):
+                if entry.scope not in {"local-user", "local-machine"}:
+                    issues.append(
+                        f"local/{path.relative_to(overlay.directory).as_posix()}: "
+                        f"{entry.entry_id} has non-local Scope {entry.scope!r}"
+                    )
+
     inbox = memory_dir / "inbox.md"
     if inbox.exists():
         inbox_items = count_inbox_items(_read(inbox))
@@ -372,9 +412,14 @@ def run(args) -> int:
     privacy = [item for item in detailed_findings if item.category == "privacy"]
     security_errors = [item for item in security if item.severity == "ERROR"]
     security_warnings = [item for item in security if item.severity != "ERROR"]
+    def finding_location(finding) -> str:
+        if finding.path in local_paths:
+            return f"local/{finding.path.relative_to(overlay.directory).as_posix()}"
+        return finding.path.relative_to(memory_dir).as_posix()
+
     if getattr(args, "security", False):
         for finding in security:
-            message = f"{finding.path.relative_to(memory_dir)}:{finding.line}: {finding.kind}: {finding.preview}"
+            message = f"{finding_location(finding)}:{finding.line}: {finding.kind}: {finding.preview}"
             (issues if finding.severity == "ERROR" else warnings).append(message)
     else:
         if security_errors:
@@ -390,12 +435,12 @@ def run(args) -> int:
     if getattr(args, "privacy", False):
         for finding in privacy:
             warnings.append(
-                f"{finding.path.relative_to(memory_dir)}:{finding.line}: {finding.kind}: {finding.preview}"
+                f"{finding_location(finding)}:{finding.line}: {finding.kind}: {finding.preview}"
             )
     elif privacy:
         if any(
             item.kind == "machine-path"
-            and item.path.relative_to(memory_dir).as_posix() == "preferences.md"
+            and finding_location(item) == "preferences.md"
             for item in privacy
         ):
             warnings.append(

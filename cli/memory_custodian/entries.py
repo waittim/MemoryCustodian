@@ -1,4 +1,4 @@
-"""Protocol 0.6 entry identity, evidence, parsing, and rendering."""
+"""Protocol 0.7 entry identity, evidence, parsing, and rendering."""
 
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ ACTIVE_EVIDENCE_RE = re.compile(
 )
 CANDIDATE_ONLY_EVIDENCE = {"agent-observed", "conversation-unconfirmed"}
 INTERNAL_EVIDENCE = {"legacy-unverified"}
-VALID_SCOPES_RE = re.compile(r"^(?:project|area:[A-Za-z0-9][A-Za-z0-9._-]*)$")
+VALID_SCOPES_RE = re.compile(r"^(?:project|area:[A-Za-z0-9][A-Za-z0-9._-]*|local-user|local-machine)$")
 FIELD_RE = re.compile(r"^([A-Za-z][A-Za-z-]*):(?:\s*(.*))?$")
 
 
@@ -120,7 +120,7 @@ def validate_evidence(
 ) -> tuple[str, ...]:
     project_root = project_root.resolve()
     if not evidence:
-        raise ValueError("Protocol 0.6 active memory requires at least one --evidence value.")
+        raise ValueError("Protocol 0.7 active memory requires at least one --evidence value.")
     validated: list[str] = []
     for raw in evidence:
         value = raw.strip()
@@ -347,7 +347,7 @@ def structured_entry_schema_issues(
     entry: StructuredEntry,
     relative_path: str,
 ) -> list[str]:
-    """Validate the declared Protocol 0.6 structure of one formal entry."""
+    """Validate the declared Protocol 0.7 structure of one formal entry."""
 
     issues: list[str] = []
     prefix = f"{relative_path}: {entry.entry_id}"

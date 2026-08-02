@@ -15,7 +15,7 @@ class ReadStatusTests(unittest.TestCase):
     def test_read_rejects_invalid_explicit_profile_and_area_names(self):
         with tempfile.TemporaryDirectory() as tmp:
             self.assertEqual(main(["init", "--project-root", tmp]), 0)
-            for option, noun in (("--profile", "profile"), ("--area", "area")):
+            for option, _noun in (("--profile", "profile"), ("--area", "area")):
                 with self.subTest(option=option):
                     out = StringIO()
                     err = StringIO()
@@ -23,7 +23,7 @@ class ReadStatusTests(unittest.TestCase):
                         code = main(["read", "--project-root", tmp, option, "../backend"])
                     self.assertEqual(code, 2)
                     self.assertEqual(out.getvalue(), "")
-                    self.assertIn(f"Error: Invalid {noun} name: ../backend", err.getvalue())
+                    self.assertIn("Error: Invalid explicit module name: ../backend", err.getvalue())
 
     def test_read_architecture_loads_task_specific_files(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -49,31 +49,24 @@ class ReadStatusTests(unittest.TestCase):
             self.assertIn("- decisions.md", text)
             self.assertIn("- constraints.md", text)
             self.assertIn("- do-not-use.md", text)
-            self.assertIn("Skipped optional:", text)
+            self.assertIn("Missing optional:", text)
             self.assertIn("- preferences.md", text)
 
     def test_read_uses_project_manifest_when_present(self):
         with tempfile.TemporaryDirectory() as tmp:
             self.assertEqual(main(["init", "--project-root", tmp]), 0)
             manifest = Path(tmp) / "docs" / "memory" / "manifest.md"
-            manifest.write_text(
-                "# Memory Manifest\n\n"
-                "## Always load\n"
-                "- brief.md\n\n"
-                "## Load by task\n\n"
-                "### Implementation / execution / debugging\n"
-                "Load:\n"
-                "- constraints.md\n"
-                "Load if present:\n"
-                "- preferences.md\n",
-                encoding="utf-8",
-            )
+            text = manifest.read_text(encoding="utf-8")
+            implementation = text.split("### Implementation / execution / debugging", 1)[1].split("###", 1)[0]
+            replacement = "\nLoad:\n- inbox.md\nLoad if present:\n- preferences.md\n\n"
+            manifest.write_text(text.replace(implementation, replacement, 1), encoding="utf-8")
             out = StringIO()
             with redirect_stdout(out):
                 self.assertEqual(main(["read", "--project-root", tmp, "--task", "implementation", "--names-only"]), 0)
             text = out.getvalue()
             self.assertIn("- brief.md", text)
             self.assertIn("- constraints.md", text)
+            self.assertIn("- inbox.md", text)
             self.assertNotIn("- do-not-use.md", text)
 
     def test_status_reports_initialized_memory(self):
@@ -84,8 +77,8 @@ class ReadStatusTests(unittest.TestCase):
                 code = main(["status", "--project-root", tmp])
             self.assertEqual(code, 1)
             text = out.getvalue()
-            self.assertIn("CLI version: 0.10.0", text)
-            self.assertIn("Protocol version: 0.6 (current)", text)
+            self.assertIn("CLI version: 0.11.0", text)
+            self.assertIn("Protocol version: 0.7 (current)", text)
             self.assertIn("brief.md: NEEDS CURATION", text)
             self.assertIn("inbox.md: OK", text)
             self.assertIn("preferences.md: not enabled", text)
@@ -199,7 +192,7 @@ class ReadStatusTests(unittest.TestCase):
                 self.assertEqual(main(["migrate", "--project-root", tmp, "--apply"]), 0)
             migrated = manifest.read_text(encoding="utf-8")
             self.assertIn("## MemoryCustodian Protocol", migrated)
-            self.assertIn("- protocol_version: 0.6", migrated)
+            self.assertIn("- protocol_version: 0.7", migrated)
             self.assertIn("- initialized_with: unknown", migrated)
             self.assertIn("## Optional module index", migrated)
 
@@ -218,9 +211,9 @@ class ReadStatusTests(unittest.TestCase):
             self.assertEqual(main(["init", "--project-root", tmp]), 0)
             manifest = Path(tmp) / "docs" / "memory" / "manifest.md"
             legacy = manifest.read_text(encoding="utf-8").replace(
-                "### Implementation / execution / debugging\nLoad:\n- decisions.md\n- constraints.md",
-                "### Implementation / execution / debugging\nLoad:\n- constraints.md",
-            ).replace("- protocol_version: 0.6", "- protocol_version: 0.4")
+                "### Implementation / execution / debugging\nLoad:\n- decisions.md\n- do-not-use.md",
+                "### Implementation / execution / debugging\nLoad:\n- do-not-use.md",
+            ).replace("- protocol_version: 0.7", "- protocol_version: 0.4")
             manifest.write_text(legacy, encoding="utf-8")
 
             out = StringIO()
@@ -228,8 +221,8 @@ class ReadStatusTests(unittest.TestCase):
                 self.assertEqual(main(["migrate", "--project-root", tmp, "--apply"]), 0)
             migrated = manifest.read_text(encoding="utf-8")
             implementation = migrated.split("### Implementation / execution / debugging", 1)[1].split("###", 1)[0]
-            self.assertIn("- decisions.md", implementation)
-            self.assertIn("load decisions.md for implementation", out.getvalue())
+            self.assertNotIn("- decisions.md", implementation)
+            self.assertIn("- do-not-use.md", implementation)
 
     def test_migrate_rejects_newer_protocol_without_writing(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -237,7 +230,7 @@ class ReadStatusTests(unittest.TestCase):
             memory = Path(tmp) / "docs" / "memory"
             manifest = memory / "manifest.md"
             newer = manifest.read_text(encoding="utf-8").replace(
-                "- protocol_version: 0.6", "- protocol_version: 0.7"
+                "- protocol_version: 0.7", "- protocol_version: 0.8"
             )
             manifest.write_text(newer, encoding="utf-8")
 
@@ -254,7 +247,7 @@ class ReadStatusTests(unittest.TestCase):
             self.assertEqual(main(["init", "--project-root", tmp]), 0)
             manifest = Path(tmp) / "docs" / "memory" / "manifest.md"
             invalid = manifest.read_text(encoding="utf-8").replace(
-                "- protocol_version: 0.6", "- protocol_version: future"
+                "- protocol_version: 0.7", "- protocol_version: future"
             )
             manifest.write_text(invalid, encoding="utf-8")
 

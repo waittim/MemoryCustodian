@@ -13,13 +13,23 @@ from dataclasses import dataclass
 from typing import Iterable
 
 from . import (
+    __conflict_schema_version__,
     __entry_schema_version__,
     __protocol_version__,
+    __routing_schema_version__,
     __subject_schema_version__,
     __version__,
 )
 from .templates import ALL_TEMPLATE_FILES, CORE_FILES, DEFAULT_MEMORY_DIR
-from .routes import RouteReason, RoutedModule, merge_routed_modules, normalize_module_identity
+from .routes import (
+    TASK_ALIASES,
+    RouteReason,
+    RoutedModule,
+    merge_routed_modules,
+    normalize_module_identity,
+    parse_optional_module_index,
+    render_optional_declaration,
+)
 
 DOCS_MEMORY_ROOT = "docs"
 CURRENT_PACKAGE_LABEL = f"memory-custodian {__version__}"
@@ -37,14 +47,7 @@ BUDGETS = {
 DECISION_ENTRY_BUDGET = 120
 BUDGET_NEAR_PERCENT = 80
 
-TASK_CATEGORY = {
-    "default": "general", "general": "general",
-    "planning": "planning", "architecture": "planning", "refactoring": "planning",
-    "implementation": "implementation", "execution": "implementation", "debugging": "implementation",
-    "artifact": "artifact", "output": "artifact", "preferences": "preferences",
-    "recap": "history", "history": "history", "status": "history",
-    "maintenance": "maintenance", "compact": "maintenance", "forget": "maintenance",
-}
+TASK_CATEGORY = TASK_ALIASES
 
 CATEGORY_HEADINGS = {
     "planning": {"planning / architecture / refactoring"},
@@ -322,11 +325,14 @@ def _protocol_section_lines(
         f"- entry_schema_version: {__entry_schema_version__}",
         f"- subject_schema_version: {__subject_schema_version__}",
         "- subject_registry: subjects.md",
+        f"- routing_schema_version: {__routing_schema_version__}",
+        f"- conflict_schema_version: {__conflict_schema_version__}",
         f"- initialized_with: {initialized_with}",
         f"- last_migrated_with: {last_migrated_with}",
         f"- project_id: {project_id}",
         "- admission_policy: evidence-required",
-        "- conflict_identity_policy: scope-subject-facet",
+        "- routing_policy: explicit-task-and-scope",
+        "- conflict_policy: canonical-subject-and-review",
     ]
 
 
@@ -365,11 +371,14 @@ def manifest_with_protocol_metadata(
                 "entry_schema_version": f"- entry_schema_version: {__entry_schema_version__}",
                 "subject_schema_version": f"- subject_schema_version: {__subject_schema_version__}",
                 "subject_registry": "- subject_registry: subjects.md",
+                "routing_schema_version": f"- routing_schema_version: {__routing_schema_version__}",
+                "conflict_schema_version": f"- conflict_schema_version: {__conflict_schema_version__}",
                 "initialized_with": f"- initialized_with: {initialized_with}",
                 "last_migrated_with": f"- last_migrated_with: {last_migrated_with}",
                 "project_id": f"- project_id: {project_id}",
                 "admission_policy": "- admission_policy: evidence-required",
-                "conflict_identity_policy": "- conflict_identity_policy: scope-subject-facet",
+                "routing_policy": "- routing_policy: explicit-task-and-scope",
+                "conflict_policy": "- conflict_policy: canonical-subject-and-review",
             }
             body: list[str] = []
             seen: set[str] = set()
@@ -389,11 +398,14 @@ def manifest_with_protocol_metadata(
                     "entry_schema_version",
                     "subject_schema_version",
                     "subject_registry",
+                    "routing_schema_version",
+                    "conflict_schema_version",
                     "initialized_with",
                     "last_migrated_with",
                     "project_id",
                     "admission_policy",
-                    "conflict_identity_policy",
+                    "routing_policy",
+                    "conflict_policy",
                 )
                 if key not in seen
             ]
@@ -671,6 +683,8 @@ def is_safe_memory_name(name: str) -> bool:
 
 
 def optional_index_paths(manifest: str) -> set[str]:
+    # Keep legacy discovery tolerant; strict Protocol 0.7 validation happens in
+    # parse_optional_module_index/validate_manifest_routes.
     lines = _section_lines(manifest, "##", lambda heading: heading == "optional module index")
     return set(OPTIONAL_INDEX_PATH_RE.findall("\n".join(lines)))
 
@@ -681,6 +695,43 @@ def manifest_with_optional_index(manifest: str) -> tuple[str, bool]:
         updated, subsection_changed = _ensure_optional_index_subsection(updated, heading)
         changed = changed or subsection_changed
     return updated, changed
+
+
+def manifest_with_protocol_07_optional_routes(manifest: str) -> tuple[str, bool, int]:
+    """Convert legacy optional declarations to safe explicit-only metadata."""
+
+    declarations = parse_optional_module_index(manifest, legacy_compatible=True)
+    if OPTIONAL_INDEX_HEADING not in manifest:
+        updated, changed = manifest_with_optional_index(manifest)
+        return updated, changed, 0
+    lines = manifest.splitlines()
+    start = next(i for i, line in enumerate(lines) if line.strip() == OPTIONAL_INDEX_HEADING)
+    end = next((i for i in range(start + 1, len(lines)) if lines[i].startswith("## ")), len(lines))
+    legacy_count = 0
+    for index in range(start + 1, end):
+        if not re.fullmatch(r"- `[^`]+`(?:\s*:\s*.*)?", lines[index]):
+            continue
+        following = next(
+            (lines[candidate] for candidate in range(index + 1, end) if lines[candidate].strip()),
+            "",
+        )
+        if not following.startswith("  - "):
+            legacy_count += 1
+    first_subsection = next((i for i in range(start + 1, end) if lines[i].startswith("### ")), end)
+    preamble = lines[start + 1:first_subsection]
+    rendered = [OPTIONAL_INDEX_HEADING, *preamble]
+    while rendered and not rendered[-1].strip():
+        rendered.pop()
+    for folder, heading in OPTIONAL_INDEX_SECTIONS.items():
+        rendered.extend(["", heading])
+        matches = [item for item in declarations if item.module_type == folder]
+        if matches:
+            for item in matches:
+                rendered.extend(render_optional_declaration(item).splitlines())
+        else:
+            rendered.append("- None enabled.")
+    updated = ensure_newline("\n".join([*lines[:start], *rendered, *lines[end:]]))
+    return updated, updated != ensure_newline(manifest), legacy_count
 
 
 def is_indexable_optional_path(relative_path: str) -> bool:
@@ -729,7 +780,15 @@ def _ensure_optional_index_subsection(manifest: str, heading: str) -> tuple[str,
     return prefix + "\n\n" + inserted + ("\n" + suffix if suffix else ""), True
 
 
-def manifest_with_optional_module_index(manifest: str, relative_path: str) -> tuple[str, bool]:
+def manifest_with_optional_module_index(
+    manifest: str,
+    relative_path: str,
+    *,
+    activation: str | None = None,
+    tasks: tuple[str, ...] = (),
+    paths: tuple[str, ...] = (),
+    description: str | None = None,
+) -> tuple[str, bool]:
     if not is_indexable_optional_path(relative_path):
         return manifest, False
     manifest, changed = _insert_optional_index(manifest)
@@ -754,7 +813,20 @@ def manifest_with_optional_module_index(manifest: str, relative_path: str) -> tu
             end = index
             break
 
-    entry = f"- `{relative_path}`: {default_optional_trigger(relative_path)}"
+    from .routes import ModuleDeclaration
+
+    if activation is None:
+        activation = "explicit-only"
+    entry = render_optional_declaration(
+        ModuleDeclaration(
+            relative_path,
+            folder,
+            activation,
+            tasks,
+            paths,
+            description if description is not None else default_optional_trigger(relative_path),
+        )
+    )
     subsection = [line for line in lines[heading_index + 1 : end] if line.strip() != "- None enabled."]
     lines = lines[: heading_index + 1] + [entry] + subsection + lines[end:]
     return ensure_newline("\n".join(lines)), True
@@ -873,6 +945,11 @@ def validate_manifest_routes(manifest: str) -> list[str]:
             duplicates = sorted({name for name in names if names.count(name) > 1})
             if duplicates:
                 issues.append(f"{category} route: duplicate paths: {', '.join(duplicates)}")
+    protocol = protocol_metadata(manifest).get("protocol_version", "")
+    try:
+        parse_optional_module_index(manifest, legacy_compatible=protocol != "0.7")
+    except ValueError as exc:
+        issues.append(f"optional module index: {exc}")
     return issues
 
 
@@ -881,13 +958,8 @@ def parse_manifest_task_modules(manifest: str, task: str) -> list[RoutedModule]:
     if category is None:
         raise ValueError(f"Unsupported task route: {task}")
     issues = validate_manifest_routes(manifest)
-    category_issues = [
-        issue for issue in issues
-        if issue.startswith(("general route: expected", f"{category} route: expected"))
-        or issue.startswith(("general route: unsafe", f"{category} route: unsafe"))
-    ]
-    if category_issues:
-        raise ValueError("Invalid manifest routing: " + "; ".join(category_issues))
+    if issues:
+        raise ValueError("Invalid manifest routing: " + "; ".join(issues))
     always_lines = _section_lines(manifest, "##", lambda heading: heading == "always load")
     specs = [
         RoutedModule(name, required, (RouteReason.ALWAYS_LOAD,))

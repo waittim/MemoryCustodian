@@ -53,7 +53,7 @@ def _project(args) -> tuple[Path, Path, str]:
     memory_dir = resolve_memory_dir(project_root, args.memory_dir)
     manifest = memory_dir / "manifest.md"
     if not manifest.exists():
-        raise ValueError("manifest.md is missing; Subject operations require Protocol 0.6 metadata.")
+        raise ValueError("manifest.md is missing; Subject operations require Protocol 0.7 metadata.")
     metadata = protocol_metadata(manifest.read_text(encoding="utf-8"))
     comparison = compare_versions(
         metadata.get("protocol_version", "0.5"),
@@ -62,7 +62,7 @@ def _project(args) -> tuple[Path, Path, str]:
     if comparison is None:
         raise ValueError("Project manifest has an invalid protocol version.")
     if comparison != 0:
-        raise ValueError("Subject operations require Protocol 0.6.")
+        raise ValueError("Subject operations require Protocol 0.7.")
     if metadata.get("subject_schema_version") != "1":
         raise ValueError("Subject schema is not initialized; run `memory-custodian migrate`.")
     return project_root, memory_dir, project_id_from_manifest(manifest.read_text(encoding="utf-8"))
@@ -164,7 +164,7 @@ def _apply_preview(
             != 0
         ):
             raise ValueError(
-                "Subject mutation requires Protocol 0.6; project protocol changed "
+                "Subject mutation requires Protocol 0.7; project protocol changed "
                 "before apply."
             )
         current = build()
@@ -380,6 +380,80 @@ def _add_alias(args) -> int:
     )
 
 
+def _merge(args) -> int:
+    """Inventory and preview only; Protocol 0.8 supplies the transaction journal."""
+
+    from .conflicts import canonical_entries
+
+    _project_root, memory_dir, project_id = _project(args)
+    subjects = load_subjects(memory_dir)
+    source = _find(subjects, args.subject_id)
+    target = _find(subjects, args.target_subject_id)
+    if source.subject_id.casefold() == target.subject_id.casefold():
+        raise ValueError("Subject merge source and target must be different.")
+    current: list[str] = []
+    historical: list[str] = []
+    resulting: dict[tuple[str, str], list[str]] = {}
+    for entry in canonical_entries(memory_dir, include_archive=True):
+        reference = entry.fields.get("Subject") or entry.fields.get("Provisional-Subject")
+        if not reference or reference.casefold() != source.subject_id.casefold():
+            continue
+        relative = entry.path.relative_to(memory_dir).as_posix()
+        item = f"{entry.entry_id} ({relative}; {entry.status})"
+        if entry.status in {"active", "candidate"} and not relative.startswith("archive/"):
+            current.append(item)
+            if entry.status == "active":
+                resulting.setdefault((entry.scope, entry.fields.get("Facet", "")), []).append(entry.entry_id)
+        else:
+            historical.append(item)
+    for entry in canonical_entries(memory_dir):
+        if entry.status == "active" and entry.fields.get("Subject", "").casefold() == target.subject_id.casefold():
+            resulting.setdefault((entry.scope, entry.fields.get("Facet", "")), []).append(entry.entry_id)
+    blockers = [
+        f"Resulting structural identity {scope}+{target.subject_id}+{facet} has owners: {', '.join(ids)}"
+        for (scope, facet), ids in sorted(resulting.items()) if len(ids) > 1
+    ]
+    reviews: list[str] = []
+    if source.canonical_ref and target.canonical_ref and source.canonical_ref != target.canonical_ref:
+        reviews.append("Source and target have different Canonical-Ref values; reviewer must choose target identity.")
+    source_aliases = {source.title.casefold(), *(item.casefold() for item in source.aliases)}
+    target_aliases = {target.title.casefold(), *(item.casefold() for item in target.aliases)}
+    if source_aliases & target_aliases:
+        reviews.append("Source and target share an exact normalized alias.")
+    seed = (
+        f"subject-merge\0{project_id}\0{source.subject_id}\0{target.subject_id}\0"
+        + "\0".join(sorted(current + historical + blockers))
+    ).encode("utf-8")
+    print("Subject merge preview:")
+    print(f"Source: {source.subject_id} — {source.title}")
+    print(f"Target: {target.subject_id} — {target.title}")
+    print("Source registry unit:")
+    print(source.text.strip())
+    print("Target registry unit:")
+    print(target.text.strip())
+    print("Current references planned for future mutation:")
+    for item in sorted(current) or ["none"]:
+        print(f"- {item}")
+    print("Historical references retained without mechanical rewrite:")
+    for item in sorted(historical) or ["none"]:
+        print(f"- {item}")
+    print("Alias/Canonical-Ref review:")
+    for item in reviews or ["none"]:
+        print(f"- {item}")
+    print("Required reconciliation/blockers:")
+    if current:
+        print(
+            f"- Future subject-merged reconciliation must cover current references: "
+            f"{', '.join(sorted(item.split(' ', 1)[0] for item in current))}"
+        )
+    for item in blockers or ([] if current else ["none"]):
+        print(f"- {item}")
+    print(f"Plan ID: {hashlib.sha256(seed).hexdigest()[:16]}")
+    print("Future semantics: current active/candidate references mutate; source gains Merged-Into; historical entries retain their original Subject ID.")
+    print("Transactional Subject merge apply requires Protocol 0.8.")
+    return 0
+
+
 def run(args) -> int:
     handlers = {
         "list": _list,
@@ -387,5 +461,6 @@ def run(args) -> int:
         "add": _add,
         "rename": _rename,
         "add-alias": _add_alias,
+        "merge": _merge,
     }
     return handlers[args.subject_command](args)

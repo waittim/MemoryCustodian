@@ -2,6 +2,10 @@
 
 Entries are newest first.
 
+## 2026-08-01
+- Upgraded dogfood memory to Protocol 0.7 deterministic routing, structural conflict review, and bound local-overlay contracts.
+- Assigned stable Subjects and Facets to remaining active legacy decisions.
+
 ## 2026-07-29
 - Expanded Ubuntu full-suite and Windows smoke CI across every supported Python minor from 3.10 through 3.14.
 - Fixed area-scoped entry identity, bidirectional storage validation, nested memory Plan roots, malformed lock recovery, and preview seed expiry.

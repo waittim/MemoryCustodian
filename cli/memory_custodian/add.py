@@ -178,7 +178,7 @@ def _validate_subject_and_conflict(
     required = subject_required(kind, candidate=candidate, area=args.area)
     if required and (not subject_id or not facet):
         raise ValueError(
-            f"Protocol 0.6 active {kind} memory requires both --subject MC-SUBJ-... and --facet."
+            f"Protocol 0.7 active {kind} memory requires both --subject MC-SUBJ-... and --facet."
         )
     if bool(subject_id) != bool(facet):
         raise ValueError("--subject and --facet must be supplied together.")
@@ -366,7 +366,7 @@ def run(args) -> int:
     if comparison > 0:
         raise ValueError("Project protocol is newer than this CLI supports.")
     if not protocol_06:
-        print("Migration available: Protocol 0.5 compatibility write; migrate to 0.6 for evidence admission and locking.")
+        print("Migration available: legacy compatibility write; migrate to 0.7 for current governance.")
         with project_mutation_guard(
             project_root,
             manifest_path,
@@ -386,8 +386,8 @@ def run(args) -> int:
                 )
             if current_comparison == 0:
                 raise ValueError(
-                    "Project migrated to Protocol 0.6 before the compatibility write; "
-                    "re-run add with Protocol 0.6 Evidence."
+                    "Project migrated to Protocol 0.7 before the compatibility write; "
+                    "re-run add with Protocol 0.7 Evidence."
                 )
             if current_comparison > 0:
                 raise ValueError(
@@ -437,7 +437,7 @@ def run(args) -> int:
                 print("Dry run only. Re-run with --apply --confirm-plan <PLAN_ID>.")
                 return 0
             if not args.confirm_plan:
-                raise ValueError("Protocol 0.6 supersede apply requires --confirm-plan <PLAN_ID>.")
+                raise ValueError("Protocol 0.7 supersede apply requires --confirm-plan <PLAN_ID>.")
             with project_mutation_guard(
                 project_root,
                 manifest_path,

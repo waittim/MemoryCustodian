@@ -2,7 +2,7 @@
 
 Entries are newest first.
 
-## MC-DEC-20260729-ef44900b — Use one mutation guard and separate private execution plans from public
+## MC-DEC-20260801-07000007 — Adopt Protocol 0.7 deterministic governance
 
 Status: active
 Scope: project
@@ -10,100 +10,94 @@ Subject: MC-SUBJ-20260729-7e5c3a91
 Facet: architecture
 Evidence:
 - user-confirmed
-Supersedes: MC-DEC-20260728-5ea0e265
+Supersedes: MC-DEC-20260729-ef44900b
 
 Decision:
-Use one mutation guard and separate private execution plans from public previews.
+Use one mutation guard, explicit task/scope routing, structural conflict review, and bound local overlays; defer complex governance apply to Protocol 0.8 transactions.
 
 Reason:
-A single bootstrap-to-project lock handoff prevents identity races across every writer; private state permissions and redacted public plans preserve concurrency and erasure boundaries.
-
-## MC-DEC-20260728-5ea0e265 — Adopt Protocol 0.6 evidence admission and mutation safety.
-
-Status: superseded
-Superseded-By: MC-DEC-20260729-ef44900b
-Scope: project
-Subject: MC-SUBJ-20260729-7e5c3a91
-Facet: architecture
-Evidence:
-- user-confirmed
-
-Decision:
-Use Protocol 0.6 evidence admission, stable Subject/Facet conflict identity, explicit erasure boundaries,
-repo-external preview seeds, lock-time plan rebuilds, and deterministic budget states.
-
-Reason:
-This keeps provenance, ownership, forgetting scope, and stale-write rejection deterministic and reviewable.
+This keeps selection and reconciliation deterministic without partial multi-file governance writes.
 
 ## MC-DEC-20260721-3578b077 — Target Python 3.10+ minimum version
 
 Status: active
 Scope: project
+Subject: MC-SUBJ-20260801-10000001
+Facet: version-policy
 Evidence:
 - legacy-unverified
 
 Decision:
 Support Python 3.10+ and test every supported minor from Python 3.10 through 3.14.
 Reason:
-The stdlib-only implementation does not require newer-minor features, and full minor-version coverage keeps the
-declared open-ended support range honest while retaining a maintained baseline.
+The stdlib-only CLI needs no newer-minor feature, and full minor coverage keeps the open-ended range honest.
 
 ## MC-DEC-20260712-53d9eded — Prioritize useful and reachable memory over chronological accumulation.
 
 Status: active
 Scope: project
+Subject: MC-SUBJ-20260801-20000002
+Facet: behavior
 Evidence:
 - legacy-unverified
 
 Decision:
 Prioritize useful and reachable memory over chronological accumulation; keep each decision concise and scope-specific.
 Reason:
-Production use showed that a generic brief, root-only subsystem decisions, and age-only archival can pass structural checks while failing to provide relevant context.
+Structural validity alone does not make memory reachable or useful.
 
 ## MC-DEC-20260708-ab7efbab — Support Gemini through thin context and Agent Skills
 
 Status: active
 Scope: project
+Subject: MC-SUBJ-20260801-30000003
+Facet: compatibility
 Evidence:
 - legacy-unverified
 
 Decision:
 Support Gemini with thin `GEMINI.md` bootstrap snippets, `--with-gemini`, and `./install.sh gemini` linking the skill into Gemini's skills directory.
 Reason:
-Gemini context files are loaded into prompt context, so project memory must remain manifest-driven while skill installation provides full protocol behavior.
+Gemini context imports are eager, so durable memory stays manifest-routed.
 
 ## MC-DEC-20260705-00552a27 — Add target compaction for active memory budgets
 
 Status: active
 Scope: project
+Subject: MC-SUBJ-20260801-40000004
+Facet: behavior
 Evidence:
 - legacy-unverified
 
 Decision:
 Add `compact --target <file>` for over-budget active files. It dry-runs by default, dedupes simple bullet files, archives old complete H2 entries for decisions/changelog, and has `status`/`check` suggest the command.
 Reason:
-Agents need an offline, reviewable path from budget failure to safe maintenance. Semantic rewrites still require review.
+Budget failures need an offline reviewable maintenance path.
 
 ## MC-DEC-20260704-ddfc2d0c — Treat Claude as a plugin-root distribution target
 
 Status: active
 Scope: project
+Subject: MC-SUBJ-20260801-50000005
+Facet: compatibility
 Evidence:
 - legacy-unverified
 
 Decision:
 Support Claude Code through `.claude-plugin/`, `skills/`, `bin/`, local `--plugin-dir` testing, and `./install.sh claude`.
 Reason:
-Claude support needs a verifiable plugin-root install surface.
+Claude needs a verifiable plugin-root install surface.
 
 ## MC-DEC-20260704-342e05b7 — Add deterministic skill evals first
 
 Status: active
 Scope: project
+Subject: MC-SUBJ-20260801-60000006
+Facet: behavior
 Evidence:
 - legacy-unverified
 
 Decision:
 Maintain offline skill eval scenarios and a checker before live agent eval infrastructure.
 Reason:
-Guard the behavior contract without services, non-stdlib dependencies, or heavyweight harnesses.
+Guard behavior offline without a heavyweight harness.

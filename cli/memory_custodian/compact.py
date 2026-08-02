@@ -80,7 +80,7 @@ def _execute_plan(
         print("Dry run only. Re-run with --apply" + (" --confirm-plan <PLAN_ID>." if protocol_06 else "."))
         return False
     if protocol_06 and not args.confirm_plan:
-        raise ValueError("Protocol 0.6 compact apply requires --confirm-plan <PLAN_ID>.")
+        raise ValueError("Protocol 0.7 compact apply requires --confirm-plan <PLAN_ID>.")
     with project_mutation_guard(
         project_root,
         memory_dir / "manifest.md",
@@ -117,7 +117,7 @@ def _execute_plan(
                 )
         elif current_comparison == 0:
             raise ValueError(
-                "Project migrated to Protocol 0.6 before compatibility compact apply; "
+                "Project migrated to Protocol 0.7 before compatibility compact apply; "
                 "preview again and confirm the new Plan ID."
             )
         elif current_comparison > 0:

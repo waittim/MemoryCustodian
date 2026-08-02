@@ -92,6 +92,22 @@ def private_state_directory(name: str) -> Path:
         return ensure_private_directory(root / name)
 
 
+def existing_private_state_directory(name: str) -> Path:
+    """Locate existing private state without creating directories."""
+
+    if not name or "/" in name or "\\" in name or name in {".", ".."}:
+        raise ValueError(f"Invalid private state directory name: {name!r}")
+    primary = state_root() / name
+    fallback = _fallback_state_root() / name
+    if primary.exists():
+        ensure_private_directory(primary)
+        return primary
+    if fallback.exists():
+        ensure_private_directory(fallback)
+        return fallback
+    return primary
+
+
 def _fallback_private_directory(name: str) -> Path:
     root = ensure_private_directory(_fallback_state_root())
     return ensure_private_directory(root / name)
@@ -139,6 +155,33 @@ def create_private_file(path: Path, content: str) -> bool:
             pass
     validate_private_file(path)
     return True
+
+
+def write_private_file(path: Path, content: str) -> None:
+    """Atomically replace a private state file without following symlinks."""
+
+    ensure_private_directory(path.parent)
+    validate_private_file(path)
+    temporary = path.parent / f".{path.name}.{uuid.uuid4().hex}.tmp"
+    flags = _private_open_flags(os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    descriptor = os.open(temporary, flags, 0o600)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(content)
+            handle.flush()
+            try:
+                os.fsync(handle.fileno())
+            except OSError:
+                pass
+        os.chmod(temporary, 0o600)
+        validate_private_file(path)
+        os.replace(temporary, path)
+        validate_private_file(path)
+    finally:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def read_private_file(path: Path) -> str:
