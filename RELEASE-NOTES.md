@@ -12,6 +12,8 @@
   entry-level budget omissions, and `COMPLETE/INCOMPLETE/AMBIGUOUS/INVALID` diagnostics.
 - Invalid routing now remains inside the shared result/disposition model, ordinary non-strict `INCOMPLETE` reads use
   the documented successful inspection exit, and explain exposes inbox/archive policy exclusions.
+- Made `AMBIGUOUS` reachable through the explicit legacy `development` compatibility alias while retaining a safe
+  baseline and the documented ordinary/strict exit behavior.
 - Added routing, reachability, and Evidence/relation freshness checks. They report bounded structural facts and never
   claim automatic semantic retrieval or factual correctness.
 
@@ -22,7 +24,9 @@
 - Added canonical entry `list`, `show`, and `forget --id`; preview-only candidate promotion and Subject merge
   inventory remain deferred to the Protocol 0.8 transaction journal.
 - Made `forget --id` heading-exact and relation-safe: referencing entries block removal instead of being deleted as
-  incidental substring matches. Promotion previews now report ID/structural-owner blockers and area-scoped targets.
+  incidental substring matches, including references in reconciliation records. Generic hard-erasure guards are
+  excluded from structural ownership so a successful hard forget cannot invalidate subsequent strict reads.
+  Promotion previews now report ID/structural-owner blockers and area-scoped targets.
 - Unified topic/ID/purge/local-reset erasure wording and added optional bounded Git history exposure inspection.
   MemoryCustodian does not rewrite Git history or revoke clones, forks, backups, caches, or distributed copies.
 
@@ -31,7 +35,10 @@
 - Added deterministic current-worktree conflict codes for duplicate structural owners, canonical Subject collisions,
   invalid exception relations, missing Subject/Facet coverage, and reconciliation-record validation.
 - Reconciliation validation now uses a strict canonical parser, and merge-aware review consumes valid resolution
-  records while avoiding one-sided custom-Subject false positives.
+  records only after applying the same full relation validation to each Git revision; invalid branch records and
+  unchanged merge-base acknowledgements cannot suppress new review findings.
+- Added stable, blocker-aware `exception add`, `exception remove`, and `reconcile preview` workflows while retaining
+  the Protocol 0.8 boundary for transactional apply.
 - Added matched-context conflict gates and optional read-only merge-base review for cross-branch structural collisions
   and concurrent hard-memory changes requiring human reconciliation.
 - Subject names, timestamps, Evidence counts, file order, and prose similarity never choose a winner. This release

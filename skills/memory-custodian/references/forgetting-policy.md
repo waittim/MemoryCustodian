@@ -81,7 +81,9 @@ instead of copying unnecessary sensitive source text into repository memory.
 
 Use `forget --id` when a canonical Entry ID is known; it selects only the unit whose heading owns that ID. A live
 relation that references the selected entry is a blocker requiring explicit governance review, not permission to
-delete the referencing unit. Topic and ID selectors share the same ErasureScope contract.
+delete the referencing unit. Canonical reconciliation records are also protected references. A generic hard-mode
+`MC-TOMB` deliberately omits topic identity and is treated as an erasure guard rather than a Subject/Facet owner,
+so it cannot invalidate later conflict checks. Topic and ID selectors share the same ErasureScope contract.
 Optional `--history-check` inspects reachable history in the current local Git repository without changing commits,
 refs, the index, remotes, or other clones. `unavailable` is not a PASS. `no-reachable-copy-detected` means only that
 this bounded inspection found none; it does not prove the absence of dangling objects, other refs, remotes, forks,

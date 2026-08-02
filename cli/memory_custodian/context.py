@@ -28,6 +28,7 @@ from .routes import (
     merge_routed_modules,
     normalize_input_path,
     parse_optional_module_index,
+    task_interpretations,
 )
 
 
@@ -208,7 +209,6 @@ def route_context(
     if not manifest_path.exists():
         raise ValueError("manifest.md is missing; the MemoryCustodian setup is incomplete or corrupted")
     manifest = manifest_path.read_text(encoding="utf-8")
-    canonical = canonical_task(supplied_task)
     normalized_by_value = {
         item.value: item
         for item in (normalize_input_path(project_root, value) for value in supplied_paths)
@@ -221,6 +221,12 @@ def route_context(
     }
     version = protocol_metadata(manifest).get("protocol_version", "0.5")
     declarations = parse_optional_module_index(manifest, legacy_compatible=version != "0.7")
+    interpretations = task_interpretations(supplied_task)
+    ambiguous = len(interpretations) > 1
+    canonical = (
+        f"<ambiguous: {', '.join(interpretations)}>"
+        if ambiguous else interpretations[0]
+    )
     declared_slugs = {
         kind: {item.slug for item in declarations if item.module_type == kind}
         for kind in ("rules", "profiles", "areas")
@@ -243,13 +249,14 @@ def route_context(
         item for item in declarations
         if item.module_type == "areas" and "path" in item.activation
     ]
-    if canonical in SUBSTANTIAL_TASKS and path_routed and not normalized_paths and not requested["areas"]:
+    substantial = any(item in SUBSTANTIAL_TASKS for item in interpretations)
+    if substantial and path_routed and not normalized_paths and not requested["areas"]:
         incomplete.append("area-path-scope")
         warnings.append(
             "Enabled path-routed areas were not evaluated because no paths or explicit areas were supplied."
         )
 
-    base = manifest_task_modules(memory_dir, supplied_task)
+    base = manifest_task_modules(memory_dir, "default" if ambiguous else supplied_task)
     optional = [
         _optional_route(
             declaration,
@@ -259,6 +266,23 @@ def route_context(
         )
         for declaration in declarations
     ]
+    if ambiguous:
+        optional = [
+            replace(
+                module,
+                reasons=(RouteReason.AMBIGUOUS,),
+                details=(
+                    "legacy task alias maps to mutually exclusive canonical tasks: "
+                    + ", ".join(interpretations),
+                ),
+            )
+            if declaration.module_type == "rules"
+            and "task" in declaration.activation
+            and any(task in declaration.tasks for task in interpretations)
+            and module.disposition == ModuleDisposition.SKIPPED
+            else module
+            for declaration, module in zip(declarations, optional)
+        ]
     modules = merge_routed_modules([*base, *optional, *missing_explicit])
     results: list[RoutedModule] = []
     contents: list[tuple[str, str]] = []
@@ -288,7 +312,17 @@ def route_context(
     if any(item.disposition == ModuleDisposition.MISSING_REQUIRED for item in results):
         incomplete.append("required-module-missing")
         warnings.append("One or more required routed modules are missing.")
-    completeness = RoutingCompleteness.INCOMPLETE if incomplete else RoutingCompleteness.COMPLETE
+    if ambiguous:
+        incomplete.append("task-route-interpretation")
+        warnings.append(
+            f"{RouteReason.AMBIGUOUS.value}: Legacy task alias has multiple canonical route interpretations: "
+            + ", ".join(interpretations)
+            + ". Supply a canonical --task value."
+        )
+    completeness = (
+        RoutingCompleteness.AMBIGUOUS
+        if ambiguous else RoutingCompleteness.INCOMPLETE if incomplete else RoutingCompleteness.COMPLETE
+    )
     if any(item.disposition == ModuleDisposition.INVALID for item in results):
         completeness = RoutingCompleteness.INVALID
     return ContextRoutingResult(

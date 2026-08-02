@@ -7,7 +7,12 @@ from pathlib import Path
 import subprocess
 
 from .entries import StructuredEntry, parse_structured_entries
-from .reconciliations import ReconciliationRecord, parse_reconciliations
+from .reconciliations import (
+    ReconciliationIssue,
+    ReconciliationRecord,
+    parse_reconciliations,
+    validate_reconciliations,
+)
 from .subjects import Subject, normalize_alias, normalize_canonical_ref, parse_subjects
 
 
@@ -46,29 +51,47 @@ def _files(project_root: Path, revision: str, memory_relative: str) -> tuple[str
     ))
 
 
-def _entries(project_root: Path, revision: str, files: tuple[str, ...]) -> dict[str, StructuredEntry]:
-    result: dict[str, StructuredEntry] = {}
+def _entries(project_root: Path, revision: str, files: tuple[str, ...]) -> tuple[StructuredEntry, ...]:
+    result: list[StructuredEntry] = []
     for relative in files:
         if relative.endswith(("subjects.md", "reconciliations.md")):
             continue
         text = _show(project_root, revision, relative)
-        for entry in parse_structured_entries(Path(relative), text):
-            result[entry.entry_id.casefold()] = entry
-    return result
+        result.extend(parse_structured_entries(Path(relative), text))
+    return tuple(result)
 
 
-def _subjects(project_root: Path, revision: str, registry: str) -> dict[str, Subject]:
-    return {
-        item.subject_id.casefold(): item
-        for item in parse_subjects(Path(registry), _show(project_root, revision, registry))
-    }
+def _subjects(project_root: Path, revision: str, registry: str) -> tuple[Subject, ...]:
+    return tuple(parse_subjects(Path(registry), _show(project_root, revision, registry)))
 
 
-def _reconciliations(project_root: Path, revision: str, relative: str) -> tuple[ReconciliationRecord, ...]:
-    records, _issues = parse_reconciliations(
+def _reconciliations(
+    project_root: Path,
+    revision: str,
+    relative: str,
+    entries: tuple[StructuredEntry, ...],
+    subjects: tuple[Subject, ...],
+) -> tuple[tuple[ReconciliationRecord, ...], tuple[ReconciliationIssue, ...]]:
+    records, parse_issues = parse_reconciliations(
         Path(relative), _show(project_root, revision, relative)
     )
-    return records
+    valid, issues = validate_reconciliations(records, parse_issues, entries, subjects)
+    return (() if issues else valid), issues
+
+
+def _by_id(
+    values: tuple[StructuredEntry | Subject | ReconciliationRecord, ...],
+) -> dict[str, StructuredEntry | Subject | ReconciliationRecord]:
+    result: dict[str, StructuredEntry | Subject | ReconciliationRecord] = {}
+    for value in values:
+        if isinstance(value, StructuredEntry):
+            identity = value.entry_id
+        elif isinstance(value, Subject):
+            identity = value.subject_id
+        else:
+            identity = value.record_id
+        result[identity.casefold()] = value
+    return result
 
 
 def _changed(base: dict[str, object], side: dict[str, object]) -> dict[str, object]:
@@ -92,16 +115,30 @@ def merge_review(project_root: Path, memory_dir: Path, target_ref: str) -> Merge
         )))
         registry = f"{memory_relative}/subjects.md"
         reconciliations = f"{memory_relative}/reconciliations.md"
-        base_entries = _entries(project_root, base, all_files)
-        head_entries = _entries(project_root, "HEAD", all_files)
-        target_entries = _entries(project_root, target_ref, all_files)
-        base_subjects = _subjects(project_root, base, registry)
-        head_subjects = _subjects(project_root, "HEAD", registry)
-        target_subjects = _subjects(project_root, target_ref, registry)
-        resolution_records = (
-            *_reconciliations(project_root, "HEAD", reconciliations),
-            *_reconciliations(project_root, target_ref, reconciliations),
+        base_entry_units = _entries(project_root, base, all_files)
+        head_entry_units = _entries(project_root, "HEAD", all_files)
+        target_entry_units = _entries(project_root, target_ref, all_files)
+        base_subject_units = _subjects(project_root, base, registry)
+        head_subject_units = _subjects(project_root, "HEAD", registry)
+        target_subject_units = _subjects(project_root, target_ref, registry)
+        base_records, _base_record_issues = _reconciliations(
+            project_root, base, reconciliations, base_entry_units, base_subject_units,
         )
+        head_records, head_record_issues = _reconciliations(
+            project_root, "HEAD", reconciliations, head_entry_units, head_subject_units,
+        )
+        target_records, target_record_issues = _reconciliations(
+            project_root, target_ref, reconciliations, target_entry_units, target_subject_units,
+        )
+        base_entries = _by_id(base_entry_units)
+        head_entries = _by_id(head_entry_units)
+        target_entries = _by_id(target_entry_units)
+        base_subjects = _by_id(base_subject_units)
+        head_subjects = _by_id(head_subject_units)
+        target_subjects = _by_id(target_subject_units)
+        changed_head_records = _changed(_by_id(base_records), _by_id(head_records))
+        changed_target_records = _changed(_by_id(base_records), _by_id(target_records))
+        resolution_records = (*changed_head_records.values(), *changed_target_records.values())
         head_changed_files = _changed_files(project_root, base, "HEAD")
         target_changed_files = _changed_files(project_root, base, target_ref)
     except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
@@ -116,6 +153,12 @@ def merge_review(project_root: Path, memory_dir: Path, target_ref: str) -> Merge
     right_subjects = _changed(base_subjects, target_subjects)
     conflicts: list[str] = []
     reviews: list[str] = []
+    for side, issues in (("HEAD", head_record_issues), (target_ref, target_record_issues)):
+        for issue in issues:
+            identity = f" {issue.record_id}" if issue.record_id else ""
+            conflicts.append(
+                f"MC-MERGE-006 {side} has invalid reconciliation{identity}: {issue.message}"
+            )
 
     left_refs: dict[str, str] = {}
     left_aliases: dict[str, str] = {}

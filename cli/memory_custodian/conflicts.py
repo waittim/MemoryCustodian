@@ -7,7 +7,7 @@ from enum import Enum
 from pathlib import Path
 
 from .entries import StructuredEntry, parse_structured_entries
-from .reconciliations import parse_reconciliations
+from .reconciliations import parse_reconciliations, validate_reconciliations
 from .subjects import FACETS, load_subjects, normalize_alias, normalize_canonical_ref
 
 
@@ -125,7 +125,10 @@ def analyze_conflicts(
         if entry.status != "active":
             continue
         code = entry.entry_id.split("-", 2)[1].upper()
-        if code not in {"DEC", "CON", "DNU", "AREA", "TOMB"}:
+        # MC-TOMB is a content-minimized erasure guard, not a structural
+        # invariant owner. Requiring it to retain a Subject would defeat hard
+        # forgetting; ordinary DNU entries remain governed owners.
+        if code not in {"DEC", "CON", "DNU", "AREA"}:
             continue
         relative = entry.path.relative_to(memory_dir).as_posix()
         if selected_modules is not None and relative not in selected_modules:
@@ -215,7 +218,7 @@ def analyze_conflicts(
                 tuple(sorted(matched_scopes)),
             ))
 
-    findings.extend(_reconciliation_findings(memory_dir, by_id, subjects))
+    findings.extend(_reconciliation_findings(memory_dir, by_id))
     unique = {
         (item.code, item.status, item.message, item.entry_ids, item.subject_id, item.facet, item.scopes): item
         for item in findings
@@ -230,64 +233,23 @@ def analyze_conflicts(
 def _reconciliation_findings(
     memory_dir: Path,
     entries: dict[str, list[StructuredEntry]],
-    _active_subjects: dict[str, object],
 ) -> list[ConflictFinding]:
     path = memory_dir / "reconciliations.md"
     if not path.exists():
         return []
     records, parse_issues = parse_reconciliations(path, path.read_text(encoding="utf-8"))
-    findings: list[ConflictFinding] = []
-    identities: set[tuple[str, ...]] = set()
-    record_ids: set[str] = set()
-    registry_subjects = {item.subject_id.casefold(): item for item in load_subjects(memory_dir)}
-    findings.extend(
+    all_entries = tuple(entry for matches in entries.values() for entry in matches)
+    _valid, issues = validate_reconciliations(
+        records, parse_issues, all_entries, load_subjects(memory_dir),
+    )
+    return [
         ConflictFinding(
             "MC-CONFLICT-008", ConflictStatus.INVALID,
-            f"Invalid or inconsistent reconciliation record: {issue}",
+            f"Invalid or inconsistent reconciliation record: {issue.message}",
+            issue.entries,
         )
-        for issue in parse_issues
-    )
-    for record in records:
-        resolution = record.resolution
-        entry_ids = record.entries
-        duplicate_record_id = record.record_id.casefold() in record_ids
-        record_ids.add(record.record_id.casefold())
-        resolved_entries = [entries[value.casefold()][0] for value in entry_ids if len(entries.get(value.casefold(), [])) == 1]
-        relation_valid = True
-        if resolution == "superseded":
-            relation_valid = any(
-                left.fields.get("Superseded-By", "").casefold() == right.entry_id.casefold()
-                and right.fields.get("Supersedes", "").casefold() == left.entry_id.casefold()
-                for left in resolved_entries for right in resolved_entries if left is not right
-            )
-        elif resolution == "exception":
-            relation_valid = any(
-                left.fields.get("Exception-To", "").casefold() == right.entry_id.casefold()
-                and left.scope.startswith("area:") and right.scope == "project"
-                and left.fields.get("Subject", "").casefold() == right.fields.get("Subject", "").casefold()
-                and left.fields.get("Facet", "").casefold() == right.fields.get("Facet", "").casefold()
-                for left in resolved_entries for right in resolved_entries if left is not right
-            )
-        elif resolution == "subject-merged":
-            relation_valid = any(
-                getattr(registry_subjects.get(left.fields.get("Subject", "").casefold()), "status", "") == "merged"
-                and getattr(registry_subjects.get(left.fields.get("Subject", "").casefold()), "merged_into", "").casefold()
-                == right.fields.get("Subject", "").casefold()
-                for left in resolved_entries for right in resolved_entries if left is not right
-            )
-        valid = (
-            all(len(entries.get(value.casefold(), [])) == 1 for value in entry_ids)
-            and entry_ids not in identities
-            and not duplicate_record_id
-            and relation_valid
-        )
-        if not valid:
-            findings.append(ConflictFinding(
-                "MC-CONFLICT-008", ConflictStatus.INVALID,
-                "Invalid or inconsistent reconciliation record.", entry_ids,
-            ))
-        identities.add(entry_ids)
-    return findings
+        for issue in issues
+    ]
 
 
 def render_conflict_result(result: ConflictResult) -> None:

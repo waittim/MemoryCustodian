@@ -6,7 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 import re
 
-from .entries import ENTRY_ID_RE
+from .entries import ENTRY_ID_RE, StructuredEntry
+from .subjects import Subject
 
 
 REC_ID_RE = re.compile(r"^## (MC-REC-\d{8}-[0-9a-f]{8})\s+—\s+(.+)$", re.I)
@@ -22,6 +23,13 @@ class ReconciliationRecord:
     entries: tuple[str, ...]
     evidence: tuple[str, ...]
     text: str
+
+
+@dataclass(frozen=True)
+class ReconciliationIssue:
+    message: str
+    record_id: str = ""
+    entries: tuple[str, ...] = ()
 
 
 def _admissible_evidence(value: str) -> bool:
@@ -110,3 +118,87 @@ def parse_reconciliations(
             section,
         ))
     return tuple(records), tuple(issues)
+
+
+def validate_reconciliations(
+    records: tuple[ReconciliationRecord, ...],
+    parse_issues: tuple[str, ...],
+    entries: tuple[StructuredEntry, ...],
+    subjects: tuple[Subject, ...],
+) -> tuple[tuple[ReconciliationRecord, ...], tuple[ReconciliationIssue, ...]]:
+    """Validate records against one complete repository revision.
+
+    Only records returned in the first tuple are safe to use as review
+    acknowledgements.  This keeps current-worktree and merge review on the
+    same relation-consistency rules.
+    """
+
+    by_id: dict[str, list[StructuredEntry]] = {}
+    for entry in entries:
+        by_id.setdefault(entry.entry_id.casefold(), []).append(entry)
+    by_subject = {subject.subject_id.casefold(): subject for subject in subjects}
+    issues = [ReconciliationIssue(issue) for issue in parse_issues]
+    valid_records: list[ReconciliationRecord] = []
+    identities: set[tuple[str, ...]] = set()
+    record_ids: set[str] = set()
+
+    for record in records:
+        duplicate_id = record.record_id.casefold() in record_ids
+        record_ids.add(record.record_id.casefold())
+        identity = tuple(value.casefold() for value in record.entries)
+        duplicate_identity = identity in identities
+        identities.add(identity)
+        resolved = [
+            by_id[value.casefold()][0]
+            for value in record.entries
+            if len(by_id.get(value.casefold(), ())) == 1
+        ]
+        missing_or_duplicate = len(resolved) != len(record.entries)
+        relation_valid = True
+        if record.resolution == "superseded":
+            relation_valid = any(
+                left.fields.get("Superseded-By", "").casefold() == right.entry_id.casefold()
+                and right.fields.get("Supersedes", "").casefold() == left.entry_id.casefold()
+                for left in resolved for right in resolved if left is not right
+            )
+        elif record.resolution == "exception":
+            relation_valid = any(
+                left.fields.get("Exception-To", "").casefold() == right.entry_id.casefold()
+                and left.status == "active"
+                and right.status == "active"
+                and left.scope.startswith("area:")
+                and right.scope == "project"
+                and left.fields.get("Subject", "").casefold()
+                == right.fields.get("Subject", "").casefold()
+                and left.fields.get("Facet", "").casefold()
+                == right.fields.get("Facet", "").casefold()
+                for left in resolved for right in resolved if left is not right
+            )
+        elif record.resolution == "subject-merged":
+            relation_valid = any(
+                getattr(by_subject.get(left.fields.get("Subject", "").casefold()), "status", "") == "merged"
+                and getattr(
+                    by_subject.get(left.fields.get("Subject", "").casefold()),
+                    "merged_into",
+                    "",
+                ).casefold() == right.fields.get("Subject", "").casefold()
+                for left in resolved for right in resolved if left is not right
+            )
+
+        reasons: list[str] = []
+        if duplicate_id:
+            reasons.append("duplicate reconciliation record ID")
+        if duplicate_identity:
+            reasons.append("duplicate active reconciliation identity")
+        if missing_or_duplicate:
+            reasons.append("referenced Entry IDs must each resolve exactly once")
+        if not relation_valid:
+            reasons.append(f"{record.resolution} resolution is inconsistent with current relations")
+        if reasons:
+            issues.append(ReconciliationIssue(
+                "; ".join(reasons), record.record_id, record.entries,
+            ))
+        else:
+            valid_records.append(record)
+
+    return tuple(valid_records), tuple(issues)

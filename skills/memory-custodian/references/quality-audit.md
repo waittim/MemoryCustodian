@@ -52,7 +52,10 @@ memory-custodian check --conflicts --merge-base origin/main  # when Git/ref is a
 - Git merge-aware review reports concurrent hard-memory changes without choosing a winner by timestamp, Evidence
   count, file order, or merge order.
 - Resolve through explicit supersede, valid exception, `distinct` reconciliation, or Subject merge inventory.
-  Protocol 0.7 does not apply multi-file governance changes.
+  Use `exception add`/`exception remove` and `reconcile preview` for stable inventories, blockers, canonical output,
+  and Plan IDs. Protocol 0.7 does not apply multi-file governance changes.
+- In merge review, validate reconciliation records against each branch's own Entry and Subject graph. Do not reuse
+  a syntax-only or merge-base acknowledgement to suppress review of later changes.
 
 ## Scope And Portability
 

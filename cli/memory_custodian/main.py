@@ -11,6 +11,7 @@ from . import check as check_cmd
 from . import compact as compact_cmd
 from . import enable as enable_cmd
 from . import forget as forget_cmd
+from . import governance as governance_cmd
 from . import init as init_cmd
 from . import migrate as migrate_cmd
 from . import local as local_cmd
@@ -18,7 +19,7 @@ from . import index as index_cmd
 from . import read as read_cmd
 from . import status as status_cmd
 from . import subject as subject_cmd
-from .protocol import TASK_CATEGORY
+from .routes import TASK_INPUTS
 from .mutations import PartialMutationError
 from .templates import DEFAULT_MEMORY_DIR
 
@@ -62,7 +63,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     read_parser = sub.add_parser("read", help="Render a small context pack for a task.")
     _add_common(read_parser)
-    read_parser.add_argument("--task", choices=sorted(TASK_CATEGORY.keys()), default="default", help="Task type routed by the project manifest.")
+    read_parser.add_argument("--task", choices=TASK_INPUTS, default="default", help="Task type routed by the project manifest.")
     read_parser.add_argument("--profile", action="append", default=[], help="Optional workflow profile to include if present, such as git.")
     read_parser.add_argument("--area", action="append", default=[], help="Optional area memory to include if present, such as frontend.")
     read_parser.add_argument("--rule", action="append", default=[], help="Explicit enabled rule to include, such as output.")
@@ -253,6 +254,32 @@ def build_parser() -> argparse.ArgumentParser:
     promote_parser.add_argument("--evidence", action="append", required=True)
     promote_parser.add_argument("--apply", action="store_true")
     promote_parser.set_defaults(func=index_cmd.run_promote)
+
+    exception_parser = sub.add_parser(
+        "exception", help="Preview Exception-To relation governance (apply requires Protocol 0.8)."
+    )
+    exception_sub = exception_parser.add_subparsers(dest="exception_command", required=True)
+    exception_add = exception_sub.add_parser("add", help="Preview an area-to-project Exception-To relation.")
+    _add_common(exception_add)
+    exception_add.add_argument("entry_id", help="Active area-scoped Entry ID.")
+    exception_add.add_argument("--to", required=True, dest="target_entry_id", help="Active project-scoped Entry ID.")
+    exception_add.set_defaults(func=governance_cmd.run)
+    exception_remove = exception_sub.add_parser("remove", help="Preview removal of an Exception-To relation.")
+    _add_common(exception_remove)
+    exception_remove.add_argument("entry_id", help="Active area-scoped Entry ID.")
+    exception_remove.set_defaults(func=governance_cmd.run)
+
+    reconcile_parser = sub.add_parser(
+        "reconcile", help="Preview a canonical reconciliation record (apply requires Protocol 0.8)."
+    )
+    reconcile_sub = reconcile_parser.add_subparsers(dest="reconcile_command", required=True)
+    reconcile_preview = reconcile_sub.add_parser("preview", help="Validate and render a reconciliation record preview.")
+    _add_common(reconcile_preview)
+    reconcile_preview.add_argument("--entry", action="append", required=True, help="Entry ID to acknowledge; repeat at least twice.")
+    reconcile_preview.add_argument("--resolution", required=True, choices=sorted(governance_cmd.RESOLUTIONS))
+    reconcile_preview.add_argument("--title", required=True)
+    reconcile_preview.add_argument("--evidence", action="append", required=True)
+    reconcile_preview.set_defaults(func=governance_cmd.run)
 
     return parser
 

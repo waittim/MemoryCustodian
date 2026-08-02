@@ -43,6 +43,15 @@ TASK_ALIASES = {
     "forget": "maintenance",
 }
 
+# Reserved Protocol 0.7 compatibility aliases are accepted inputs but do not
+# silently choose one canonical interpretation. Default manifests define no
+# mutually-exclusive route policy, so this explicit table is the normative
+# reachable AMBIGUOUS case.
+AMBIGUOUS_TASK_ALIASES = {
+    "development": ("planning", "implementation"),
+}
+TASK_INPUTS = tuple(sorted((*TASK_ALIASES, *AMBIGUOUS_TASK_ALIASES)))
+
 SUBSTANTIAL_TASKS = frozenset({"planning", "implementation", "artifact", "history"})
 
 
@@ -152,6 +161,16 @@ def canonical_task(value: str) -> str:
         return TASK_ALIASES[value.casefold()]
     except (AttributeError, KeyError) as exc:
         raise ValueError(f"Unsupported task route: {value}") from exc
+
+
+def task_interpretations(value: str) -> tuple[str, ...]:
+    try:
+        normalized = value.casefold()
+    except AttributeError as exc:
+        raise ValueError(f"Unsupported task route: {value}") from exc
+    if normalized in AMBIGUOUS_TASK_ALIASES:
+        return AMBIGUOUS_TASK_ALIASES[normalized]
+    return (canonical_task(normalized),)
 
 
 def normalize_module_identity(value: str) -> str:

@@ -302,6 +302,29 @@ def _entry_reference_blockers(memory_dir: Path, entry_id: str | None) -> list[st
                 blockers.append(
                     f"{relative}:{entry.entry_id} {field} references selected Entry {entry_id}"
                 )
+    reconciliation_path = memory_dir / "reconciliations.md"
+    if reconciliation_path.exists():
+        text = read_text(reconciliation_path)
+        from .reconciliations import parse_reconciliations
+
+        records, parse_issues = parse_reconciliations(reconciliation_path, text)
+        for record in records:
+            if any(value.casefold() == entry_id.casefold() for value in record.entries):
+                blockers.append(
+                    f"reconciliations.md:{record.record_id} Entries references selected Entry {entry_id}"
+                )
+        raw_references = sum(
+            match.group(0).casefold() == entry_id.casefold()
+            for match in ENTRY_ID_RE.finditer(text)
+        )
+        valid_references = sum(
+            value.casefold() == entry_id.casefold()
+            for record in records for value in record.entries
+        )
+        if parse_issues and raw_references > valid_references:
+            blockers.append(
+                f"reconciliations.md contains selected Entry {entry_id} in an invalid record"
+            )
     return sorted(blockers)
 
 

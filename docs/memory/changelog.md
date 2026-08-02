@@ -3,7 +3,7 @@
 Entries are newest first.
 
 ## 2026-08-01
-- Closed v0.11 release-audit gaps in structured invalid routing, non-strict incomplete exits, strict reconciliation and merge review, historical freshness, relation-safe ID forgetting, and deterministic Git fixtures.
+- Closed v0.11 audit gaps in routing results, governance previews, reconciliation and merge validation, relation-safe forgetting, historical freshness, and deterministic tests.
 - Upgraded dogfood memory to Protocol 0.7 deterministic routing, structural conflict review, and bound local-overlay contracts.
 - Assigned stable Subjects and Facets to remaining active legacy decisions.
 

@@ -271,7 +271,9 @@ the pack for substantial work. Ordinary `INCOMPLETE` inspection exits successful
 strict `INCOMPLETE` exits nonzero. `AMBIGUOUS` and `INVALID` fail rather than falling back to natural-language
 guessing, and invalid inputs are rendered through the same disposition/reason model instead of bypassing it with
 an unstructured parser error. Explain also makes the normal-context exclusion of inbox candidates and archives
-explicit.
+explicit. Protocol 0.7's reserved legacy `development` task alias intentionally maps to both planning and
+implementation, producing the reachable `MC-ROUTE-AMBIGUOUS` diagnostic until a canonical task is supplied;
+default manifests do not otherwise invent mutually exclusive routes.
 
 Record durable memory when a decision, constraint, preference, or rejected approach should survive the current chat:
 
@@ -328,6 +330,9 @@ memory-custodian migrate
 memory-custodian list --status active
 memory-custodian show MC-CON-...
 memory-custodian forget --id MC-DNU-...
+memory-custodian exception add MC-CON-20260801-a1b2c3d4 --to MC-CON-20260801-e5f6a7b8
+memory-custodian exception remove MC-CON-20260801-a1b2c3d4
+memory-custodian reconcile preview --entry MC-CON-... --entry MC-CON-... --resolution distinct --title "Distinct invariants" --evidence user-confirmed
 ```
 
 Protocol 0.7 retains entry and Subject schema version 1. Formal entries use stable IDs such as
@@ -364,8 +369,9 @@ Hard forget removes matching active managed memory and replaces matching topic-b
 redacted guard. Purge additionally searches managed `archive/` content and removes matching guards. Every preview
 states the selected managed scope and explicitly reports that Git history, clones, forks, backups, and caches are not
 modified or revoked. Forgetting controls what future agents receive through MemoryCustodian; it is not repository-wide
-erasure. `forget --id` selects only the canonical unit whose heading owns that ID; live entries that relation-reference
-the selected entry become blockers and are never removed as incidental substring matches. `--history-check`
+erasure. A generic hard-erasure `MC-TOMB` is a content-minimized governance guard, not a Subject/Facet structural
+owner. `forget --id` selects only the canonical unit whose heading owns that ID; live entries and reconciliation
+records that reference the selected entry become blockers and are never removed as incidental substring matches. `--history-check`
 optionally inspects reachable history in the current local Git repository without
 changing it. `unavailable` is not a PASS, and `no-reachable-copy-detected` is limited evidence—not proof that no
 copy exists in other refs, remotes, clones, forks, backups, caches, or dangling objects.
@@ -393,10 +399,17 @@ Reconciliation records use a strict canonical parser: malformed headings, duplic
 fields, unsorted/duplicate Entry IDs, invalid Evidence, duplicate record IDs, and inconsistent relations are
 `MC-CONFLICT-008 INVALID` rather than silently ignored.
 
+`exception add` and `exception remove` provide stable, blocker-aware `Exception-To` previews. `reconcile preview`
+renders a canonical record, complete entry inventory, relation-consistency blockers, and stable Plan ID. These are
+read-only Protocol 0.7 workflows: cross-file apply still requires the Protocol 0.8 transaction journal.
+
 When Git is available, `check --conflicts --merge-base <ref>` compares semantic units changed on both sides. It
 distinguishes deterministic collisions from concurrent hard-memory changes requiring semantic reconciliation.
 Short files and timestamps improve reviewability but do not resolve contradictions or establish precedence.
-Explicit supersede, exception, `distinct` reconciliation, and Subject merge inventory are auditable. Protocol 0.7
+Merge review revalidates reconciliation syntax, referenced Entry IDs, and resolution relations independently in
+each Git revision. Invalid target-branch records cannot suppress REVIEW, and acknowledgements inherited unchanged
+from the merge base do not waive later concurrent changes. Explicit supersede, exception, `distinct`
+reconciliation, and Subject merge inventory are auditable. Protocol 0.7
 does not apply Subject merges, reconciliation acknowledgements, Exception-To mutations, or multi-file promotions;
 those transactions require the Protocol 0.8 journal.
 Decision archival additionally requires semantic review and explicit confirmation with `compact --target decisions.md --apply --archive-oldest`.

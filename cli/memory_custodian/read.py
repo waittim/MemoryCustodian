@@ -129,7 +129,10 @@ def run(args) -> int:
                 continue
             local_contents.append((f"local/{path.relative_to(overlay.directory).as_posix()}", text.strip()))
     completeness = result.completeness
-    if overlay.status == LocalStatus.REVIEW or local_scope_warnings:
+    if (
+        completeness == RoutingCompleteness.COMPLETE
+        and (overlay.status == LocalStatus.REVIEW or local_scope_warnings)
+    ):
         completeness = RoutingCompleteness.INCOMPLETE
     matched_areas = tuple(
         module.module_id.removeprefix("areas/").removesuffix(".md")

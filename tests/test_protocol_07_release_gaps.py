@@ -59,6 +59,29 @@ def subject_unit(subject_id: str, title: str, canonical_ref: str = "") -> str:
 
 
 class RoutingAndQualityReleaseTests(unittest.TestCase):
+    def test_legacy_multi_mapping_task_is_reachably_ambiguous(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            code, output, error = capture([
+                "read", "--task", "development", "--explain", "--names-only",
+                "--project-root", tmp,
+            ])
+            self.assertEqual(code, 1)
+            self.assertEqual(error, "")
+            self.assertIn("Routing completeness: AMBIGUOUS", output)
+            self.assertIn("MC-ROUTE-AMBIGUOUS", output)
+            self.assertIn("brief.md", output)
+            self.assertIn("constraints.md", output)
+
+            strict_code, strict_output, strict_error = capture([
+                "read", "--task", "development", "--strict-routing",
+                "--names-only", "--project-root", tmp,
+            ])
+            self.assertEqual(strict_code, 2)
+            self.assertIn("Context pack not approved for substantial work", strict_output)
+            self.assertIn("completeness=AMBIGUOUS", strict_error)
+
     def test_invalid_routing_uses_structured_result_and_stderr(self):
         with tempfile.TemporaryDirectory() as tmp:
             with redirect_stdout(StringIO()):
@@ -211,6 +234,88 @@ class RoutingAndQualityReleaseTests(unittest.TestCase):
 
 
 class ForgetAndHistoryReleaseTests(unittest.TestCase):
+    def test_hard_forget_apply_preserves_clear_conflicts_and_strict_read(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            memory = Path(tmp) / "docs/memory"
+            subject_id = "MC-SUBJ-20260801-a1b2c3d4"
+            target_id = "MC-DEC-20260801-11111111"
+            (memory / "subjects.md").write_text(
+                "# Subject Registry\n\n" + subject_unit(subject_id, "Hard erasure"),
+                encoding="utf-8",
+            )
+            target = render_active_entry(
+                "decision", target_id, "Forget safely", "Remove this entry.", None,
+                "project", ("user-confirmed",), subject=subject_id, facet="behavior",
+            )
+            (memory / "decisions.md").write_text(
+                "# Decisions\n\n" + target + "\n", encoding="utf-8",
+            )
+            code, preview, _error = capture([
+                "forget", "--id", target_id, "--mode", "hard", "--project-root", tmp,
+            ])
+            self.assertEqual(code, 0)
+            plan_id = re.search(r"Plan ID: ([0-9a-f]{16})", preview).group(1)
+            apply_code, _output, _error = capture([
+                "forget", "--id", target_id, "--mode", "hard", "--apply",
+                "--confirm-plan", plan_id, "--project-root", tmp,
+            ])
+            self.assertEqual(apply_code, 0)
+            tombstones = (memory / "do-not-use.md").read_text(encoding="utf-8")
+            self.assertRegex(tombstones, r"MC-TOMB-\d{8}-[0-9a-f]{8}")
+            self.assertNotIn("Subject:", tombstones)
+            self.assertEqual(analyze_conflicts(memory).status.value, "CLEAR")
+            strict_code, strict_output, _error = capture([
+                "read", "--task", "implementation", "--strict-routing",
+                "--names-only", "--project-root", tmp,
+            ])
+            self.assertEqual(strict_code, 0)
+            self.assertIn("Conflict status: CLEAR", strict_output)
+
+    def test_id_forget_blocks_reconciliation_references(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            memory = Path(tmp) / "docs/memory"
+            subject_id = "MC-SUBJ-20260801-a1b2c3d4"
+            first_id = "MC-DEC-20260801-11111111"
+            second_id = "MC-DEC-20260801-22222222"
+            (memory / "subjects.md").write_text(
+                "# Subject Registry\n\n" + subject_unit(subject_id, "Audit chain"), encoding="utf-8",
+            )
+            first = render_active_entry(
+                "decision", first_id, "First", "First invariant.", None, "project",
+                ("user-confirmed",), subject=subject_id, facet="behavior",
+            )
+            second = render_active_entry(
+                "decision", second_id, "Second", "Second invariant.", None, "project",
+                ("user-confirmed",), subject=subject_id, facet="interface",
+            )
+            decisions = memory / "decisions.md"
+            decisions.write_text("# Decisions\n\n" + first + "\n\n" + second + "\n", encoding="utf-8")
+            (memory / "reconciliations.md").write_text(
+                "# Reconciliations\n\n"
+                "## MC-REC-20260801-abcdef12 — Distinct entries\n\n"
+                "Status: active\nEntries:\n"
+                f"- {first_id}\n- {second_id}\n"
+                "Resolution: distinct\nEvidence:\n- user-confirmed\n",
+                encoding="utf-8",
+            )
+            before = decisions.read_text(encoding="utf-8")
+            code, output, _error = capture([
+                "forget", "--id", first_id, "--mode", "hard", "--project-root", tmp,
+            ])
+            self.assertEqual(code, 0)
+            self.assertIn("reconciliations.md:MC-REC-20260801-abcdef12", output)
+            plan_id = re.search(r"Plan ID: ([0-9a-f]{16})", output).group(1)
+            apply_code, _output, _error = capture([
+                "forget", "--id", first_id, "--mode", "hard", "--apply",
+                "--confirm-plan", plan_id, "--project-root", tmp,
+            ])
+            self.assertEqual(apply_code, 1)
+            self.assertEqual(decisions.read_text(encoding="utf-8"), before)
+
     def test_id_forget_is_exact_and_blocks_live_relations(self):
         with tempfile.TemporaryDirectory() as tmp:
             with redirect_stdout(StringIO()):
@@ -285,6 +390,122 @@ class ForgetAndHistoryReleaseTests(unittest.TestCase):
 
 
 class MergeAndDeterminismReleaseTests(unittest.TestCase):
+    def test_exception_and_reconciliation_workflows_have_stable_complete_previews(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            memory = Path(tmp) / "docs/memory"
+            subject_id = "MC-SUBJ-20260801-a1b2c3d4"
+            project_id = "MC-CON-20260801-11111111"
+            area_id = "MC-CON-20260801-22222222"
+            (memory / "subjects.md").write_text(
+                "# Subject Registry\n\n" + subject_unit(subject_id, "Governance preview"), encoding="utf-8",
+            )
+            project_entry = render_active_entry(
+                "constraint", project_id, "Baseline", "Project baseline.", None,
+                "project", ("user-confirmed",), subject=subject_id, facet="behavior",
+            )
+            area_entry = render_active_entry(
+                "constraint", area_id, "Area exception", "Area exception.", None,
+                "area:backend", ("user-confirmed",), subject=subject_id, facet="behavior",
+            )
+            (memory / "constraints.md").write_text("# Constraints\n\n" + project_entry + "\n", encoding="utf-8")
+            (memory / "areas").mkdir()
+            area_path = memory / "areas/backend.md"
+            area_path.write_text("# Backend\n\n" + area_entry + "\n", encoding="utf-8")
+
+            command = [
+                "exception", "add", area_id, "--to", project_id, "--project-root", tmp,
+            ]
+            code, first_preview, _error = capture(command)
+            second_code, second_preview, _error = capture(command)
+            self.assertEqual((code, second_code), (0, 0))
+            self.assertEqual(first_preview, second_preview)
+            self.assertIn("Blockers:\n- none", first_preview)
+            self.assertIn(f"Exception-To: {project_id}", first_preview)
+            self.assertRegex(first_preview, r"Plan ID: [0-9a-f]{16}")
+
+            reconcile = [
+                "reconcile", "preview", "--entry", area_id, "--entry", project_id,
+                "--resolution", "distinct", "--title", "Separate invariants",
+                "--evidence", "user-confirmed", "--project-root", tmp,
+            ]
+            code, record_preview, _error = capture(reconcile)
+            self.assertEqual(code, 0)
+            self.assertIn("Reconciliation record preview:", record_preview)
+            self.assertIn("Resolution: distinct", record_preview)
+            self.assertIn("Blockers:\n- none", record_preview)
+            self.assertRegex(record_preview, r"MC-REC-\d{8}-[0-9a-f]{8}")
+
+            duplicate_code, _output, duplicate_error = capture([
+                "reconcile", "preview", "--entry", area_id,
+                "--entry", area_id.lower(), "--resolution", "distinct",
+                "--title", "Duplicate identity", "--evidence", "user-confirmed",
+                "--project-root", tmp,
+            ])
+            self.assertEqual(duplicate_code, 2)
+            self.assertIn("at least two distinct", duplicate_error)
+
+            with_relation = area_entry.replace(
+                "Evidence:\n", f"Exception-To: {project_id}\nEvidence:\n",
+            )
+            area_path.write_text("# Backend\n\n" + with_relation + "\n", encoding="utf-8")
+            code, remove_preview, _error = capture([
+                "exception", "remove", area_id, "--project-root", tmp,
+            ])
+            self.assertEqual(code, 0)
+            self.assertIn("MC-CONFLICT-002", remove_preview)
+            self.assertIn("Blockers:\n- none", remove_preview)
+
+    def test_invalid_target_reconciliation_cannot_suppress_merge_review(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = initialize_git_project(tmp)
+            subject_id = "MC-SUBJ-20260801-a1b2c3d4"
+            left_id = "MC-DEC-20260801-11111111"
+            right_id = "MC-DEC-20260801-22222222"
+            (memory / "subjects.md").write_text(
+                "# Subject Registry\n\n" + subject_unit(subject_id, "Merge reconciliation"),
+                encoding="utf-8",
+            )
+            git(tmp, "add", ".")
+            git(tmp, "commit", "-qm", "subject")
+            base = git(tmp, "rev-parse", "HEAD")
+
+            git(tmp, "checkout", "-qb", "left")
+            left = render_active_entry(
+                "decision", left_id, "Left", "Left change.", None, "project",
+                ("user-confirmed",), subject=subject_id, facet="behavior",
+            )
+            (memory / "decisions.md").write_text("# Decisions\n\n" + left + "\n", encoding="utf-8")
+            git(tmp, "add", ".")
+            git(tmp, "commit", "-qm", "left")
+
+            git(tmp, "checkout", "-qb", "right", base)
+            right = render_active_entry(
+                "decision", right_id, "Right", "Right change.", None, "project",
+                ("user-confirmed",), subject=subject_id, facet="interface",
+            )
+            (memory / "decisions.md").write_text("# Decisions\n\n" + right + "\n", encoding="utf-8")
+            (memory / "reconciliations.md").write_text(
+                "# Reconciliations\n\n"
+                "## MC-REC-20260801-abcdef12 — Invalid cross-branch acknowledgement\n\n"
+                "Status: active\nEntries:\n"
+                f"- {left_id}\n- {right_id}\n"
+                "Resolution: distinct\nEvidence:\n- user-confirmed\n",
+                encoding="utf-8",
+            )
+            git(tmp, "add", ".")
+            git(tmp, "commit", "-qm", "right with invalid reconciliation")
+            git(tmp, "checkout", "-q", "left")
+
+            code, output, _error = capture([
+                "check", "--conflicts", "--merge-base", "right", "--project-root", tmp,
+            ])
+            self.assertEqual(code, 1)
+            self.assertIn("Merge review status: CONFLICT", output)
+            self.assertIn("MC-MERGE-006", output)
+            self.assertIn("must each resolve exactly once", output)
+
     def test_merge_review_detects_exact_owner_conflict(self):
         with tempfile.TemporaryDirectory() as tmp:
             memory = initialize_git_project(tmp)
