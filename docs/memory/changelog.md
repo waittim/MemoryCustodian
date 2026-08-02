@@ -3,7 +3,7 @@
 Entries are newest first.
 
 ## 2026-08-01
-- Closed v0.11 audit gaps in routing results, governance previews, reconciliation and merge validation, relation-safe forgetting, historical freshness, and deterministic tests.
+- Closed v0.11 audit gaps in activation-complete exclusivity, strict protocol metadata, shared structural validation, dependency-bound Plan IDs, exact-pair merge review, relation-safe forgetting, and freshness.
 - Upgraded dogfood memory to Protocol 0.7 deterministic routing, structural conflict review, and bound local-overlay contracts.
 - Assigned stable Subjects and Facets to remaining active legacy decisions.
 

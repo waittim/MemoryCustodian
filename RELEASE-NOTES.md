@@ -12,8 +12,9 @@
   entry-level budget omissions, and `COMPLETE/INCOMPLETE/AMBIGUOUS/INVALID` diagnostics.
 - Invalid routing now remains inside the shared result/disposition model, ordinary non-strict `INCOMPLETE` reads use
   the documented successful inspection exit, and explain exposes inbox/archive policy exclusions.
-- Made `AMBIGUOUS` reachable through the explicit legacy `development` compatibility alias while retaining a safe
-  baseline and the documented ordinary/strict exit behavior.
+- Made `AMBIGUOUS` reachable through explicit manifest `exclusive-group` policy for path-activated areas. Group
+  resolution considers both path and explicit activations, loads at most one member, and rejects multiple explicit
+  selections while keeping default manifests unambiguous.
 - Added routing, reachability, and Evidence/relation freshness checks. They report bounded structural facts and never
   claim automatic semantic retrieval or factual correctness.
 
@@ -38,7 +39,13 @@
   records only after applying the same full relation validation to each Git revision; invalid branch records and
   unchanged merge-base acknowledgements cannot suppress new review findings.
 - Added stable, blocker-aware `exception add`, `exception remove`, and `reconcile preview` workflows while retaining
-  the Protocol 0.8 boundary for transactional apply.
+  the Protocol 0.8 boundary for transactional apply. Relationship resolutions are exact two-Entry acknowledgements;
+  `distinct` cannot waive duplicate structural owners; merge review consumes validated exact pairs only.
+- Conflict analysis, reconciliation validation, and governance previews share active structural-operand validation
+  for scope, unique active Subject resolution, and canonical Facet.
+- Governance previews require exact Protocol/schema compatibility, and their Plan IDs bind manifest, Entry,
+  Subject-registry, reconciliation, content, and path dependencies used by the rendered result. Duplicate protocol
+  scalar fields are invalid rather than accepted with last-value-wins behavior.
 - Added matched-context conflict gates and optional read-only merge-base review for cross-branch structural collisions
   and concurrent hard-memory changes requiring human reconciliation.
 - Subject names, timestamps, Evidence counts, file order, and prose similarity never choose a winner. This release

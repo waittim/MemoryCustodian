@@ -271,9 +271,23 @@ the pack for substantial work. Ordinary `INCOMPLETE` inspection exits successful
 strict `INCOMPLETE` exits nonzero. `AMBIGUOUS` and `INVALID` fail rather than falling back to natural-language
 guessing, and invalid inputs are rendered through the same disposition/reason model instead of bypassing it with
 an unstructured parser error. Explain also makes the normal-context exclusion of inbox candidates and archives
-explicit. Protocol 0.7's reserved legacy `development` task alias intentionally maps to both planning and
-implementation, producing the reachable `MC-ROUTE-AMBIGUOUS` diagnostic until a canonical task is supplied;
-default manifests do not otherwise invent mutually exclusive routes.
+explicit. Default Protocol 0.7 manifests do not declare mutually exclusive routes. A customized manifest may place
+path-activated areas in one `exclusive-group`. With no explicit selection, multiple path-activated members are
+`AMBIGUOUS`; one explicit member selects that member and suppresses the other automatic activations; multiple
+explicit members are `AMBIGUOUS`. At most one member of an exclusive group is loaded:
+
+```markdown
+- `areas/client.md`
+  - activation: path-or-explicit
+  - paths: `src/**`
+  - exclusive-group: runtime
+- `areas/server.md`
+  - activation: path-or-explicit
+  - paths: `src/**`
+  - exclusive-group: runtime
+```
+
+`exclusive-group` is valid only for path-activated areas. It is never inferred from names, paths, or task prose.
 
 Record durable memory when a decision, constraint, preference, or rejected approach should survive the current chat:
 
@@ -397,11 +411,19 @@ and strict substantial reads refuse unresolved conflicts.
 
 Reconciliation records use a strict canonical parser: malformed headings, duplicate fields or blocks, unknown
 fields, unsorted/duplicate Entry IDs, invalid Evidence, duplicate record IDs, and inconsistent relations are
-`MC-CONFLICT-008 INVALID` rather than silently ignored.
+`MC-CONFLICT-008 INVALID` rather than silently ignored. Relationship resolutions (`superseded`, `exception`, and
+`subject-merged`) acknowledge exactly two Entry IDs. A multi-entry `distinct` record acknowledges only pairwise
+different active `Scope + Subject + Facet` identities; it cannot waive an exact structural-owner conflict.
+Conflict analysis, reconciliation validation, and governance previews share the same active structural-operand
+checks for scope, uniquely resolved active Subject, and canonical Facet.
 
 `exception add` and `exception remove` provide stable, blocker-aware `Exception-To` previews. `reconcile preview`
 renders a canonical record, complete entry inventory, relation-consistency blockers, and stable Plan ID. These are
-read-only Protocol 0.7 workflows: cross-file apply still requires the Protocol 0.8 transaction journal.
+read-only Protocol 0.7 workflows: cross-file apply still requires the Protocol 0.8 transaction journal. They reject
+older/newer protocols, duplicate protocol scalar fields, and missing or mismatched Entry, Subject, routing, or
+conflict schema metadata. Their Plan IDs
+bind the manifest plus every Entry, registry, and reconciliation dependency used to render the preview, so the
+identifier changes whenever its observable decision state changes.
 
 When Git is available, `check --conflicts --merge-base <ref>` compares semantic units changed on both sides. It
 distinguishes deterministic collisions from concurrent hard-memory changes requiring semantic reconciliation.

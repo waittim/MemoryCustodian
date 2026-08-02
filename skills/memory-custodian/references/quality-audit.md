@@ -54,8 +54,16 @@ memory-custodian check --conflicts --merge-base origin/main  # when Git/ref is a
 - Resolve through explicit supersede, valid exception, `distinct` reconciliation, or Subject merge inventory.
   Use `exception add`/`exception remove` and `reconcile preview` for stable inventories, blockers, canonical output,
   and Plan IDs. Protocol 0.7 does not apply multi-file governance changes.
+- Require relationship reconciliation records to identify exactly two Entries. For `distinct`, require every
+  referenced active Entry to have a different `Scope + Subject + Facet`; it cannot override an exact owner conflict.
+- Use one structural-operand validator across conflict analysis, reconciliation, and governance previews: each
+  participating Entry must be active, have valid scope and Facet, and resolve to exactly one active Subject.
 - In merge review, validate reconciliation records against each branch's own Entry and Subject graph. Do not reuse
-  a syntax-only or merge-base acknowledgement to suppress review of later changes.
+  a syntax-only or merge-base acknowledgement to suppress review of later changes, and exempt only exact validated
+  Entry pairs rather than arbitrary subsets of a record.
+- Governance preview Plan IDs must bind the exact protocol/schema metadata and every manifest, Entry, Subject, path,
+  and reconciliation dependency used in the rendered result. Reject duplicate protocol scalar fields before Entry
+  lookup instead of accepting the last value.
 
 ## Scope And Portability
 

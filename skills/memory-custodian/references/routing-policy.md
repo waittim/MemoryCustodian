@@ -19,9 +19,12 @@ the pack—for example, a substantial task has enabled path-routed areas but no 
 means a valid declared exclusivity cannot be resolved. `INVALID` means manifest grammar, metadata, or input violates
 the protocol.
 
-Default Protocol 0.7 manifests do not declare mutually exclusive routes. The reserved legacy `development` task
-input is the explicit compatibility case: it maps to both planning and implementation, emits
-`MC-ROUTE-AMBIGUOUS`, retains only the safe baseline, and requires the caller to choose a canonical task.
+Default Protocol 0.7 manifests do not declare mutually exclusive routes. A customized manifest may assign the same
+`exclusive-group` token to two or more path-activated areas. Resolve the group across every activation source:
+exactly one explicit member selects it and suppresses other path activations; multiple explicit members, or multiple
+path members without an explicit selection, emit `MC-ROUTE-AMBIGUOUS`. Load at most one group member and retain the
+safe baseline on ambiguity. `exclusive-group` is invalid on rules, profiles, or explicit-only areas and is never
+inferred.
 
 Use `--strict-routing` before substantial planning, implementation, debugging, or review. An incomplete inspection
 may show the shared safety baseline, but it is not an approved context pack.
