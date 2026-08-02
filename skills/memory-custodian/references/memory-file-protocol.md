@@ -275,7 +275,10 @@ while differently named Subjects are never auto-merged.
 
 `reconciliations.md` may contain active `MC-REC` records with at least two canonical Entry IDs, admissible Evidence,
 and `Resolution: distinct|superseded|exception|subject-merged`. Protocol 0.7 validates hand-maintained records and
-previews Subject merges, but transactional governance apply waits for Protocol 0.8.
+previews Subject merges, but transactional governance apply waits for Protocol 0.8. Relationship resolutions name
+exactly two Entries. A supersession requires a structurally valid active replacement retaining Scope, Subject, and
+Facet. A Subject merge may retain a historical source reference to the merged Subject, but its active target must be
+structurally valid and match the source Scope and Facet.
 
 ## Local Overlay
 

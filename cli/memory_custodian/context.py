@@ -260,18 +260,11 @@ def route_context(
         for declaration in declarations
     ]
     exclusive_declarations: dict[str, list[ModuleDeclaration]] = {}
-    path_activated: dict[str, list[str]] = {}
     for declaration in declarations:
         if not declaration.exclusive_group:
             continue
         exclusive_declarations.setdefault(declaration.exclusive_group, []).append(declaration)
-        if any(
-            glob_matches(pattern, path.value)
-            for pattern in declaration.paths for path in normalized_paths
-        ):
-            path_activated.setdefault(declaration.exclusive_group, []).append(
-                declaration.module_id
-            )
+    optional_by_id = {module.module_id: module for module in optional}
     ambiguous_groups: dict[str, tuple[str, ...]] = {}
     selected_groups: dict[str, str] = {}
     active_by_group: dict[str, set[str]] = {}
@@ -282,7 +275,11 @@ def route_context(
             if declaration.slug in requested["areas"]
             and declaration.activation == "path-or-explicit"
         ]
-        active_ids = {*path_activated.get(group, ()), *explicit_ids}
+        active_ids = {
+            declaration.module_id
+            for declaration in group_declarations
+            if optional_by_id[declaration.module_id].disposition != ModuleDisposition.SKIPPED
+        }
         active_by_group[group] = active_ids
         if len(explicit_ids) == 1:
             selected_groups[group] = explicit_ids[0]

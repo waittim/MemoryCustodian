@@ -7,13 +7,13 @@ from itertools import combinations
 from pathlib import Path
 import re
 
-from .entries import ENTRY_ID_RE, StructuredEntry
+from .entries import ENTRY_ID_RE, StructuredEntry, VALID_SCOPES_RE
 from .structural import (
     active_structural_operand_issues,
     structural_identity,
     subject_index,
 )
-from .subjects import Subject
+from .subjects import FACETS, Subject
 
 
 REC_ID_RE = re.compile(r"^## (MC-REC-\d{8}-[0-9a-f]{8})\s+—\s+(.+)$", re.I)
@@ -46,6 +46,49 @@ def reconciliation_pairs(
     return tuple(
         frozenset((left.casefold(), right.casefold()))
         for left, right in combinations(record.entries, 2)
+    )
+
+
+def _superseded_pair_valid(
+    previous: StructuredEntry,
+    replacement: StructuredEntry,
+    subjects: dict[str, tuple[Subject, ...]],
+) -> bool:
+    return (
+        previous.status == "superseded"
+        and not active_structural_operand_issues(replacement, subjects)
+        and previous.fields.get("Superseded-By", "").casefold()
+        == replacement.entry_id.casefold()
+        and replacement.fields.get("Supersedes", "").casefold()
+        == previous.entry_id.casefold()
+        and previous.scope.casefold() == replacement.scope.casefold()
+        and previous.fields.get("Subject", "").casefold()
+        == replacement.fields.get("Subject", "").casefold()
+        and previous.fields.get("Facet", "").casefold()
+        == replacement.fields.get("Facet", "").casefold()
+    )
+
+
+def _subject_merged_pair_valid(
+    historical: StructuredEntry,
+    current: StructuredEntry,
+    subjects: dict[str, tuple[Subject, ...]],
+) -> bool:
+    source_subjects = subjects.get(
+        historical.fields.get("Subject", "").casefold(), (),
+    )
+    return (
+        historical.status in {"superseded", "promoted"}
+        and VALID_SCOPES_RE.fullmatch(historical.scope) is not None
+        and historical.fields.get("Facet", "") in FACETS
+        and len(source_subjects) == 1
+        and source_subjects[0].status == "merged"
+        and (source_subjects[0].merged_into or "").casefold()
+        == current.fields.get("Subject", "").casefold()
+        and not active_structural_operand_issues(current, subjects)
+        and historical.scope.casefold() == current.scope.casefold()
+        and historical.fields.get("Facet", "").casefold()
+        == current.fields.get("Facet", "").casefold()
     )
 
 
@@ -179,10 +222,7 @@ def validate_reconciliations(
             relation_valid = False
         elif record.resolution == "superseded":
             relation_valid = any(
-                left.status == "superseded"
-                and right.status == "active"
-                and left.fields.get("Superseded-By", "").casefold() == right.entry_id.casefold()
-                and right.fields.get("Supersedes", "").casefold() == left.entry_id.casefold()
+                _superseded_pair_valid(left, right, subjects_by_id)
                 for left in resolved for right in resolved if left is not right
             )
         elif record.resolution == "exception":
@@ -201,19 +241,7 @@ def validate_reconciliations(
             )
         elif record.resolution == "subject-merged":
             relation_valid = any(
-                len(subjects_by_id.get(left.fields.get("Subject", "").casefold(), ())) == 1
-                and getattr(
-                    subjects_by_id[left.fields.get("Subject", "").casefold()][0],
-                    "status",
-                    "",
-                ) == "merged"
-                and getattr(
-                    subjects_by_id[left.fields.get("Subject", "").casefold()][0],
-                    "merged_into",
-                    "",
-                ).casefold() == right.fields.get("Subject", "").casefold()
-                and len(subjects_by_id.get(right.fields.get("Subject", "").casefold(), ())) == 1
-                and subjects_by_id[right.fields.get("Subject", "").casefold()][0].status == "active"
+                _subject_merged_pair_valid(left, right, subjects_by_id)
                 for left in resolved for right in resolved if left is not right
             )
 

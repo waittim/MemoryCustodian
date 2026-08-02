@@ -689,6 +689,11 @@ class MergeAndDeterminismReleaseTests(unittest.TestCase):
                 "Evidence:\n", f"Exception-To: {project_id}\nEvidence:\n",
             )
             area_path.write_text("# Backend\n\n" + with_relation + "\n", encoding="utf-8")
+            _code, invalid_remove, _error = capture([
+                "exception", "remove", area_id, "--project-root", tmp,
+            ])
+            self.assertIn("result not established due to blockers", invalid_remove)
+            self.assertNotIn("MC-CONFLICT-002", invalid_remove)
             (memory / "reconciliations.md").write_text(
                 "# Reconciliations\n\n"
                 "## MC-REC-20260801-abcdef12 — Invalid operands\n\n"
@@ -730,6 +735,19 @@ class MergeAndDeterminismReleaseTests(unittest.TestCase):
                 lambda text: re.sub(r"(?m)^- project_id:.*\n", "", text),
                 "missing a valid UUIDv4 project_id",
             ),
+            (
+                lambda text: text.replace(
+                    "- protocol_version: 0.7",
+                    "- protocol_version:\n- protocol_version: 0.7",
+                ),
+                "Protocol metadata field protocol_version must not be empty",
+            ),
+            (
+                lambda text: text.replace(
+                    "- protocol_version: 0.7", "- protocol_version\n- protocol_version: 0.7",
+                ),
+                "Malformed protocol metadata line",
+            ),
         )
         for mutate, expected in cases:
             with self.subTest(expected=expected), tempfile.TemporaryDirectory() as tmp:
@@ -743,6 +761,121 @@ class MergeAndDeterminismReleaseTests(unittest.TestCase):
                 ])
                 self.assertEqual(code, 2)
                 self.assertIn(expected, error)
+
+    def test_invalid_superseded_replacement_is_rejected_in_merge_review(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = initialize_git_project(tmp)
+            subject_id = "MC-SUBJ-20260802-a1b2c3d4"
+            old_id = "MC-DEC-20260802-11111111"
+            replacement_id = "MC-DEC-20260802-22222222"
+            (memory / "subjects.md").write_text(
+                "# Subject Registry\n\n" + subject_unit(subject_id, "Superseded review"),
+                encoding="utf-8",
+            )
+            old = render_active_entry(
+                "decision", old_id, "Old", "Old decision.", None, "project",
+                ("user-confirmed",), subject=subject_id, facet="behavior",
+            )
+            decisions = memory / "decisions.md"
+            decisions.write_text("# Decisions\n\n" + old + "\n", encoding="utf-8")
+            git(tmp, "add", ".")
+            git(tmp, "commit", "-qm", "old decision")
+            base = git(tmp, "rev-parse", "HEAD")
+
+            git(tmp, "checkout", "-qb", "left")
+            decisions.write_text(
+                decisions.read_text(encoding="utf-8").replace(
+                    "Decision:\nOld decision.", "Decision:\nOld decision changed on left.",
+                ),
+                encoding="utf-8",
+            )
+            git(tmp, "add", ".")
+            git(tmp, "commit", "-qm", "extend old decision")
+
+            git(tmp, "checkout", "-qb", "right", base)
+            superseded = old.replace("Status: active", "Status: superseded").replace(
+                "Evidence:\n", f"Superseded-By: {replacement_id}\nEvidence:\n",
+            )
+            replacement = render_active_entry(
+                "decision", replacement_id, "Invalid replacement", "Replacement.", None,
+                "project", ("user-confirmed",), subject="MC-SUBJ-20260802-deadbeef",
+                facet="not-a-facet", supersedes=old_id,
+            )
+            decisions.write_text(
+                "# Decisions\n\n" + replacement + "\n\n" + superseded + "\n",
+                encoding="utf-8",
+            )
+            (memory / "reconciliations.md").write_text(
+                "# Reconciliations\n\n"
+                "## MC-REC-20260802-abcdef12 — Invalid replacement\n\n"
+                "Status: active\nEntries:\n"
+                f"- {old_id}\n- {replacement_id}\n"
+                "Resolution: superseded\nEvidence:\n- user-confirmed\n",
+                encoding="utf-8",
+            )
+            git(tmp, "add", ".")
+            git(tmp, "commit", "-qm", "invalid superseded reconciliation")
+            git(tmp, "checkout", "-q", "left")
+
+            code, output, _error = capture([
+                "check", "--conflicts", "--merge-base", "right", "--project-root", tmp,
+            ])
+            self.assertEqual(code, 1)
+            self.assertIn("MC-MERGE-006", output)
+            self.assertIn("superseded resolution is inconsistent", output)
+
+    def test_subject_merged_requires_valid_current_target_operand(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            memory = Path(tmp) / "docs/memory"
+            source_subject = "MC-SUBJ-20260802-11111111"
+            target_subject = "MC-SUBJ-20260802-22222222"
+            historical_id = "MC-DEC-20260802-11111111"
+            current_id = "MC-DEC-20260802-22222222"
+            merged = (
+                f"## {source_subject} — Old subject\n\nStatus: merged\nKind: concept\n"
+                f"Merged-Into: {target_subject}\nEvidence:\n- user-confirmed\n\n"
+                "Aliases:\n- old subject\n"
+            )
+            (memory / "subjects.md").write_text(
+                "# Subject Registry\n\n" + merged + "\n"
+                + subject_unit(target_subject, "Current subject"),
+                encoding="utf-8",
+            )
+            historical = (
+                f"## {historical_id} — Historical\n\nStatus: superseded\nScope: project\n"
+                f"Subject: {source_subject}\nFacet: behavior\nEvidence:\n- user-confirmed\n\n"
+                "Decision:\nHistorical.\n"
+            )
+            current = render_active_entry(
+                "decision", current_id, "Invalid current", "Current.", None, "project",
+                ("user-confirmed",), subject=target_subject, facet="not-a-facet",
+            )
+            (memory / "decisions.md").write_text(
+                "# Decisions\n\n" + historical + "\n" + current + "\n", encoding="utf-8",
+            )
+            (memory / "reconciliations.md").write_text(
+                "# Reconciliations\n\n"
+                "## MC-REC-20260802-bcdefa12 — Invalid merge target\n\n"
+                "Status: active\nEntries:\n"
+                f"- {historical_id}\n- {current_id}\n"
+                "Resolution: subject-merged\nEvidence:\n- user-confirmed\n",
+                encoding="utf-8",
+            )
+            result = analyze_conflicts(memory)
+            self.assertEqual(result.status.value, "INVALID")
+            self.assertTrue(any(item.code == "MC-CONFLICT-008" for item in result.findings))
+
+            valid_current = current.replace("Facet: not-a-facet", "Facet: behavior")
+            (memory / "decisions.md").write_text(
+                "# Decisions\n\n" + historical + "\n" + valid_current + "\n",
+                encoding="utf-8",
+            )
+            valid_result = analyze_conflicts(memory)
+            self.assertFalse(
+                any(item.code == "MC-CONFLICT-008" for item in valid_result.findings)
+            )
 
     def test_invalid_target_reconciliation_cannot_suppress_merge_review(self):
         with tempfile.TemporaryDirectory() as tmp:

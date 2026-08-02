@@ -43,9 +43,12 @@
   `distinct` cannot waive duplicate structural owners; merge review consumes validated exact pairs only.
 - Conflict analysis, reconciliation validation, and governance previews share active structural-operand validation
   for scope, unique active Subject resolution, and canonical Facet.
+- Supersession records validate the active replacement and retained structural identity. Subject-merge records allow
+  historical source references but require a structurally valid active target with matching Scope and Facet.
 - Governance previews require exact Protocol/schema compatibility, and their Plan IDs bind manifest, Entry,
   Subject-registry, reconciliation, content, and path dependencies used by the rendered result. Duplicate protocol
-  scalar fields are invalid rather than accepted with last-value-wins behavior.
+  scalar fields, empty values, and malformed scalar bullets are invalid rather than silently skipped or accepted
+  with last-value-wins behavior. Exception removal does not predict a resulting review while blockers remain.
 - Added matched-context conflict gates and optional read-only merge-base review for cross-branch structural collisions
   and concurrent hard-memory changes requiring human reconciliation.
 - Subject names, timestamps, Evidence counts, file order, and prose similarity never choose a winner. This release

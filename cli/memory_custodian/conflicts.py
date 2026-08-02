@@ -56,15 +56,12 @@ def canonical_entries(memory_dir: Path, *, include_archive: bool = False) -> tup
     return tuple(entries)
 
 
-def _subject_findings(subject_records: Sequence[Subject]) -> tuple[list[ConflictFinding], dict[str, object]]:
+def _subject_findings(subject_records: Sequence[Subject]) -> list[ConflictFinding]:
     findings: list[ConflictFinding] = []
-    active: dict[str, object] = {}
     refs: dict[str, str] = {}
     aliases: dict[str, str] = {}
     for subject in subject_records:
         key = subject.subject_id.casefold()
-        if subject.status == "active":
-            active[key] = subject
         for alias in (subject.title, *subject.aliases):
             normalized = normalize_alias(alias)
             owner = aliases.get(normalized)
@@ -93,7 +90,7 @@ def _subject_findings(subject_records: Sequence[Subject]) -> tuple[list[Conflict
                     subject_id=subject.subject_id,
                 ))
             refs[normalized_ref] = key
-    return findings, active
+    return findings
 
 
 def _entry_index(entries: tuple[StructuredEntry, ...]) -> dict[str, list[StructuredEntry]]:
@@ -110,7 +107,7 @@ def analyze_conflicts(
     included_modules: tuple[str, ...] | None = None,
 ) -> ConflictResult:
     subject_records = load_subjects(memory_dir)
-    findings, subjects = _subject_findings(subject_records)
+    findings = _subject_findings(subject_records)
     structural_subjects = subject_index(subject_records)
     entries = canonical_entries(memory_dir)
     selected_modules = set(included_modules) if included_modules is not None else None

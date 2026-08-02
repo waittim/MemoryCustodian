@@ -72,6 +72,7 @@ OPTIONAL_INDEX_HEADING = "## Optional module index"
 PROTOCOL_HEADING = "## MemoryCustodian Protocol"
 PROTOCOL_SECTION_NAME = "memorycustodian protocol"
 PROTOCOL_FIELD_RE = re.compile(r"^- ([A-Za-z_]+):\s*(.+)$")
+PROTOCOL_BULLET_RE = re.compile(r"^- ([^:]+):(.*)$")
 OPTIONAL_INDEX_SECTIONS = {
     "rules": "### Enabled rules",
     "profiles": "### Enabled profiles",
@@ -296,18 +297,27 @@ def protocol_metadata(manifest: str) -> dict[str, str]:
 
 
 def strict_protocol_metadata(manifest: str) -> dict[str, str]:
-    """Parse protocol scalars without the permissive last-value-wins fallback."""
+    """Parse protocol scalars without silent malformed or duplicate fields."""
 
     metadata: dict[str, str] = {}
     lines = _section_lines(manifest, "##", lambda heading: heading == PROTOCOL_SECTION_NAME)
     for line in lines:
-        match = PROTOCOL_FIELD_RE.match(line.strip())
-        if not match:
+        stripped = line.strip()
+        if not stripped:
             continue
-        key, value = match.groups()
+        match = PROTOCOL_BULLET_RE.fullmatch(stripped)
+        if not match:
+            raise ValueError(f"Malformed protocol metadata line: {stripped!r}")
+        raw_key, value = match.groups()
+        key = raw_key.strip()
+        if re.fullmatch(r"[A-Za-z_]+", key) is None:
+            raise ValueError(f"Malformed protocol metadata field: {key!r}")
         if key in metadata:
             raise ValueError(f"Duplicate protocol metadata field: {key}")
-        metadata[key] = value.strip()
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError(f"Protocol metadata field {key} must not be empty")
+        metadata[key] = normalized
     return metadata
 
 

@@ -163,8 +163,6 @@ def _exception_add(args) -> int:
     payload = {
         "source": area.entry_id,
         "target": baseline.entry_id,
-        "source_sha256": digest_text(area.text),
-        "target_sha256": digest_text(baseline.text),
         "dependencies": [
             _entry_state(area, memory_dir), _entry_state(baseline, memory_dir),
         ],
@@ -202,38 +200,33 @@ def _exception_remove(args) -> int:
     subjects = subject_index(load_subjects(memory_dir))
     area = _entry(entries, args.entry_id)
     current = area.fields.get("Exception-To", "")
-    blockers = [
-        f"Source {issue.field}: {issue.message}"
-        for issue in active_structural_operand_issues(area, subjects)
-    ]
-    if not area.scope.startswith("area:"):
-        blockers.append("Exception source must be area-scoped.")
-    if not current:
-        blockers.append("Source does not have an Exception-To relation.")
     targets = [item for item in entries if item.entry_id.casefold() == current.casefold()]
-    if current and len(targets) != 1:
-        blockers.append("Exception-To target must resolve exactly once.")
-    elif len(targets) == 1:
-        blockers.extend(_exception_relation_blockers(area, targets[0], subjects))
+    if len(targets) == 1:
+        blockers = _exception_relation_blockers(area, targets[0], subjects)
+    else:
+        blockers = [
+            f"Source {issue.field}: {issue.message}"
+            for issue in active_structural_operand_issues(area, subjects)
+        ]
+        if not area.scope.startswith("area:"):
+            blockers.append("Exception source must be area-scoped.")
+        blockers.append(
+            "Source does not have an Exception-To relation."
+            if not current else "Exception-To target must resolve exactly once."
+        )
     blockers = list(dict.fromkeys(blockers))
     target_label = current or "none"
-    resulting_review = bool(
-        len(targets) == 1
-        and targets[0].status == "active"
-        and targets[0].scope == "project"
-        and targets[0].fields.get("Subject", "").casefold() == area.fields.get("Subject", "").casefold()
-        and targets[0].fields.get("Facet", "").casefold() == area.fields.get("Facet", "").casefold()
-    )
+    resulting_review = len(targets) == 1 and not blockers
     payload = {
         "source": area.entry_id,
         "current_target": current,
-        "source_sha256": digest_text(area.text),
         "dependencies": [
             _entry_state(entry, memory_dir) for entry in (area, *targets)
         ],
         "manifest_sha256": project.manifest_sha256,
         "subjects_sha256": digest_text(read_text(subjects_path)),
         "blockers": sorted(blockers),
+        "resulting_review": resulting_review,
     }
     print("Exception-To remove preview:")
     print(
@@ -243,7 +236,10 @@ def _exception_remove(args) -> int:
     print(f"Current relation target: {target_label}")
     print(f"Proposed relation: remove Exception-To: {target_label}")
     print("Resulting review:")
-    print("- MC-CONFLICT-002 project/area overlap will require review." if resulting_review else "- none established")
+    print(
+        "- MC-CONFLICT-002 project/area overlap will require review."
+        if resulting_review else "- result not established due to blockers."
+    )
     print("Blockers:")
     for blocker in blockers or ["none"]:
         print(f"- {blocker}")
