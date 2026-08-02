@@ -2,6 +2,41 @@
 
 ## Unreleased
 
+## v0.11.0 - 2026-08-01
+
+### Deterministic routing for explicit task and scope
+
+- Added Protocol 0.7 routing/conflict schema metadata, canonical task normalization, a normative optional-module
+  grammar, case-sensitive cross-platform path globs, and a root-constraints safety baseline.
+- Added `read --path/--rule/--explain/--strict-routing`, complete enabled-module dispositions, stable reason codes,
+  entry-level budget omissions, and `COMPLETE/INCOMPLETE/AMBIGUOUS/INVALID` diagnostics.
+- Added routing, reachability, and Evidence/relation freshness checks. They report bounded structural facts and never
+  claim automatic semantic retrieval or factual correctness.
+
+### Local overlay and stable ID operations
+
+- Added private repo-external local preferences with explicit project-root binding, shared/local precedence,
+  `--no-local`, and preview-only local reset. Local state is not a secret store and cannot override shared hard memory.
+- Added canonical entry `list`, `show`, and `forget --id`; preview-only candidate promotion and Subject merge
+  inventory remain deferred to the Protocol 0.8 transaction journal.
+- Unified topic/ID/purge/local-reset erasure wording and added optional bounded Git history exposure inspection.
+  MemoryCustodian does not rewrite Git history or revoke clones, forks, backups, caches, or distributed copies.
+
+### Structural conflict and reconciliation review
+
+- Added deterministic current-worktree conflict codes for duplicate structural owners, canonical Subject collisions,
+  invalid exception relations, missing Subject/Facet coverage, and reconciliation-record validation.
+- Added matched-context conflict gates and optional read-only merge-base review for cross-branch structural collisions
+  and concurrent hard-memory changes requiring human reconciliation.
+- Subject names, timestamps, Evidence counts, file order, and prose similarity never choose a winner. This release
+  does not provide complete natural-language contradiction detection or automatic conflict resolution.
+
+### Conservative migration and agent workflow
+
+- Added preview-first Protocol 0.6 to 0.7 migration that preserves IDs, Evidence, custom task routes, descriptions,
+  and optional modules; legacy prose triggers become safe `explicit-only` declarations without guessed matchers.
+- Updated templates, adapters, Skill references, examples, evals, and dogfood memory for strict scope-aware startup.
+
 ## v0.10.0 - 2026-07-28
 
 ### Subject identity, routing, and erasure alignment

@@ -10,6 +10,12 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "evals" / "memory-custodian" / "eval-manifest.json"
+ADAPTERS = (
+    "adapters/codex/AGENTS.snippet.md",
+    "adapters/claude-code/CLAUDE.snippet.md",
+    "adapters/gemini/GEMINI.snippet.md",
+    "adapters/generic/agent-instructions.md",
+)
 
 
 def _read_text(path: Path) -> str:
@@ -78,10 +84,30 @@ def _check_scenarios(config: dict) -> list[str]:
     return issues
 
 
+def _check_adapters() -> list[str]:
+    issues: list[str] = []
+    forbidden = ("## Load by task", "### Planning / architecture / refactoring")
+    for relative in ADAPTERS:
+        path = ROOT / relative
+        if not path.exists():
+            issues.append(f"{relative}: missing adapter")
+            continue
+        text = _read_text(path)
+        if "canonical task" not in text.casefold() or "touched/planned" not in text:
+            issues.append(f"{relative}: missing explicit task/scope workflow")
+        if "strict-routing" not in text:
+            issues.append(f"{relative}: missing shared strict-routing invocation")
+        for marker in forbidden:
+            if marker in text:
+                issues.append(f"{relative}: embeds a second routing table ({marker})")
+    return issues
+
+
 def main() -> int:
     config = json.loads(_read_text(MANIFEST))
     issues = _check_skill_contract(config)
     issues.extend(_check_scenarios(config))
+    issues.extend(_check_adapters())
 
     if issues:
         print("MemoryCustodian skill contract check: FAILED")
@@ -92,6 +118,7 @@ def main() -> int:
     print("MemoryCustodian skill contract check: OK")
     print(f"Scenarios: {len(config['required_scenarios'])}")
     print(f"Skill contracts: {len(config['skill_contract'])}")
+    print(f"Adapter contracts: {len(ADAPTERS)}")
     return 0
 
 

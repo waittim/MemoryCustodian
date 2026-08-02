@@ -2,7 +2,7 @@
 ## Purpose
 Keep an agent observation out of active memory.
 ## Setup
-A Protocol 0.6 project with an empty inbox.
+A Protocol 0.7 project with an empty inbox.
 ## Prompt
 Remember that the parser appears to require JSON.
 ## Required Observations

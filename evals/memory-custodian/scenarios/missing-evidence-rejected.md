@@ -2,7 +2,7 @@
 ## Purpose
 Enforce active admission.
 ## Setup
-A Protocol 0.6 project.
+A Protocol 0.7 project.
 ## Prompt
 Add an active decision without Evidence.
 ## Required Observations

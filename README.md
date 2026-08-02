@@ -8,7 +8,7 @@ It stores memory as plain Markdown in your repo and routes a bounded context pac
 
 **Durable memory. Minimal context.**
 
-[![Version](https://img.shields.io/badge/version-0.10.0-blue.svg)](https://github.com/waittim/MemoryCustodian/releases/latest)
+[![Version](https://img.shields.io/badge/version-0.11.0-blue.svg)](https://github.com/waittim/MemoryCustodian/releases/latest)
 [![CI](https://github.com/waittim/MemoryCustodian/actions/workflows/ci.yml/badge.svg)](https://github.com/waittim/MemoryCustodian/actions/workflows/ci.yml)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
@@ -106,8 +106,8 @@ MemoryCustodian turns project memory into a small, explicit workflow:
 3. **Optional memory stays opt-in.** `rules/`, `profiles/`, `areas/`, and `archive/` remain out of the default context until they are explicitly relevant.
 4. **Updates are scoped.** Cross-cutting decisions stay at root; subsystem knowledge lives in matched `areas/` files and loads only for relevant work.
 5. **Maintenance is guarded.** The CLI checks budgets and structure deterministically, while semantic review preserves active invariants before decision history is archived.
-6. **Active memory is evidence-backed.** Protocol 0.6 gives formal entries stable IDs and requires user confirmation or a project source; unconfirmed agent observations stay candidates in `inbox.md`.
-7. **Concurrent mutation is explicit.** Every writer uses one bootstrap-to-project guard outside the repository; Protocol 0.5 compatibility writes remain format-compatible but are serialized, and preview-first Protocol 0.6 commands reject stale Plan IDs.
+6. **Active memory is evidence-backed.** Protocol 0.7 gives formal entries stable IDs and requires user confirmation or a project source; unconfirmed agent observations stay candidates in `inbox.md`.
+7. **Concurrent mutation is explicit.** Every writer uses one bootstrap-to-project guard outside the repository; legacy compatibility writes remain format-compatible but are serialized, and preview-first Protocol 0.7 commands reject stale Plan IDs.
 8. **Conflict identity is structural.** Managed decisions, constraints, and rejected approaches reference a stable Subject ID and controlled Facet; display names and aliases are not conflict keys.
 
 The result is project memory that is inspectable, diffable, portable across agents, and small enough to use in normal coding loops.
@@ -243,15 +243,32 @@ The examples below use the `memory-custodian` console script. From a source chec
 Inspect a context pack:
 
 ```bash
-memory-custodian read --task planning
-memory-custodian read --task implementation
-memory-custodian read --task artifact
+memory-custodian read --task implementation \
+  --path cli/memory_custodian/read.py --explain
+memory-custodian read --task implementation --strict-routing \
+  --path cli/memory_custodian/read.py
+memory-custodian read --task artifact --rule output --profile docs
+memory-custodian read --task implementation --no-local
 ```
 
-Routing is deterministic for the supplied canonical task and explicit `--profile`/`--area` inputs. The manifest is
-the only shared runtime route source; the CLI does not score arbitrary task text with keywords, embeddings, semantic
-similarity, or an LLM. The agent still chooses the canonical task category, and v0.10 does not provide a complete
-explanation for every excluded module; that trace is reserved for v0.11.
+The manifest routes a bounded context pack from explicit task and scope inputs. For the same manifest, canonical
+task, paths, and explicit modules, routing is deterministic and inspectable. The CLI does not score task prose with
+keywords, embeddings, semantic similarity, or an LLM, and path matching does not prove semantic relevance.
+
+Canonical tasks are `general`, `planning`, `implementation`, `artifact`, `preferences`, `history`, and
+`maintenance`. Generated manifests load `brief.md` plus root `constraints.md` as the project-wide safety baseline.
+Rules activate through declared canonical tasks or explicit `--rule`; profiles are explicit-only; areas activate
+through declared POSIX path globs or explicit `--area`. Enable a matched area with:
+
+```bash
+memory-custodian enable area/backend --path 'cli/**' --path 'tests/**/*.py'
+```
+
+`read --explain` assigns every enabled module one disposition and a stable reason code, while separately listing
+whole entries omitted by budgets. If a substantial task has path-routed areas but supplies neither paths nor an
+explicit area, routing is `INCOMPLETE`. Ordinary inspection may show the safety baseline; `--strict-routing` rejects
+the pack for substantial work. `AMBIGUOUS` and `INVALID` also fail rather than falling back to natural-language
+guessing.
 
 Record durable memory when a decision, constraint, preference, or rejected approach should survive the current chat:
 
@@ -286,7 +303,7 @@ Enable optional memory only when it becomes useful:
 memory-custodian enable preferences
 memory-custodian enable rules/output
 memory-custodian enable profile/git
-memory-custodian enable area/frontend
+memory-custodian enable area/frontend --path 'frontend/**'
 ```
 
 Enabling an optional module never overwrites an existing module file.
@@ -298,19 +315,28 @@ memory-custodian status
 memory-custodian check
 memory-custodian check --privacy
 memory-custodian check --security
+memory-custodian check --routing
+memory-custodian check --reachability
+memory-custodian check --freshness
+memory-custodian check --conflicts
+memory-custodian check --conflicts --merge-base origin/main
 memory-custodian compact
 memory-custodian migrate
+memory-custodian list --status active
+memory-custodian show MC-CON-...
+memory-custodian forget --id MC-DNU-...
 ```
 
-Protocol 0.6 formal entries use stable IDs such as `MC-DEC-20260728-a1b2c3d4`. Active writes require Evidence;
+Protocol 0.7 retains entry and Subject schema version 1. Formal entries use stable IDs such as
+`MC-DEC-20260728-a1b2c3d4`; active writes require Evidence;
 `agent-observed` and `conversation-unconfirmed` can create only candidates, which normal task context never loads.
 Managed active decisions, constraints, and rejected approaches also reference a stable `MC-SUBJ` identity and a
 controlled Facet. `subjects.md` is shared protocol metadata, not normal task context. Exact normalized alias and
 Canonical-Ref collisions are rejected, as is a second active owner for the same Scope+Subject+Facet. Renaming a
-Subject preserves its ID. v0.10 does not infer that different names are semantically equivalent and does not
+Subject preserves its ID. v0.11 does not infer that different names are semantically equivalent and does not
 automatically resolve Subjects created independently on different branches.
-Protocol 0.6 permits the full canonical Facet vocabulary for every managed entry type; the explicit compatibility
-matrix is an extension boundary, not a claim that v0.10 imposes narrower type-specific exclusions.
+The full canonical Facet vocabulary remains available for every managed entry type; the explicit compatibility
+matrix is an extension boundary, not a claim that v0.11 imposes narrower type-specific exclusions.
 Legacy 0.5 prose and bullets remain readable after conservative migration and are reported as legacy coverage rather
 than silently rewritten. Migration assigns a random UUIDv4 once, persists it outside the repository between preview
 and apply, and also upgrades clearly structured decisions in enabled `areas/*.md` files.
@@ -318,7 +344,7 @@ and apply, and also upgrades clearly structured decisions in enabled `areas/*.md
 `forget`, `compact`, `migrate`, and destructive replacement are preview-first. The preview prints repo-relative
 target files, operations, warnings, blockers, and a Plan ID. Ordinary plans include base/output digests; hard and
 purge plans keep raw arguments, paths, blockers, and digests in the private execution representation and redact
-matching sensitive topic text from public output. Protocol 0.6 apply requires
+matching sensitive topic text from public output. Protocol 0.7 apply requires
 `--confirm-plan <PLAN_ID>` and rechecks the plan under the project mutation lock; an intervening edit refuses all
 writes. Short topics and plans matching multiple semantic units additionally require `forget --allow-broad-match`.
 
@@ -335,7 +361,35 @@ Hard forget removes matching active managed memory and replaces matching topic-b
 redacted guard. Purge additionally searches managed `archive/` content and removes matching guards. Every preview
 states the selected managed scope and explicitly reports that Git history, clones, forks, backups, and caches are not
 modified or revoked. Forgetting controls what future agents receive through MemoryCustodian; it is not repository-wide
-erasure.
+erasure. `--history-check` optionally inspects reachable history in the current local Git repository without
+changing it. `unavailable` is not a PASS, and `no-reachable-copy-detected` is limited evidence—not proof that no
+copy exists in other refs, remotes, clones, forks, backups, caches, or dangling objects.
+
+## Shared and Local Memory
+
+Personal output preferences and machine workflows can live outside the repository under the private state root.
+Use `memory-custodian local enable`, then explicitly bind the normalized repository root with `local link`. A copied
+repository sharing the public `project_id` is `UNBOUND` and cannot read an existing overlay. `--no-local` renders a
+reproducible shared-only pack.
+
+Shared constraints and tombstones outrank shared decisions/rules, which outrank local preferences/profiles. Local
+memory cannot redefine shared routes, override hard memory, grant authority, or serve as a secret store. Protocol
+0.7 `local reset` is preview-only and describes only the current machine/current project overlay; transactional
+apply requires Protocol 0.8 and never claims to affect other machines or backups.
+
+## Structural Conflicts and Reconciliation
+
+`check --conflicts` detects exact `Scope + Subject ID + Facet` duplicate owners, Canonical-Ref and alias collisions,
+invalid Subjects, broken `Exception-To`, and inconsistent reconciliation records. A project/area overlap without an
+explicit exception is REVIEW; a deterministic duplicate owner is CONFLICT. `read` shows the matched-context status,
+and strict substantial reads refuse unresolved conflicts.
+
+When Git is available, `check --conflicts --merge-base <ref>` compares semantic units changed on both sides. It
+distinguishes deterministic collisions from concurrent hard-memory changes requiring semantic reconciliation.
+Short files and timestamps improve reviewability but do not resolve contradictions or establish precedence.
+Explicit supersede, exception, `distinct` reconciliation, and Subject merge inventory are auditable. Protocol 0.7
+does not apply Subject merges, reconciliation acknowledgements, Exception-To mutations, or multi-file promotions;
+those transactions require the Protocol 0.8 journal.
 Decision archival additionally requires semantic review and explicit confirmation with `compact --target decisions.md --apply --archive-oldest`.
 Plain `check` reports redacted privacy/security finding counts; use `check --privacy` or `check --security` to show
 redacted file and line locations.
@@ -388,7 +442,7 @@ MemoryCustodian tracks three related versions:
 - Project memory version: the protocol metadata recorded in each initialized project
 
 `memory-custodian check` reports old or missing protocol metadata. Preview `memory-custodian migrate`, then apply
-Protocol 0.6 migration with `memory-custodian migrate --apply --confirm-plan <PLAN_ID>` without requiring network
+the Protocol 0.6-to-0.7 migration with `memory-custodian migrate --apply --confirm-plan <PLAN_ID>` without requiring network
 access. Migration preserves custom routes, budgets, optional modules, archive content, and legacy freeform units.
 
 See [RELEASE-NOTES.md](RELEASE-NOTES.md) for recent changes.

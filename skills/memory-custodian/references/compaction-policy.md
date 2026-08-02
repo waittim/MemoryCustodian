@@ -49,7 +49,7 @@ Do not read `archive/` unless the user asks.
 The CLI must not classify inbox entries by keywords or infer semantic destinations. It may report budgets and candidates, remove exact duplicate top-level bullet units, and filter exact tombstone matches. A top-level bullet unit includes all of its continuation and nested lines; exact comparison and removal operate on that complete unit, never on a nested bullet or continuation line independently. All other candidates remain in the inbox until an Agent or user reviews their scope, type, confidence, and overlap with existing memory.
 
 Use `memory-custodian compact` to generate the candidate report and Plan ID. After review, edit the destination
-Markdown directly or call `add`, then run `check`. Under Protocol 0.6, use
+Markdown directly or call `add`, then run `check`. Under Protocol 0.7, use
 `memory-custodian compact --apply --confirm-plan <PLAN_ID>` only to apply the exact mechanical inbox cleanup shown
 in the preview; it does not promote candidates or remove them merely because they were reported.
 

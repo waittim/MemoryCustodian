@@ -4,9 +4,20 @@
 
 ```markdown
 # Memory Context Pack
-Task: default
+Task: general
+Canonical task: general
+Paths:
+- none supplied
+Explicit scope:
+- none supplied
+Routing completeness: COMPLETE
+Local overlay status: DISABLED
 Loaded:
 - brief.md
+- constraints.md
+Budget omissions:
+- none
+Conflict status: CLEAR
 
 ## brief.md
 MemoryCustodian is a local-first, pure-text project memory skill and CLI.
@@ -17,11 +28,21 @@ MemoryCustodian is a local-first, pure-text project memory skill and CLI.
 ```markdown
 # Memory Context Pack
 Task: planning
+Canonical task: planning
+Paths:
+- docs/architecture.md
+Explicit scope:
+- none supplied
+Routing completeness: COMPLETE
+Local overlay status: DISABLED
 Loaded:
 - brief.md
-- decisions.md
 - constraints.md
+- decisions.md
 - do-not-use.md
+Budget omissions:
+- none
+Conflict status: CLEAR
 ```
 
 ## Artifact Context Pack
@@ -29,11 +50,21 @@ Loaded:
 ```markdown
 # Memory Context Pack
 Task: artifact
+Canonical task: artifact
+Paths:
+- README.md
+Explicit scope:
+- rule:output
+Routing completeness: COMPLETE
+Local overlay status: DISABLED
 Loaded:
 - brief.md
+- constraints.md
 - rules/output.md
-- preferences.md
 - do-not-use.md
+Budget omissions:
+- none
+Conflict status: CLEAR
 ```
 
 ## Decision Entry

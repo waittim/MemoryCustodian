@@ -1,6 +1,6 @@
 # Memory File Protocol
 
-## Protocol 0.6 admission
+## Protocol 0.7 admission
 
 Every new formal CLI entry has an ID in the form `MC-TYPE-YYYYMMDD-8hex`, `Status: active`, a valid `Scope`, and
 at least one Evidence item. Active Evidence may be `user-confirmed`, a safe project-relative `repo:`, `doc:`, or
@@ -49,10 +49,10 @@ Area decisions use `MC-AREA` with a `Decision` body. Area constraints, preferenc
 their semantic `MC-CON`, `MC-PREF`, and `MC-DNU` IDs and typed bodies while using `Scope: area:<slug>` and
 `areas/<slug>.md`. Validation is bidirectional: Entry ID, typed body, storage path, and Scope must agree.
 
-Protocol 0.6 manifests include `entry_schema_version: 1`, `subject_schema_version: 1`, a persistent UUIDv4
-`project_id`, `subject_registry: subjects.md`, `admission_policy: evidence-required`, and
-`conflict_identity_policy: scope-subject-facet`. The project ID is identity for external mutation locks, not
-authorization.
+Protocol 0.7 manifests include entry and Subject schema version 1 plus routing and conflict schema version 1, a
+persistent UUIDv4 `project_id`, `subject_registry: subjects.md`, `admission_policy: evidence-required`,
+`routing_policy: explicit-task-and-scope`, and `conflict_policy: canonical-subject-and-review`. The project ID is
+identity for external locks and local-overlay namespaces, not authentication or authorization.
 
 ## Concurrency and plan confirmation
 
@@ -65,7 +65,7 @@ guard. Every mutation is rebuilt while the applicable guard is held.
 Preview-first commands hash a repo-relative private execution plan containing base and expected output digests.
 Public previews are a separate representation. Hard and purge previews omit raw topic arguments and file digests,
 and redact matching topic text from public path and blocker metadata; their private confirmation plan is salted
-with a repo-external random nonce. Protocol 0.6 apply requires the matching Plan ID and refuses every write if any
+with a repo-external random nonce. Protocol 0.7 apply requires the matching Plan ID and refuses every write if any
 target changed.
 
 Private state directories use mode `0700` and state files use `0600` on POSIX. State reads and writes reject
@@ -127,8 +127,8 @@ Controlled Facets are `adoption-policy`, `version-policy`, `architecture`, `beha
 unique by normalized `Scope + Subject ID + Facet`. A replacement must explicitly supersede the existing owner.
 Legacy entries remain readable without these fields, while `check` reports incomplete coverage.
 
-Protocol 0.6 permits every canonical Facet above for each managed entry type. The CLI still validates through an
-explicit type-to-Facet matrix; v0.10 intentionally defines no narrower type-specific exclusions. Narrowing or
+Protocol 0.7 permits every canonical Facet above for each managed entry type. The CLI still validates through an
+explicit type-to-Facet matrix; v0.11 intentionally defines no narrower type-specific exclusions. Narrowing or
 extending this matrix requires a later protocol migration or declared extension schema.
 
 ## Non-Goals
@@ -172,19 +172,19 @@ docs/memory/
 
 ## Loading Levels
 
-Level 1 default:
+Level 1 shared safety baseline:
 
 - `brief.md`
+- `constraints.md`
 
 Level 2 task-specific:
 
 - `decisions.md`
-- `constraints.md`
 - `do-not-use.md`
-- `preferences.md`, if present and relevant
-- `rules/*.md`, if present and relevant
-- `profiles/*.md`, if present and relevant
-- `areas/*.md`, if present and relevant
+- `preferences.md`, if declared by the task route
+- `rules/*.md`, through a declared canonical task or explicit rule
+- `profiles/*.md`, only through explicit profile input
+- `areas/*.md`, through a declared path matcher or explicit area
 
 Level 3 maintenance or explicit request:
 
@@ -217,11 +217,12 @@ Recommended maximums:
 
 ### manifest.md
 
-Defines how agents should load memory, which files are default, and which files are conditional. It should include MemoryCustodian Protocol metadata with `protocol_version`, `initialized_with`, and `last_migrated_with` fields. It should also include a lightweight optional module index for enabled `rules/`, `profiles/`, and `areas/` files so agents can discover them without loading their contents.
+Defines deterministic loading for explicit task and scope inputs. Optional declarations use the normative nested
+grammar in `manifest-policy.md`; descriptions never act as machine routes.
 
 ### brief.md
 
-The only default memory file. Keep it short, current, and focused on project purpose, system shape, and active direction. A generated TODO or protocol description is not a valid project brief.
+The project-shape baseline. Keep it short, current, and focused on purpose, system shape, and active direction. A generated TODO or protocol description is not a valid project brief.
 
 ### decisions.md
 
@@ -229,7 +230,8 @@ Cross-cutting confirmed decisions with date, decision, and reason. Keep each ent
 
 ### constraints.md
 
-Hard requirements. These should be treated as stronger than preferences.
+Project-wide hard requirements and the generated substantial-work safety baseline. Move subsystem-only constraints
+to a deterministically routed area to keep this file within budget.
 
 ### preferences.md
 
@@ -254,15 +256,31 @@ Optional memory maintenance log. Keep it factual, brief, and newest first.
 
 ### rules/
 
-Optional task-specific rules. List enabled rule files in the manifest optional module index, then load a rule file only when the current task clearly matches it.
+Optional task-specific rules. Load only through declared canonical tasks or explicit `--rule` input.
 
 ### profiles/
 
-Optional workflow-specific rules. Keep Git, release, ticket, docs, and research workflows out of the core protocol. List enabled profile files in the manifest optional module index, then load a profile only when its trigger matches.
+Optional workflow-specific rules. Profiles are explicit-only; an adapter must expose the `--profile` choice.
 
 ### areas/
 
-Optional area-specific memory for subsystems, monorepos, or large projects. Prefer an area over root decisions when a choice or invariant applies only to that subsystem. List enabled area files in the manifest optional module index, then load area files only when the task touches that area.
+Optional subsystem memory. Load only through declared path globs or explicit `--area`; never infer from prose.
+
+## Conflict and Reconciliation Records
+
+Current active ownership is normalized `Scope + Subject ID + Facet`. Exact duplicate owners are conflicts.
+Project/area overlap requires a valid area-to-project `Exception-To` relationship; multiple matched areas with the
+same Subject/Facet require review. Exact Canonical-Ref or normalized alias collisions are deterministic conflicts,
+while differently named Subjects are never auto-merged.
+
+`reconciliations.md` may contain active `MC-REC` records with at least two canonical Entry IDs, admissible Evidence,
+and `Resolution: distinct|superseded|exception|subject-merged`. Protocol 0.7 validates hand-maintained records and
+previews Subject merges, but transactional governance apply waits for Protocol 0.8.
+
+## Local Overlay
+
+Repo-external local modules use `Scope: local-user` or `Scope: local-machine`, require explicit normalized-root
+binding, and load below all shared hard memory. They cannot redefine shared routes, hold secrets, or grant authority.
 
 ### archive/
 

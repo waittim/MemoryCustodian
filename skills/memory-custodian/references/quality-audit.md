@@ -7,6 +7,16 @@ deterministic pattern scans are not complete secret or personal-data detection. 
 and a redacted preview; they never auto-delete or auto-repair content. Continue to apply semantic privacy judgment
 before writing shared memory.
 
+Also run the focused Protocol 0.7 checks:
+
+```bash
+memory-custodian check --routing
+memory-custodian check --reachability
+memory-custodian check --freshness
+memory-custodian check --conflicts
+memory-custodian check --conflicts --merge-base origin/main  # when Git/ref is available
+```
+
 ## Usefulness
 
 - Verify `brief.md` names the actual project purpose, system shape, and current direction.
@@ -16,6 +26,7 @@ before writing shared memory.
 ## Reachability
 
 - For each active invariant, identify which normal task route loads it.
+- Treat an unreachable project-scoped hard constraint as an error; do not auto-promote, move, or invent a matcher.
 - Keep cross-cutting decisions at root and subsystem-specific decisions in matched areas.
 - Treat memory that exists but is not loaded for its likely task as unavailable.
 
@@ -28,6 +39,18 @@ before writing shared memory.
 - Audit exact alias and canonical-reference ownership without claiming that fuzzy name similarity proves equality.
 - Refresh the brief when project direction changes or several decisions alter the system shape.
 - Archive historical rationale only after active invariants remain reachable.
+- Treat missing Evidence paths, broken lifecycle/exception/merge relations, and inconsistent reconciliation records
+  as explicit findings. Freshness checks never rewrite Evidence or claim factual correctness.
+
+## Structural Conflict Review
+
+- Exact duplicate `Scope + Subject ID + Facet` owners are deterministic conflicts.
+- Project/area overlap without a valid `Exception-To`, or overlapping matched areas, requires review.
+- Exact Canonical-Ref or normalized alias collisions conflict; fuzzy names and similar prose do not prove equality.
+- Git merge-aware review reports concurrent hard-memory changes without choosing a winner by timestamp, Evidence
+  count, file order, or merge order.
+- Resolve through explicit supersede, valid exception, `distinct` reconciliation, or Subject merge inventory.
+  Protocol 0.7 does not apply multi-file governance changes.
 
 ## Scope And Portability
 
@@ -36,6 +59,7 @@ before writing shared memory.
 - Prefer an abstract constraint and controlled Evidence reference over raw secrets, contract terms, vendor
   identities, or unnecessary numeric limits.
 - Avoid shared absolute machine paths; prefer portable commands, conditional profiles, or user-local configuration.
+- Keep user/machine preferences in a bound local overlay; verify `--no-local` shared context remains reproducible.
 
 ## Budget
 
