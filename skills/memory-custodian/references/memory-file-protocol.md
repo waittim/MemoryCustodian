@@ -281,6 +281,15 @@ Facet. A Subject merge may retain a superseded historical source reference to th
 target must be structurally valid and match the source Scope and Facet. Promoted provisional identity is deferred
 beyond Protocol 0.7.
 
+Strict Protocol 0.7 reads, routing checks, governance previews, and ordinary mutation guards reject duplicate,
+malformed, or wrong-level Protocol headings and malformed metadata. Legacy fallback requires no Protocol heading
+trace at all. A present section requires a valid protocol version; a Protocol 0.7 section requires the complete
+schema, Subject registry, UUIDv4 project identity, and policy metadata contract. Migrate and init repair may consume
+incomplete inputs only when their complete candidate manifest passes strict validation before any write; ambiguous
+sections require manual repair. One valid H2 plus any extra malformed Protocol heading trace is also ambiguous and
+invalid. The current contract requires the canonical version spelling `0.7`; `0.7.0`, leading-zero equivalents, and
+unsupported future versions are invalid rather than being routed with legacy grammar.
+
 ## Local Overlay
 
 Repo-external local modules use `Scope: local-user` or `Scope: local-machine`, require explicit normalized-root

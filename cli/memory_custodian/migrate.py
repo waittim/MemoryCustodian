@@ -27,6 +27,7 @@ from .protocol import (
     manifest_with_protocol_07_optional_routes,
     optional_index_paths,
     project_id_from_manifest,
+    protocol_contract_metadata,
     protocol_metadata,
     resolve_memory_dir,
     resolve_project_root,
@@ -166,6 +167,7 @@ def _build_plan(project_root: Path, memory_dir: Path) -> tuple[MutationPlan, lis
     updated, metadata_changed = manifest_with_current_protocol_metadata(routed)
     updated, routing_changed = manifest_with_current_task_routing(updated)
     updated, index_changed = manifest_with_optional_index(updated)
+    protocol_contract_metadata(updated)
     mutations: list[TextMutation] = []
     changes: list[str] = []
     if updated != original:
@@ -289,6 +291,7 @@ def run(args) -> int:
         timeout=args.lock_timeout,
         break_stale=args.break_stale_lock,
         project_id_hint=plan.project_id,
+        allow_metadata_repair=True,
     ) as guard:
         current, _changes, current_seed_paths = _build_plan(project_root, memory_dir)
         if guard.project_id != current.project_id:

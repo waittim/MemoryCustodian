@@ -68,7 +68,13 @@ memory-custodian check --conflicts --merge-base origin/main  # when Git/ref is a
   and reconciliation dependency used in the rendered result. Reject duplicate protocol scalar fields before Entry
   lookup instead of accepting the last value. Require exactly one normalized Protocol H2 section, and reject empty
   or malformed protocol bullets rather than skipping them. Do not claim a resulting governance state while blockers
-  remain. Apply the same metadata gate to strict reads, routing checks, and governance previews.
+  remain. Apply the same metadata gate to strict reads, routing checks, governance previews, and ordinary writers.
+  Treat wrong-level, missing-whitespace, or extra malformed Protocol heading traces as INVALID; legacy fallback
+  requires no trace. Require the canonical current version spelling and reject unsupported future versions at this
+  shared gate rather than routing either case with legacy grammar. A
+  present section requires a valid version, and Protocol 0.7 requires complete schema, registry, identity, and policy
+  fields. Validate recovery candidates before preview and again before apply; reject ambiguous sections for manual
+  repair.
 
 ## Scope And Portability
 

@@ -59,6 +59,169 @@ def subject_unit(subject_id: str, title: str, canonical_ref: str = "") -> str:
 
 
 class RoutingAndQualityReleaseTests(unittest.TestCase):
+    def test_extra_malformed_protocol_trace_invalidates_all_shared_gates(self):
+        for malformed in ("### MemoryCustodian Protocol", "##MemoryCustodian Protocol"):
+            with self.subTest(heading=malformed), tempfile.TemporaryDirectory() as tmp:
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["init", "--project-root", tmp]), 0)
+                manifest = Path(tmp) / "docs/memory/manifest.md"
+                manifest.write_text(
+                    manifest.read_text(encoding="utf-8").rstrip()
+                    + f"\n\n## Additional notes\n\n{malformed}\n",
+                    encoding="utf-8",
+                )
+
+                read_code, read_output, read_error = capture([
+                    "read", "--task", "implementation", "--strict-routing",
+                    "--names-only", "--project-root", tmp,
+                ])
+                self.assertEqual(read_code, 2)
+                self.assertIn("Routing completeness: INVALID", read_output)
+                self.assertIn("exactly one MemoryCustodian Protocol heading", read_error)
+
+                check_code, check_output, _check_error = capture([
+                    "check", "--routing", "--project-root", tmp,
+                ])
+                self.assertEqual(check_code, 1)
+                self.assertIn("MC-ROUTING-007 ERROR", check_output)
+                self.assertIn("exactly one MemoryCustodian Protocol heading", check_output)
+
+                before = manifest.read_text(encoding="utf-8")
+                enable_code, _enable_output, enable_error = capture([
+                    "enable", "preferences", "--project-root", tmp,
+                ])
+                self.assertEqual(enable_code, 2)
+                self.assertIn("exactly one MemoryCustodian Protocol heading", enable_error)
+                self.assertEqual(manifest.read_text(encoding="utf-8"), before)
+                self.assertFalse((Path(tmp) / "docs/memory/preferences.md").exists())
+
+    def test_noncanonical_current_and_future_versions_fail_all_shared_gates(self):
+        cases = (
+            ("0.7.0", "canonical value 0.7"),
+            ("00.7", "canonical value 0.7"),
+            ("0.8", "newer than this CLI supports"),
+        )
+        for version, expected in cases:
+            with self.subTest(version=version), tempfile.TemporaryDirectory() as tmp:
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["init", "--project-root", tmp]), 0)
+                manifest = Path(tmp) / "docs/memory/manifest.md"
+                malformed = manifest.read_text(encoding="utf-8").replace(
+                    "- protocol_version: 0.7", f"- protocol_version: {version}", 1,
+                )
+                if version != "0.8":
+                    malformed = re.sub(
+                        r"(?m)^- routing_schema_version:.*\n", "", malformed,
+                    )
+                manifest.write_text(malformed, encoding="utf-8")
+
+                read_code, read_output, read_error = capture([
+                    "read", "--task", "implementation", "--strict-routing",
+                    "--names-only", "--project-root", tmp,
+                ])
+                self.assertEqual(read_code, 2)
+                self.assertIn("Routing completeness: INVALID", read_output)
+                self.assertIn(expected, read_error)
+
+                check_code, check_output, _check_error = capture([
+                    "check", "--routing", "--project-root", tmp,
+                ])
+                self.assertEqual(check_code, 1)
+                self.assertIn("MC-ROUTING-007 ERROR", check_output)
+                self.assertIn(expected, check_output)
+
+                before = manifest.read_text(encoding="utf-8")
+                enable_code, _enable_output, enable_error = capture([
+                    "enable", "preferences", "--project-root", tmp,
+                ])
+                self.assertEqual(enable_code, 2)
+                self.assertIn(expected, enable_error)
+                self.assertEqual(manifest.read_text(encoding="utf-8"), before)
+
+                governance_code, _governance_output, governance_error = capture([
+                    "exception", "remove", "MC-CON-20260801-11111111",
+                    "--project-root", tmp,
+                ])
+                self.assertEqual(governance_code, 2)
+                self.assertIn(expected, governance_error)
+
+    def test_present_protocol_section_requires_complete_current_contract(self):
+        cases = (
+            (
+                lambda text: re.sub(r"(?m)^- protocol_version:.*\n", "", text),
+                "requires protocol_version",
+            ),
+            (
+                lambda text: re.sub(r"(?m)^- routing_schema_version:.*\n", "", text),
+                "requires routing_schema_version: 1",
+            ),
+            (
+                lambda text: re.sub(r"(?m)^- admission_policy:.*\n", "", text),
+                "requires admission_policy: evidence-required",
+            ),
+        )
+        for mutate, expected in cases:
+            with self.subTest(expected=expected), tempfile.TemporaryDirectory() as tmp:
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["init", "--project-root", tmp]), 0)
+                manifest = Path(tmp) / "docs/memory/manifest.md"
+                manifest.write_text(
+                    mutate(manifest.read_text(encoding="utf-8")),
+                    encoding="utf-8",
+                )
+
+                read_code, read_output, read_error = capture([
+                    "read", "--task", "implementation", "--strict-routing",
+                    "--names-only", "--project-root", tmp,
+                ])
+                self.assertEqual(read_code, 2)
+                self.assertIn("Routing completeness: INVALID", read_output)
+                self.assertIn(expected, read_error)
+
+                check_code, check_output, _check_error = capture([
+                    "check", "--routing", "--project-root", tmp,
+                ])
+                self.assertEqual(check_code, 1)
+                self.assertIn("MC-ROUTING-007 ERROR", check_output)
+                self.assertIn(expected, check_output)
+
+                before = manifest.read_text(encoding="utf-8")
+                enable_code, _enable_output, enable_error = capture([
+                    "enable", "preferences", "--project-root", tmp,
+                ])
+                self.assertEqual(enable_code, 2)
+                self.assertIn(expected, enable_error)
+                self.assertEqual(manifest.read_text(encoding="utf-8"), before)
+                self.assertFalse((Path(tmp) / "docs/memory/preferences.md").exists())
+
+    def test_recovery_rejects_ambiguous_protocol_sections_before_planning(self):
+        for command in (("migrate",), ("init", "--repair")):
+            with self.subTest(command=command), tempfile.TemporaryDirectory() as tmp:
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["init", "--project-root", tmp]), 0)
+                manifest = Path(tmp) / "docs/memory/manifest.md"
+                original = manifest.read_text(encoding="utf-8")
+                if command[0] == "migrate":
+                    original = original.replace(
+                        "- protocol_version: 0.7", "- protocol_version: 0.6", 1,
+                    )
+                ambiguous = original.rstrip() + (
+                    "\n\n## MemoryCustodian Protocol\n"
+                    "- protocol_version: 0.6\n"
+                    "- project_id: 11111111-1111-4111-8111-111111111111\n"
+                )
+                manifest.write_text(ambiguous, encoding="utf-8")
+
+                code, output, error = capture([
+                    *command, "--project-root", tmp,
+                ])
+                self.assertEqual(code, 2)
+                self.assertNotIn("Plan ID:", output)
+                self.assertIn(
+                    "exactly one MemoryCustodian Protocol heading", error,
+                )
+                self.assertEqual(manifest.read_text(encoding="utf-8"), ambiguous)
+
     def test_pre_metadata_legacy_routing_remains_compatible(self):
         with tempfile.TemporaryDirectory() as tmp:
             with redirect_stdout(StringIO()):
@@ -86,6 +249,12 @@ class RoutingAndQualityReleaseTests(unittest.TestCase):
             self.assertEqual(check_code, 0)
             self.assertNotIn("MC-ROUTING-007", check_output)
 
+            enable_code, _enable_output, _enable_error = capture([
+                "enable", "preferences", "--project-root", tmp,
+            ])
+            self.assertEqual(enable_code, 0)
+            self.assertTrue((Path(tmp) / "docs/memory/preferences.md").is_file())
+
     def test_duplicate_protocol_section_invalidates_strict_read_and_routing_check(self):
         with tempfile.TemporaryDirectory() as tmp:
             with redirect_stdout(StringIO()):
@@ -104,14 +273,57 @@ class RoutingAndQualityReleaseTests(unittest.TestCase):
             self.assertEqual(read_code, 2)
             self.assertIn("Routing completeness: INVALID", read_output)
             self.assertIn("MC-ROUTE-INVALID", read_output)
-            self.assertIn("exactly one MemoryCustodian Protocol H2 section", read_error)
+            self.assertIn("exactly one MemoryCustodian Protocol heading", read_error)
 
             check_code, check_output, _check_error = capture([
                 "check", "--routing", "--project-root", tmp,
             ])
             self.assertEqual(check_code, 1)
             self.assertIn("MC-ROUTING-007 ERROR", check_output)
-            self.assertIn("exactly one MemoryCustodian Protocol H2 section", check_output)
+            self.assertIn("exactly one MemoryCustodian Protocol heading", check_output)
+
+            before = manifest.read_text(encoding="utf-8")
+            enable_code, _enable_output, enable_error = capture([
+                "enable", "preferences", "--project-root", tmp,
+            ])
+            self.assertEqual(enable_code, 2)
+            self.assertIn("exactly one MemoryCustodian Protocol heading", enable_error)
+            self.assertEqual(manifest.read_text(encoding="utf-8"), before)
+            self.assertFalse((Path(tmp) / "docs/memory/preferences.md").exists())
+
+    def test_malformed_protocol_heading_invalidates_routing_and_mutation(self):
+        for malformed in ("### MemoryCustodian Protocol", "##MemoryCustodian Protocol"):
+            with self.subTest(heading=malformed), tempfile.TemporaryDirectory() as tmp:
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["init", "--project-root", tmp]), 0)
+                manifest = Path(tmp) / "docs/memory/manifest.md"
+                original = manifest.read_text(encoding="utf-8")
+                manifest.write_text(
+                    original.replace("## MemoryCustodian Protocol", malformed, 1),
+                    encoding="utf-8",
+                )
+
+                read_code, read_output, _read_error = capture([
+                    "read", "--task", "implementation", "--strict-routing",
+                    "--names-only", "--project-root", tmp,
+                ])
+                self.assertEqual(read_code, 2)
+                self.assertIn("Routing completeness: INVALID", read_output)
+
+                check_code, check_output, _check_error = capture([
+                    "check", "--routing", "--project-root", tmp,
+                ])
+                self.assertEqual(check_code, 1)
+                self.assertIn("MC-ROUTING-007 ERROR", check_output)
+
+                before = manifest.read_text(encoding="utf-8")
+                enable_code, _enable_output, enable_error = capture([
+                    "enable", "preferences", "--project-root", tmp,
+                ])
+                self.assertEqual(enable_code, 2)
+                self.assertIn("exactly one MemoryCustodian Protocol heading", enable_error)
+                self.assertEqual(manifest.read_text(encoding="utf-8"), before)
+                self.assertFalse((Path(tmp) / "docs/memory/preferences.md").exists())
 
     def test_mutually_exclusive_path_routes_are_reachably_ambiguous(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -787,7 +999,7 @@ class MergeAndDeterminismReleaseTests(unittest.TestCase):
             ),
             (
                 lambda text: re.sub(r"(?m)^- project_id:.*\n", "", text),
-                "missing a valid UUIDv4 project_id",
+                "requires a valid UUIDv4 project_id",
             ),
             (
                 lambda text: text.replace(
@@ -805,7 +1017,7 @@ class MergeAndDeterminismReleaseTests(unittest.TestCase):
             (
                 lambda text: text.rstrip()
                 + "\n\n## MEMORYCUSTODIAN PROTOCOL\n- protocol_version: 0.6\n",
-                "exactly one MemoryCustodian Protocol H2 section",
+                "exactly one MemoryCustodian Protocol heading",
             ),
         )
         for mutate, expected in cases:

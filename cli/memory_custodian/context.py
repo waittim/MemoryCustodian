@@ -13,7 +13,7 @@ from .protocol import (
     parse_markdown_units,
     render_markdown_document,
     resolve_manifest_memory_path,
-    strict_protocol_metadata,
+    protocol_contract_metadata,
 )
 from .routes import (
     ModuleDeclaration,
@@ -218,7 +218,7 @@ def route_context(
         "profiles": _requested(profiles),
         "areas": _requested(areas),
     }
-    version = strict_protocol_metadata(
+    version = protocol_contract_metadata(
         manifest, allow_missing_section=True,
     ).get("protocol_version", "0.5")
     declarations = parse_optional_module_index(manifest, legacy_compatible=version != "0.7")

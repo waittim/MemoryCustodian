@@ -16,9 +16,8 @@ from .protocol import (
     long_decision_entries,
     optional_index_paths,
     parse_manifest_task_file_specs,
+    protocol_contract_metadata,
     protocol_metadata,
-    strict_protocol_metadata,
-    valid_project_id,
     resolve_manifest_memory_path,
     resolve_memory_dir,
     resolve_project_root,
@@ -84,7 +83,7 @@ def _check_protocol_metadata(text: str) -> list[str]:
     if not permissive:
         return ["manifest.md: missing MemoryCustodian Protocol metadata; run `memory-custodian migrate --apply`"]
     try:
-        metadata = strict_protocol_metadata(text)
+        metadata = protocol_contract_metadata(text)
     except ValueError as exc:
         return [f"manifest.md: invalid protocol metadata: {exc}"]
     version = metadata.get("protocol_version")
@@ -103,27 +102,6 @@ def _check_protocol_metadata(text: str) -> list[str]:
             f"manifest.md: protocol_version {version} is newer than this CLI supports ({CURRENT_PROTOCOL_VERSION}); "
             "update memory-custodian"
         )
-    if version == CURRENT_PROTOCOL_VERSION:
-        if len(re.findall(r"(?m)^- project_id:\s*\S+\s*$", text)) != 1:
-            issues.append("manifest.md: project_id must appear exactly once")
-        if metadata.get("entry_schema_version") != "1":
-            issues.append("manifest.md: missing or invalid entry_schema_version (expected 1)")
-        if metadata.get("subject_schema_version") != "1":
-            issues.append("manifest.md: missing or invalid subject_schema_version (expected 1)")
-        if metadata.get("subject_registry") != "subjects.md":
-            issues.append("manifest.md: subject_registry must be subjects.md")
-        if not valid_project_id(metadata.get("project_id")):
-            issues.append("manifest.md: missing or invalid UUIDv4 project_id; run `memory-custodian migrate`")
-        if metadata.get("admission_policy") != "evidence-required":
-            issues.append("manifest.md: admission_policy must be evidence-required")
-        if metadata.get("routing_schema_version") != "1":
-            issues.append("manifest.md: routing_schema_version must be 1")
-        if metadata.get("conflict_schema_version") != "1":
-            issues.append("manifest.md: conflict_schema_version must be 1")
-        if metadata.get("routing_policy") != "explicit-task-and-scope":
-            issues.append("manifest.md: routing_policy must be explicit-task-and-scope")
-        if metadata.get("conflict_policy") != "canonical-subject-and-review":
-            issues.append("manifest.md: conflict_policy must be canonical-subject-and-review")
     return issues
 
 

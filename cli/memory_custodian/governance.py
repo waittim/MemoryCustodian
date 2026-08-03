@@ -7,23 +7,17 @@ import hashlib
 import json
 from pathlib import Path
 
-from . import (
-    __conflict_schema_version__,
-    __entry_schema_version__,
-    __routing_schema_version__,
-    __subject_schema_version__,
-)
 from .conflicts import canonical_entries
 from .entries import ENTRY_ID_RE, StructuredEntry, validate_evidence
 from .plans import digest_text
 from .protocol import (
     CURRENT_PROTOCOL_VERSION,
     compare_versions,
+    protocol_contract_metadata,
     project_id_from_manifest,
     read_text,
     resolve_memory_dir,
     resolve_project_root,
-    strict_protocol_metadata,
     today,
 )
 from .reconciliations import (
@@ -48,12 +42,8 @@ def _project(args) -> GovernanceProject:
     project_root = resolve_project_root(args.project_root)
     memory_dir = resolve_memory_dir(project_root, args.memory_dir)
     manifest = read_text(memory_dir / "manifest.md")
-    metadata = strict_protocol_metadata(manifest)
-    version = metadata.get("protocol_version")
-    if version is None:
-        raise ValueError(
-            "Governance preview requires protocol_version metadata; run `memory-custodian migrate`."
-        )
+    metadata = protocol_contract_metadata(manifest)
+    version = metadata["protocol_version"]
     comparison = compare_versions(version, CURRENT_PROTOCOL_VERSION)
     if comparison is None:
         raise ValueError(f"Invalid protocol version {version!r} in manifest.md.")
@@ -67,20 +57,6 @@ def _project(args) -> GovernanceProject:
             f"Project protocol {version} is newer than this CLI supports "
             f"({CURRENT_PROTOCOL_VERSION}); update MemoryCustodian."
         )
-    required = {
-        "entry_schema_version": __entry_schema_version__,
-        "subject_schema_version": __subject_schema_version__,
-        "routing_schema_version": __routing_schema_version__,
-        "conflict_schema_version": __conflict_schema_version__,
-        "subject_registry": "subjects.md",
-    }
-    for key, expected in required.items():
-        actual = metadata.get(key)
-        if actual != expected:
-            raise ValueError(
-                f"Governance preview requires {key}: {expected}; "
-                f"manifest has {actual or 'missing'}. Run `memory-custodian migrate`."
-            )
     if not (memory_dir / "subjects.md").is_file():
         raise ValueError(
             "Governance preview requires the declared subjects.md registry; "

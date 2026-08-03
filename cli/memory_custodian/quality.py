@@ -10,7 +10,7 @@ from .conflicts import analyze_conflicts, canonical_entries
 from .protocol import (
     parse_manifest_task_file_specs,
     protocol_metadata,
-    strict_protocol_metadata,
+    protocol_contract_metadata,
     validate_manifest_routes,
 )
 from .routes import CANONICAL_TASKS, SUBSTANTIAL_TASKS, parse_optional_module_index
@@ -33,7 +33,7 @@ def routing_findings(memory_dir: Path) -> tuple[QualityFinding, ...]:
         for issue in validate_manifest_routes(manifest)
     ]
     try:
-        metadata = strict_protocol_metadata(manifest, allow_missing_section=True)
+        metadata = protocol_contract_metadata(manifest, allow_missing_section=True)
     except ValueError as exc:
         metadata = protocol_metadata(manifest)
         findings.append(QualityFinding("ERROR", "MC-ROUTING-007", str(exc)))

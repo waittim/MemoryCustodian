@@ -364,6 +364,7 @@ def project_mutation_guard(
     project_id_hint: str | None = None,
     create_project_id: bool = False,
     allow_legacy: bool = False,
+    allow_metadata_repair: bool = False,
 ):
     """Serialize every project mutation through one bootstrap-to-project handoff."""
 
@@ -380,8 +381,41 @@ def project_mutation_guard(
         )
         current_project_id: str | None = None
         if manifest_text is not None:
-            from .protocol import project_id_from_manifest
+            from .protocol import (
+                CURRENT_PROTOCOL_VERSION,
+                compare_versions,
+                project_id_from_manifest,
+                protocol_contract_metadata,
+                strict_protocol_metadata,
+            )
 
+            if allow_metadata_repair:
+                metadata = strict_protocol_metadata(
+                    manifest_text,
+                    allow_missing_section=True,
+                )
+            else:
+                metadata = protocol_contract_metadata(
+                    manifest_text,
+                    allow_missing_section=allow_legacy,
+                )
+            version = metadata.get("protocol_version")
+            if version:
+                comparison = compare_versions(version, CURRENT_PROTOCOL_VERSION)
+                if comparison is None:
+                    raise ValueError(
+                        f"Project manifest has invalid protocol version {version!r}."
+                    )
+                if comparison > 0:
+                    raise ValueError(
+                        "Project protocol is newer than this CLI supports; "
+                        "update MemoryCustodian before mutating memory."
+                    )
+                if comparison < 0 and not (allow_legacy or allow_metadata_repair):
+                    raise ValueError(
+                        "Project protocol is older than this writer supports; "
+                        "run `memory-custodian migrate`."
+                    )
             current_project_id = project_id_from_manifest(manifest_text, required=False)
 
         project_id = current_project_id or project_id_hint

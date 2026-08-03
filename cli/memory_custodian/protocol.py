@@ -303,23 +303,34 @@ def strict_protocol_metadata(
 ) -> dict[str, str]:
     """Parse protocol scalars without silent malformed or duplicate fields."""
 
+    lines = manifest.splitlines()
     section_count = sum(
         1
-        for line in manifest.splitlines()
+        for line in lines
         if line.strip().startswith("## ")
         and _normalize_heading(line) == PROTOCOL_SECTION_NAME
     )
-    if section_count == 0 and allow_missing_section:
+    heading_trace_count = sum(
+        1
+        for line in lines
+        if line.strip().startswith("#")
+        and line.strip().lstrip("#").strip().strip("#").strip().casefold()
+        == PROTOCOL_SECTION_NAME
+    )
+    if section_count == 0 and heading_trace_count == 0 and allow_missing_section:
         return {}
-    if section_count != 1:
+    if section_count != 1 or heading_trace_count != 1:
         raise ValueError(
-            "manifest.md must contain exactly one MemoryCustodian Protocol H2 section"
+            "manifest.md must contain exactly one MemoryCustodian Protocol heading, "
+            "written as an H2 with canonical whitespace"
         )
     metadata: dict[str, str] = {}
-    lines = _section_lines(manifest, "##", lambda heading: heading == PROTOCOL_SECTION_NAME)
-    for line in lines:
+    section_lines = _section_lines(manifest, "##", lambda heading: heading == PROTOCOL_SECTION_NAME)
+    for line in section_lines:
         stripped = line.strip()
         if not stripped:
+            continue
+        if stripped.startswith("<!--") and stripped.endswith("-->"):
             continue
         match = PROTOCOL_BULLET_RE.fullmatch(stripped)
         if not match:
@@ -354,6 +365,67 @@ def project_id_from_manifest(manifest: str, *, required: bool = True) -> str | N
     if required:
         raise ValueError("manifest.md is missing a valid UUIDv4 project_id; run `memory-custodian migrate`.")
     return None
+
+
+def protocol_contract_metadata(
+    manifest: str,
+    *,
+    allow_missing_section: bool = False,
+) -> dict[str, str]:
+    """Return strict metadata after validating the declared version contract."""
+
+    metadata = strict_protocol_metadata(
+        manifest,
+        allow_missing_section=allow_missing_section,
+    )
+    if not metadata:
+        return {}
+    version = metadata.get("protocol_version")
+    if not version:
+        raise ValueError("Protocol metadata requires protocol_version")
+    comparison = compare_versions(version, CURRENT_PROTOCOL_VERSION)
+    if comparison is None:
+        raise ValueError(f"Invalid protocol version {version!r} in manifest.md")
+    if comparison > 0:
+        raise ValueError(
+            f"Project protocol {version} is newer than this CLI supports "
+            f"({CURRENT_PROTOCOL_VERSION})"
+        )
+    if comparison < 0:
+        return metadata
+    if version != CURRENT_PROTOCOL_VERSION:
+        raise ValueError(
+            f"Protocol version equivalent to {CURRENT_PROTOCOL_VERSION} must use "
+            f"the canonical value {CURRENT_PROTOCOL_VERSION}; manifest has {version!r}"
+        )
+
+    required = {
+        "entry_schema_version": __entry_schema_version__,
+        "subject_schema_version": __subject_schema_version__,
+        "subject_registry": "subjects.md",
+        "routing_schema_version": __routing_schema_version__,
+        "conflict_schema_version": __conflict_schema_version__,
+        "admission_policy": "evidence-required",
+        "routing_policy": "explicit-task-and-scope",
+        "conflict_policy": "canonical-subject-and-review",
+    }
+    for key, expected in required.items():
+        actual = metadata.get(key)
+        if actual != expected:
+            raise ValueError(
+                f"Protocol {CURRENT_PROTOCOL_VERSION} requires {key}: {expected}; "
+                f"manifest has {actual or 'missing'}"
+            )
+    for key in ("initialized_with", "last_migrated_with"):
+        if not metadata.get(key):
+            raise ValueError(
+                f"Protocol {CURRENT_PROTOCOL_VERSION} requires {key} metadata"
+            )
+    if not valid_project_id(metadata.get("project_id")):
+        raise ValueError(
+            f"Protocol {CURRENT_PROTOCOL_VERSION} requires a valid UUIDv4 project_id"
+        )
+    return metadata
 
 
 def _protocol_section_lines(

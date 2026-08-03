@@ -431,6 +431,15 @@ bind the manifest plus every Entry, registry, and reconciliation dependency used
 identifier changes whenever its observable decision state changes.
 The same strict Protocol metadata parser gates `read --strict-routing`, `check --routing`, and governance previews;
 one manifest cannot be valid in routing while invalid in governance.
+Legacy fallback applies only when no heading-level `MemoryCustodian Protocol` marker exists. Wrong heading levels,
+missing heading whitespace, extra malformed heading traces, duplicate sections, and malformed metadata are INVALID.
+The canonical current version is exactly `protocol_version: 0.7`; numerically equivalent spellings such as `0.7.0`
+and unsupported future versions are INVALID across routing, checks, governance, and writers. The shared mutation guard applies
+the same compatibility-aware preflight before ordinary writers acquire the project lock or change files; only
+explicit migrate/init-repair recovery paths may bypass incomplete-input contract checks. A present section always
+requires a valid `protocol_version`; Protocol 0.7 additionally requires its schema, registry, project identity, and
+policy metadata. Recovery candidates must satisfy the complete strict contract before preview or apply, so ambiguous
+sections require manual repair. Single-line HTML comments and unknown well-formed metadata remain preservable.
 
 When Git is available, `check --conflicts --merge-base <ref>` compares semantic units changed on both sides. It
 distinguishes deterministic collisions from concurrent hard-memory changes requiring semantic reconciliation.

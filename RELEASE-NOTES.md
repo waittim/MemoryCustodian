@@ -50,7 +50,14 @@
   Subject-registry, reconciliation, content, and path dependencies used by the rendered result. Duplicate protocol
   H2 sections, scalar fields, empty values, and malformed scalar bullets are invalid rather than silently skipped or
   accepted with last-value-wins behavior. Strict reads, routing checks, and governance previews consume the same
-  metadata validation. Exception removal does not predict a resulting review while blockers remain.
+  metadata validation. Wrong-level, missing-whitespace, or extra malformed Protocol heading traces cannot fall back
+  to legacy mode. The current version must use the canonical `0.7` spelling; equivalent noncanonical spellings and
+  unsupported future versions fail the shared gate.
+  The shared mutation guard rejects ambiguous, malformed, or newer metadata before ordinary writers change files;
+  explicit migration/repair flows may read incomplete inputs but must produce a fully valid candidate before preview
+  or apply. A present section requires a valid version, and Protocol 0.7 requires all schema, registry, identity, and
+  policy fields. Ambiguous sections require manual repair. Exception removal does not predict a resulting review
+  while blockers remain.
 - Added matched-context conflict gates and optional read-only merge-base review for cross-branch structural collisions
   and concurrent hard-memory changes requiring human reconciliation.
 - Subject names, timestamps, Evidence counts, file order, and prose similarity never choose a winner. This release

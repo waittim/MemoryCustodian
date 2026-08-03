@@ -16,6 +16,7 @@ from .protocol import (
     manifest_with_optional_index,
     manifest_with_optional_module_index,
     project_id_from_manifest,
+    protocol_contract_metadata,
     protocol_metadata,
     resolve_memory_dir,
     resolve_project_root,
@@ -109,6 +110,7 @@ def _repair_manifest(text: str, project_id: str) -> tuple[str, bool]:
     )
     updated, routing_changed = manifest_with_current_task_routing(updated)
     updated, index_changed = manifest_with_optional_index(updated)
+    protocol_contract_metadata(updated)
     return updated, metadata_changed or routing_changed or index_changed
 
 
@@ -385,6 +387,7 @@ def run(args) -> int:
         timeout=args.lock_timeout,
         break_stale=args.break_stale_lock,
         create_project_id=True,
+        allow_metadata_repair=args.repair,
     ) as guard:
         assert guard.project_id is not None
         results, mutations = _initialization_state(
