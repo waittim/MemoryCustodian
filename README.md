@@ -440,6 +440,9 @@ explicit migrate/init-repair recovery paths may bypass incomplete-input contract
 requires a valid `protocol_version`; Protocol 0.7 additionally requires its schema, registry, project identity, and
 policy metadata. Recovery candidates must satisfy the complete strict contract before preview or apply, so ambiguous
 sections require manual repair. Single-line HTML comments and unknown well-formed metadata remain preservable.
+Subject, supersede, forget, compact, promotion, replacement, local-overlay, status, and focused diagnostic entrypoints
+run the same contract preflight before reading business operands, creating local seeds, or printing a Plan ID.
+Malformed migration input is rejected before pending project or Entry identity is persisted.
 
 When Git is available, `check --conflicts --merge-base <ref>` compares semantic units changed on both sides. It
 distinguishes deterministic collisions from concurrent hard-memory changes requiring semantic reconciliation.

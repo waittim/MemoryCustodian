@@ -25,8 +25,7 @@ from .entries import parse_structured_entries
 from .protocol import (
     CURRENT_PROTOCOL_VERSION,
     compare_versions,
-    project_id_from_manifest,
-    protocol_metadata,
+    protocol_contract_metadata,
 )
 
 ARCHIVABLE_H2_TARGETS = {"decisions.md", "changelog.md"}
@@ -44,7 +43,10 @@ def _compact_plan(
     mutations: list[TextMutation],
 ) -> MutationPlan:
     manifest = (memory_dir / "manifest.md").read_text(encoding="utf-8")
-    metadata = protocol_metadata(manifest)
+    metadata = protocol_contract_metadata(
+        manifest,
+        allow_missing_section=True,
+    )
     comparison = compare_versions(
         metadata.get("protocol_version", "0.5"),
         CURRENT_PROTOCOL_VERSION,
@@ -54,7 +56,7 @@ def _compact_plan(
     if comparison > 0:
         raise ValueError("Project protocol is newer than this CLI supports.")
     protocol_06 = comparison == 0
-    project_id = project_id_from_manifest(manifest) if protocol_06 else "legacy-protocol-0.5"
+    project_id = metadata["project_id"] if protocol_06 else "legacy-protocol-0.5"
     return MutationPlan(
         "compact",
         {"target": args.target or "inbox.md", "archive_oldest": args.archive_oldest},
@@ -577,6 +579,10 @@ def run(args) -> int:
         raise FileNotFoundError(f"Memory directory not found: {memory_dir}")
     if not (memory_dir / "manifest.md").exists():
         raise ValueError("manifest.md is missing; the MemoryCustodian setup is incomplete or corrupted")
+    protocol_contract_metadata(
+        (memory_dir / "manifest.md").read_text(encoding="utf-8"),
+        allow_missing_section=True,
+    )
     if args.target:
         return _run_target_compaction(args, project_root, memory_dir)
 

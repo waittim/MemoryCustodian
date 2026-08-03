@@ -59,6 +59,115 @@ def subject_unit(subject_id: str, title: str, canonical_ref: str = "") -> str:
 
 
 class RoutingAndQualityReleaseTests(unittest.TestCase):
+    def test_invalid_protocol_contract_is_rejected_across_public_entrypoints(self):
+        states = (
+            (
+                "duplicate-heading",
+                lambda text: text.rstrip()
+                + "\n\n## MemoryCustodian Protocol\n- protocol_version: 0.6\n",
+            ),
+            (
+                "missing-schema",
+                lambda text: re.sub(
+                    r"(?m)^- routing_schema_version:.*\n", "", text,
+                ),
+            ),
+            (
+                "noncanonical-version",
+                lambda text: text.replace(
+                    "- protocol_version: 0.7", "- protocol_version: 0.7.0", 1,
+                ),
+            ),
+            (
+                "invalid-project-id",
+                lambda text: re.sub(
+                    r"(?m)^- project_id:.*$", "- project_id: invalid", text,
+                ),
+            ),
+        )
+        commands = (
+            ("subject", ("subject", "list"), 2),
+            (
+                "add-supersedes",
+                (
+                    "add", "replacement", "--type", "decision",
+                    "--evidence", "user-confirmed",
+                    "--supersedes", "MC-DEC-20260801-11111111",
+                    "--subject", "MC-SUBJ-20260801-11111111",
+                    "--facet", "architecture",
+                ),
+                2,
+            ),
+            ("forget", ("forget", "obsolete"), 2),
+            (
+                "forget-id",
+                ("forget", "--id", "MC-DEC-20260801-11111111"),
+                2,
+            ),
+            ("compact", ("compact",), 2),
+            (
+                "promote",
+                (
+                    "promote", "MC-INBOX-20260801-11111111",
+                    "--type", "decision", "--evidence", "user-confirmed",
+                ),
+                2,
+            ),
+            ("init-replace", ("init", "--replace-existing"), 2),
+            ("status", ("status",), 1),
+            ("conflicts", ("check", "--conflicts"), 1),
+            ("reachability", ("check", "--reachability"), 1),
+            ("freshness", ("check", "--freshness"), 1),
+            ("local-status", ("local", "status"), 2),
+            ("local-reset", ("local", "reset"), 2),
+        )
+        for state_name, mutate in states:
+            with self.subTest(state=state_name), tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as state:
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["init", "--project-root", tmp]), 0)
+                manifest = Path(tmp) / "docs/memory/manifest.md"
+                invalid = mutate(manifest.read_text(encoding="utf-8"))
+                manifest.write_text(invalid, encoding="utf-8")
+
+                with patch.dict(os.environ, {"XDG_STATE_HOME": state}):
+                    for command_name, command, expected_code in commands:
+                        with self.subTest(state=state_name, command=command_name):
+                            code, output, error = capture([
+                                *command, "--project-root", tmp,
+                            ])
+                            self.assertEqual(code, expected_code, output + error)
+                            self.assertNotIn("Plan ID:", output)
+                            self.assertEqual(
+                                manifest.read_text(encoding="utf-8"), invalid,
+                            )
+                            if command_name == "status":
+                                self.assertIn("Protocol metadata: INVALID", output)
+                                self.assertIn("manifest.md: INVALID", output)
+                            elif command_name in {
+                                "conflicts", "reachability", "freshness",
+                            }:
+                                self.assertIn("MC-ROUTING-007", output)
+                self.assertEqual(tuple(Path(state).rglob("*")), ())
+
+    def test_failed_migrate_syntax_preflight_creates_no_pending_seed(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as state:
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            manifest = Path(tmp) / "docs/memory/manifest.md"
+            malformed = manifest.read_text(encoding="utf-8").replace(
+                "## MemoryCustodian Protocol", "### MemoryCustodian Protocol", 1,
+            )
+            manifest.write_text(malformed, encoding="utf-8")
+
+            with patch.dict(os.environ, {"XDG_STATE_HOME": state}):
+                code, output, error = capture(["migrate", "--project-root", tmp])
+
+            self.assertEqual(code, 2)
+            self.assertNotIn("Plan ID:", output)
+            self.assertIn("exactly one MemoryCustodian Protocol heading", error)
+            self.assertEqual(manifest.read_text(encoding="utf-8"), malformed)
+            self.assertEqual(tuple(Path(state).rglob("*")), ())
+
     def test_extra_malformed_protocol_trace_invalidates_all_shared_gates(self):
         for malformed in ("### MemoryCustodian Protocol", "##MemoryCustodian Protocol"):
             with self.subTest(heading=malformed), tempfile.TemporaryDirectory() as tmp:

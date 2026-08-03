@@ -12,6 +12,7 @@ from .protocol import (
     count_inbox_items,
     estimate_tokens,
     long_decision_entries,
+    protocol_contract_metadata,
     protocol_metadata,
     resolve_memory_dir,
     resolve_project_root,
@@ -34,9 +35,17 @@ def run(args) -> int:
     exit_code = 0
     manifest_path = memory_dir / "manifest.md"
     manifest = manifest_path.read_text(encoding="utf-8") if manifest_path.exists() else ""
-    metadata = protocol_metadata(manifest)
+    protocol_error: str | None = None
+    try:
+        metadata = protocol_contract_metadata(manifest, allow_missing_section=True)
+    except ValueError as exc:
+        metadata = protocol_metadata(manifest)
+        protocol_error = str(exc)
+        exit_code = 1
     protocol_version = metadata.get("protocol_version")
-    if protocol_version:
+    if protocol_error:
+        print(f"Protocol metadata: INVALID ({protocol_error})")
+    elif protocol_version:
         comparison = compare_versions(protocol_version, CURRENT_PROTOCOL_VERSION)
         if comparison == 0:
             print(f"Protocol version: {protocol_version} (current)")
@@ -62,7 +71,9 @@ def run(args) -> int:
         budget = budget_for(name)
         usage_state = budget_state(tokens, budget) if budget is not None else "OK"
         long_entries = long_decision_entries(text) if name == "decisions.md" else []
-        if name == "brief.md" and brief_needs_curation(text):
+        if name == "manifest.md" and protocol_error:
+            state = "INVALID"
+        elif name == "brief.md" and brief_needs_curation(text):
             state = "NEEDS CURATION"
         elif usage_state != "OK":
             state = usage_state

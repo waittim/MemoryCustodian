@@ -11,11 +11,16 @@ from .local_overlay import (
     enable_overlay,
     inspect_overlay,
     link_root,
-    project_identity,
     render_overlay_status,
 )
 from .locking import project_mutation_guard
-from .protocol import resolve_memory_dir, resolve_project_root
+from .protocol import (
+    CURRENT_PROTOCOL_VERSION,
+    compare_versions,
+    protocol_contract_metadata,
+    resolve_memory_dir,
+    resolve_project_root,
+)
 
 
 def run(args) -> int:
@@ -24,7 +29,13 @@ def run(args) -> int:
     manifest = memory_dir / "manifest.md"
     if not manifest.exists():
         raise ValueError("manifest.md is missing; the MemoryCustodian setup is incomplete or corrupted")
-    project_id = project_identity(memory_dir)
+    metadata = protocol_contract_metadata(manifest.read_text(encoding="utf-8"))
+    if compare_versions(
+        metadata.get("protocol_version", "0.5"),
+        CURRENT_PROTOCOL_VERSION,
+    ) != 0:
+        raise ValueError("Local overlay commands require Protocol 0.7.")
+    project_id = metadata["project_id"]
     command = args.local_command
     if command == "status":
         render_overlay_status(inspect_overlay(project_root, project_id))

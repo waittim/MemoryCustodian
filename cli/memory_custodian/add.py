@@ -36,8 +36,7 @@ from .protocol import (
     is_safe_memory_name,
     manifest_with_optional_module_index,
     prepended_text,
-    project_id_from_manifest,
-    protocol_metadata,
+    protocol_contract_metadata,
     resolve_memory_dir,
     resolve_project_root,
     today,
@@ -358,7 +357,10 @@ def run(args) -> int:
     manifest_path = memory_dir / "manifest.md"
     if not manifest_path.exists():
         raise ValueError("manifest.md is missing; the MemoryCustodian setup is incomplete or corrupted")
-    metadata = protocol_metadata(manifest_path.read_text(encoding="utf-8"))
+    metadata = protocol_contract_metadata(
+        manifest_path.read_text(encoding="utf-8"),
+        allow_missing_section=True,
+    )
     comparison = compare_versions(metadata.get("protocol_version", "0.5"), CURRENT_PROTOCOL_VERSION)
     if comparison is None:
         raise ValueError("Project manifest has an invalid protocol version.")
@@ -375,7 +377,10 @@ def run(args) -> int:
             break_stale=args.break_stale_lock,
             allow_legacy=True,
         ) as guard:
-            current_metadata = protocol_metadata(guard.manifest_text or "")
+            current_metadata = protocol_contract_metadata(
+                guard.manifest_text or "",
+                allow_missing_section=True,
+            )
             current_comparison = compare_versions(
                 current_metadata.get("protocol_version", "0.5"),
                 CURRENT_PROTOCOL_VERSION,
@@ -407,8 +412,7 @@ def run(args) -> int:
                 return 1
             apply_mutations(mutations)
     else:
-        project_id = project_id_from_manifest(manifest_path.read_text(encoding="utf-8"))
-        assert project_id is not None
+        project_id = metadata["project_id"]
         if args.supersedes:
             fingerprint = _supersede_fingerprint(args, project_id, memory_dir)
             seed_path = _seed_path(fingerprint)

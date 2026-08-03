@@ -57,7 +57,9 @@
   explicit migration/repair flows may read incomplete inputs but must produce a fully valid candidate before preview
   or apply. A present section requires a valid version, and Protocol 0.7 requires all schema, registry, identity, and
   policy fields. Ambiguous sections require manual repair. Exception removal does not predict a resulting review
-  while blockers remain.
+  while blockers remain. All public preview, local-overlay, status, and focused diagnostic entrypoints perform this
+  preflight before operand lookup, Plan ID rendering, or seed creation; failed migration syntax checks leave no
+  pending local identity state.
 - Added matched-context conflict gates and optional read-only merge-base review for cross-branch structural collisions
   and concurrent hard-memory changes requiring human reconciliation.
 - Subject names, timestamps, Evidence counts, file order, and prose similarity never choose a winner. This release

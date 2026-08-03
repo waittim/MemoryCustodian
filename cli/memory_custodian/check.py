@@ -38,7 +38,13 @@ from .scanning import scan_text
 from .subjects import FACETS, load_subjects, subject_indexes, validate_subject_registry
 from .templates import CORE_FILES, brief_needs_curation
 from .conflicts import ConflictStatus, analyze_conflicts, render_conflict_result
-from .quality import freshness_findings, reachability_findings, render_quality, routing_findings
+from .quality import (
+    QualityFinding,
+    freshness_findings,
+    reachability_findings,
+    render_quality,
+    routing_findings,
+)
 from .local_overlay import LocalStatus, inspect_overlay, project_identity
 
 
@@ -105,13 +111,32 @@ def _check_protocol_metadata(text: str) -> list[str]:
     return issues
 
 
+def _specialized_protocol_finding(memory_dir: Path) -> QualityFinding | None:
+    manifest_path = memory_dir / "manifest.md"
+    if not manifest_path.exists():
+        return QualityFinding("ERROR", "MC-ROUTING-007", "manifest.md is missing.")
+    try:
+        protocol_contract_metadata(
+            manifest_path.read_text(encoding="utf-8"),
+            allow_missing_section=True,
+        )
+    except ValueError as exc:
+        return QualityFinding("ERROR", "MC-ROUTING-007", str(exc))
+    return None
+
+
 def run(args) -> int:
     project_root = resolve_project_root(args.project_root)
     memory_dir = resolve_memory_dir(project_root, args.memory_dir)
     if not memory_dir.exists():
         print(f"Memory directory missing: {memory_dir}")
         return 1
+    specialized_protocol = _specialized_protocol_finding(memory_dir)
     if getattr(args, "conflicts", False):
+        if specialized_protocol:
+            print("Conflict status: INVALID")
+            print(f"{specialized_protocol.code}: {specialized_protocol.message}")
+            return 1
         result = analyze_conflicts(memory_dir)
         render_conflict_result(result)
         if getattr(args, "merge_base", None):
@@ -124,8 +149,12 @@ def run(args) -> int:
     if getattr(args, "routing", False):
         return render_quality("routing check", routing_findings(memory_dir))
     if getattr(args, "reachability", False):
+        if specialized_protocol:
+            return render_quality("reachability check", (specialized_protocol,))
         return render_quality("reachability check", reachability_findings(memory_dir))
     if getattr(args, "freshness", False):
+        if specialized_protocol:
+            return render_quality("freshness check", (specialized_protocol,))
         return render_quality("freshness check", freshness_findings(project_root, memory_dir))
     issues: list[str] = []
     warnings: list[str] = []

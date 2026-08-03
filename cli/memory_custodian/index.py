@@ -11,7 +11,15 @@ import re
 from .conflicts import canonical_entries
 from .entries import StructuredEntry, validate_evidence
 from .local_overlay import LocalStatus, inspect_overlay, project_identity
-from .protocol import iter_markdown_files, parse_markdown_units, resolve_memory_dir, resolve_project_root
+from .protocol import (
+    CURRENT_PROTOCOL_VERSION,
+    compare_versions,
+    iter_markdown_files,
+    parse_markdown_units,
+    protocol_contract_metadata,
+    resolve_memory_dir,
+    resolve_project_root,
+)
 from .subjects import load_subjects
 
 
@@ -159,6 +167,10 @@ def run_promote(args) -> int:
         raise ValueError("Transactional promotion apply requires Protocol 0.8.")
     project_root = resolve_project_root(args.project_root)
     memory_dir = resolve_memory_dir(project_root, args.memory_dir)
+    manifest = (memory_dir / "manifest.md").read_text(encoding="utf-8")
+    metadata = protocol_contract_metadata(manifest)
+    if compare_versions(metadata["protocol_version"], CURRENT_PROTOCOL_VERSION) != 0:
+        raise ValueError("Promotion preview requires Protocol 0.7.")
     records = build_index(project_root, memory_dir)
     candidate = find_entry(records, args.entry_id)
     if candidate.status != "candidate" or not candidate.structured:
@@ -198,7 +210,7 @@ def run_promote(args) -> int:
                 "Promotion would duplicate active structural owner(s): " + ", ".join(sorted(owners))
             )
     plan_seed = (
-        f"promote\0{candidate.entry_id}\0{new_id}\0{target}\0{'|'.join(evidence)}\0"
+        f"promote\0{metadata['project_id']}\0{candidate.entry_id}\0{new_id}\0{target}\0{'|'.join(evidence)}\0"
         + "|".join(blockers)
     ).encode("utf-8")
     print("Promotion preview:")

@@ -279,7 +279,12 @@ def run(args) -> int:
     existing_project_id = None
     existing_protocol_version = None
     if existing_manifest.exists():
-        existing_metadata = protocol_metadata(existing_manifest.read_text(encoding="utf-8"))
+        existing_text = existing_manifest.read_text(encoding="utf-8")
+        existing_metadata = (
+            protocol_contract_metadata(existing_text)
+            if args.replace_existing
+            else protocol_metadata(existing_text)
+        )
         existing_protocol_version = existing_metadata.get("protocol_version")
         if existing_protocol_version is not None:
             existing_comparison = compare_versions(
@@ -296,8 +301,10 @@ def run(args) -> int:
                     "Project protocol is newer than this CLI supports; "
                     "update MemoryCustodian before running init."
                 )
-        existing_project_id = project_id_from_manifest(
-            existing_manifest.read_text(encoding="utf-8"), required=False
+        existing_project_id = (
+            existing_metadata.get("project_id")
+            if args.replace_existing
+            else project_id_from_manifest(existing_text, required=False)
         )
     if args.replace_existing:
         if existing_protocol_version != CURRENT_PROTOCOL_VERSION or existing_project_id is None:

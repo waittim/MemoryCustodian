@@ -289,6 +289,9 @@ incomplete inputs only when their complete candidate manifest passes strict vali
 sections require manual repair. One valid H2 plus any extra malformed Protocol heading trace is also ambiguous and
 invalid. The current contract requires the canonical version spelling `0.7`; `0.7.0`, leading-zero equivalents, and
 unsupported future versions are invalid rather than being routed with legacy grammar.
+Public Subject, supersede, forget, compact, promotion, replacement, local-overlay, status, and focused-check commands
+consume this same contract before operand lookup or Plan construction. Recovery syntax validation precedes pending
+identity creation, so malformed input cannot leave a project or Entry seed behind.
 
 ## Local Overlay
 

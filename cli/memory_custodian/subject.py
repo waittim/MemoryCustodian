@@ -23,8 +23,7 @@ from .protocol import (
     CURRENT_PROTOCOL_VERSION,
     compare_versions,
     prepended_text,
-    project_id_from_manifest,
-    protocol_metadata,
+    protocol_contract_metadata,
     resolve_memory_dir,
     resolve_project_root,
 )
@@ -54,7 +53,8 @@ def _project(args) -> tuple[Path, Path, str]:
     manifest = memory_dir / "manifest.md"
     if not manifest.exists():
         raise ValueError("manifest.md is missing; Subject operations require Protocol 0.7 metadata.")
-    metadata = protocol_metadata(manifest.read_text(encoding="utf-8"))
+    manifest_text = manifest.read_text(encoding="utf-8")
+    metadata = protocol_contract_metadata(manifest_text)
     comparison = compare_versions(
         metadata.get("protocol_version", "0.5"),
         CURRENT_PROTOCOL_VERSION,
@@ -65,7 +65,7 @@ def _project(args) -> tuple[Path, Path, str]:
         raise ValueError("Subject operations require Protocol 0.7.")
     if metadata.get("subject_schema_version") != "1":
         raise ValueError("Subject schema is not initialized; run `memory-custodian migrate`.")
-    return project_root, memory_dir, project_id_from_manifest(manifest.read_text(encoding="utf-8"))
+    return project_root, memory_dir, metadata["project_id"]
 
 
 def _find(subjects: list[Subject], subject_id: str) -> Subject:
@@ -155,7 +155,7 @@ def _apply_preview(
             )
         if (
             compare_versions(
-                protocol_metadata(guard.manifest_text or "").get(
+                protocol_contract_metadata(guard.manifest_text or "").get(
                     "protocol_version",
                     "0.5",
                 ),

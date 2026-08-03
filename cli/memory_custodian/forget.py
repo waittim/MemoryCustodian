@@ -33,8 +33,7 @@ from .protocol import (
     render_markdown_document,
     resolve_memory_dir,
     resolve_project_root,
-    project_id_from_manifest,
-    protocol_metadata,
+    protocol_contract_metadata,
     today,
 )
 from .subjects import SUBJECT_ID_RE
@@ -459,6 +458,27 @@ def run(args) -> int:
         raise ValueError("Provide exactly one forget selector: a topic or --id <ENTRY_ID>.")
     project_root = resolve_project_root(args.project_root)
     memory_dir = resolve_memory_dir(project_root, args.memory_dir)
+    if not memory_dir.exists():
+        raise FileNotFoundError(f"Memory directory not found: {memory_dir}")
+    if not (memory_dir / "manifest.md").exists():
+        raise ValueError("manifest.md is missing; forgetting cannot safely resolve active memory")
+    if not (memory_dir / "do-not-use.md").exists():
+        raise ValueError("do-not-use.md is missing; forgetting cannot safely record removal guards")
+    manifest_text = read_text(memory_dir / "manifest.md")
+    metadata = protocol_contract_metadata(
+        manifest_text,
+        allow_missing_section=True,
+    )
+    comparison = compare_versions(
+        metadata.get("protocol_version", "0.5"),
+        CURRENT_PROTOCOL_VERSION,
+    )
+    if comparison is None:
+        raise ValueError("Project manifest has an invalid protocol version.")
+    if comparison > 0:
+        raise ValueError("Project protocol is newer than this CLI supports.")
+    protocol_06 = comparison == 0
+    project_id = metadata["project_id"] if protocol_06 else None
     if getattr(args, "entry_id", None):
         from .index import build_index, find_entry
         record = find_entry(
@@ -469,27 +489,9 @@ def run(args) -> int:
     topic = args.topic.strip()
     if not topic:
         raise ValueError("Forget topic must not be empty.")
-    if not memory_dir.exists():
-        raise FileNotFoundError(f"Memory directory not found: {memory_dir}")
-    if not (memory_dir / "manifest.md").exists():
-        raise ValueError("manifest.md is missing; forgetting cannot safely resolve active memory")
-    if not (memory_dir / "do-not-use.md").exists():
-        raise ValueError("do-not-use.md is missing; forgetting cannot safely record removal guards")
-    manifest_text = read_text(memory_dir / "manifest.md")
     args.history_check_status = _history_check(
         project_root, memory_dir, topic, getattr(args, "history_check", False)
     )
-    metadata = protocol_metadata(manifest_text)
-    comparison = compare_versions(
-        metadata.get("protocol_version", "0.5"),
-        CURRENT_PROTOCOL_VERSION,
-    )
-    if comparison is None:
-        raise ValueError("Project manifest has an invalid protocol version.")
-    if comparison > 0:
-        raise ValueError("Project protocol is newer than this CLI supports.")
-    protocol_06 = comparison == 0
-    project_id = project_id_from_manifest(manifest_text) if protocol_06 else None
     tombstone_suffix: str | None = None
     tombstone_seed_path: Path | None = None
     privacy_seed_path: Path | None = None
@@ -653,7 +655,10 @@ def run(args) -> int:
         break_stale=args.break_stale_lock,
         allow_legacy=True,
     ) as guard:
-        current_metadata = protocol_metadata(guard.manifest_text or "")
+        current_metadata = protocol_contract_metadata(
+            guard.manifest_text or "",
+            allow_missing_section=True,
+        )
         current_comparison = compare_versions(
             current_metadata.get("protocol_version", "0.5"),
             CURRENT_PROTOCOL_VERSION,

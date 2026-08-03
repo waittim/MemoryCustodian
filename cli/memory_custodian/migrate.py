@@ -26,9 +26,9 @@ from .protocol import (
     manifest_with_optional_index,
     manifest_with_protocol_07_optional_routes,
     optional_index_paths,
-    project_id_from_manifest,
     protocol_contract_metadata,
     protocol_metadata,
+    strict_protocol_metadata,
     resolve_memory_dir,
     resolve_project_root,
     today,
@@ -126,6 +126,7 @@ def _migration_entry_seed(
 def _build_plan(project_root: Path, memory_dir: Path) -> tuple[MutationPlan, list[str], tuple[Path, ...]]:
     manifest_path = memory_dir / "manifest.md"
     original = manifest_path.read_text(encoding="utf-8")
+    strict_protocol_metadata(original, allow_missing_section=True)
     metadata = protocol_metadata(original)
     version = metadata.get("protocol_version")
     if version:

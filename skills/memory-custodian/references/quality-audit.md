@@ -74,7 +74,8 @@ memory-custodian check --conflicts --merge-base origin/main  # when Git/ref is a
   shared gate rather than routing either case with legacy grammar. A
   present section requires a valid version, and Protocol 0.7 requires complete schema, registry, identity, and policy
   fields. Validate recovery candidates before preview and again before apply; reject ambiguous sections for manual
-  repair.
+  repair. Exercise a manifest-state by public-entrypoint matrix: preview and local commands must reject before Plan
+  IDs or seeds, while status and every focused check must report the same invalid contract.
 
 ## Scope And Portability
 
