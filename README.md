@@ -440,8 +440,10 @@ Repo-external overlay reads require the same validated project identity.
 Promotion and Subject-merge previews validate their structural operands and bind the exact Entry/Subject text they
 render. Local reset reports no plan for a disabled overlay, blocks unbound or multi-root state, and binds local file
 and root-binding digests when a plan is meaningful.
-Its private-state inventory records directories and traversal failures, validates the project-id ancestor, and hashes
-regular-file bytes through no-follow descriptors, so symlinks and corrupt UTF-8 state produce blocker-aware plans.
+Its private-state inventory records directories and traversal failures, validates the project-id and `local/`
+directories as real owner-only `0700` paths, and hashes owner-only `0600` regular files through no-follow descriptors,
+so symlinks, permissive modes, corrupt metadata, and corrupt UTF-8 state produce blocker-aware plans without loading
+local content. Local manifest scalars are unique and bindings must carry the matching project identity.
 Migration derives operands only from normalized declarations, checks containment inside the memory directory, and
 snapshots all text operands before persisting preview seeds.
 

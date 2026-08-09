@@ -87,6 +87,8 @@ memory-custodian check --conflicts --merge-base origin/main  # when Git/ref is a
   subsections, sentinel/declaration conflicts, and declarations before a canonical subsection. Assert migration reads
   only normalized memory-contained operands. For local state, test project-id ancestor symlinks, empty/unreadable
   directories, traversal errors, and no-follow descriptor reads. Treat `exclusive-group` as unknown in schema 1.
+- Also cover a symlinked `local/` root, exact POSIX `0700`/`0600` modes, duplicate local metadata, mismatched binding
+  identity, collision-proof invalid state, migration symlink loops, and human-readable Optional-index preambles.
 
 ## Scope And Portability
 

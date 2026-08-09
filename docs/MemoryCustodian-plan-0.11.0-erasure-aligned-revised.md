@@ -454,10 +454,11 @@ INVALID
 * manifest 声明 scope input required，但命令未提供。
 * supplied scope inputs 全部缺失；非法 path 本身归入 INVALID，不得通过丢弃非法输入后继续显示 COMPLETE。
 
-至少以下情况为 `AMBIGUOUS`：
-
-* 同一次 invocation 的 supplied path 激活多个被 manifest 中合法 policy 明确标记为 mutually exclusive 的 route；Protocol 0.7 默认 manifest 不生成此 policy。
-* 一个保留的 legacy task alias 在明确 compatibility table 中映射到多个 canonical tasks。
+`AMBIGUOUS` 是稳定的结果/退出状态，但 Protocol 0.7 routing schema 1 不定义 producer。原草案列出的
+mutually-exclusive policy 没有版本化语法，历史发布也没有可验证的多映射 legacy task alias；二者均推迟到
+定义相应 schema 或 compatibility table 的后续协议。Protocol 0.7 不得用未声明的 `exclusive-group` key 或
+新造公开 alias 来制造可达性。0.11 的验收范围是保留 enum、reason code、渲染与 strict failure surface，
+不要求默认或自定义 schema 1 manifest 产生 `AMBIGUOUS`。
 
 以下情况必须为 `INVALID`，不得降级为 AMBIGUOUS：
 
@@ -1513,7 +1514,8 @@ adapters/
 * No hidden semantic matching。
 * Every enabled module gets one disposition。
 * Stable reason codes。
-* COMPLETE / INCOMPLETE / AMBIGUOUS / INVALID。
+* COMPLETE / INCOMPLETE / INVALID producer，以及保留的 AMBIGUOUS enum/reason/render/strict-failure surface；
+  AMBIGUOUS producer 随未来版本化 policy 或 compatibility table 测试。
 * Strict routing exit codes。
 * Missing paths with enabled areas。
 * Explicit area without path。

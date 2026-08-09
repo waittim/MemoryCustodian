@@ -72,6 +72,9 @@
   invalid. Migration reads only contained normalized declarations. Local overlay access rejects a symlinked
   project-id ancestor, and reset inventory binds directories, reports traversal failures, and reads files through
   no-follow descriptors.
+- Extended that boundary to the `local/` directory itself and enforced exact POSIX `0700`/`0600` modes before local
+  status, reads, or reset approval. Local manifest scalars and binding identity are unique and matching. Migration
+  normalizes symlink-loop failures without creating preview state and preserves human-readable Optional-index prose.
 - Added matched-context conflict gates and optional read-only merge-base review for cross-branch structural collisions
   and concurrent hard-memory changes requiring human reconciliation.
 - Subject names, timestamps, Evidence counts, file order, and prose similarity never choose a winner. This release

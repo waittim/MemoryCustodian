@@ -300,11 +300,13 @@ are malformed traces, not metadata sections. Canonical task H3 routes must be di
 precede them, sentinels cannot coexist with declarations, and routing schema 1 accepts only `activation`, `tasks`,
 `paths`, and `description`. Local overlay selection requires the resulting validated project identity.
 Promotion and Subject merge reuse structural operand checks, and their Plan IDs bind the exact candidate, registry,
-and referenced Entry state used by the preview. Local overlay selection validates the project-id state ancestor.
-Local reset records directories/traversal failures, refuses symlink nodes without reading targets, and hashes regular
-files through no-follow descriptors. Migration accepts operands only from normalized declarations contained in the
-managed memory directory, reads every operand before creating pending identity state, and renders missing routes from
-the same authority used by initialization.
+and referenced Entry state used by the preview. Local overlay selection validates both the project-id state ancestor
+and `local/` itself as real owner-only `0700` directories. Manifest schema/project scalars are unique, binding identity
+must match, and every loaded local file is an owner-only `0600` regular file read through a no-follow descriptor.
+Local reset records directories/traversal failures and refuses symlink nodes without reading targets. Migration
+accepts operands only from normalized declarations contained in the managed memory directory, normalizes symlink-loop
+failures before seed creation, preserves human prose outside declaration shapes, and renders missing routes from the
+same authority used by initialization.
 
 ## Local Overlay
 
