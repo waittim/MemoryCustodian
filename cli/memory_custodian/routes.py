@@ -11,6 +11,9 @@ from enum import Enum
 from pathlib import Path, PurePosixPath
 import re
 
+from .markdown import headings as markdown_headings
+from .markdown import section_ranges, visible_lines
+
 
 CANONICAL_TASKS = (
     "general",
@@ -201,9 +204,9 @@ _CODE_SPAN_RE = re.compile(r"`([^`]+)`")
 _ALLOWED_KEYS = {"activation", "tasks", "paths", "description", "exclusive-group"}
 _ACTIVATIONS = {"task", "explicit-only", "task-or-explicit", "path", "path-or-explicit"}
 _SECTION_TYPES = {
-    "### Enabled rules": "rules",
-    "### Enabled profiles": "profiles",
-    "### Enabled areas": "areas",
+    "enabled rules": "rules",
+    "enabled profiles": "profiles",
+    "enabled areas": "areas",
 }
 
 
@@ -347,12 +350,24 @@ def parse_optional_module_index(manifest: str, *, legacy_compatible: bool = Fals
     inferred automatic route.
     """
 
-    lines = manifest.splitlines()
-    try:
-        start = next(i for i, line in enumerate(lines) if line.strip() == "## Optional module index")
-    except StopIteration:
+    ranges = section_ranges(manifest, 2, "optional module index")
+    if not ranges:
         return ()
-    end = next((i for i in range(start + 1, len(lines)) if lines[i].startswith("## ")), len(lines))
+    if len(ranges) != 1:
+        raise ValueError(
+            "manifest.md must contain at most one Optional module index section"
+        )
+    start, end = ranges[0]
+    body_lines = {
+        line.index: line.text
+        for line in visible_lines(manifest)
+        if start <= line.index < end and not line.indented_code
+    }
+    subsection_titles = {
+        heading.index: heading.title
+        for heading in markdown_headings(manifest)
+        if heading.level == 3 and start <= heading.index < end
+    }
     declarations: list[ModuleDeclaration] = []
     seen: set[str] = set()
     current_type: str | None = None
@@ -389,11 +404,14 @@ def parse_optional_module_index(manifest: str, *, legacy_compatible: bool = Fals
         current_meta = {}
         legacy_description = ""
 
-    for line in lines[start + 1:end]:
+    for index in range(start, end):
+        if index not in body_lines:
+            continue
+        line = body_lines[index]
         stripped = line.strip()
-        if line.startswith("### "):
+        if index in subsection_titles:
             flush()
-            current_type = _SECTION_TYPES.get(stripped)
+            current_type = _SECTION_TYPES.get(subsection_titles[index])
             if current_type is None:
                 raise ValueError(f"unknown optional module subsection: {stripped}")
             continue

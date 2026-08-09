@@ -15,6 +15,37 @@ from . import (
 
 DEFAULT_MEMORY_DIR = "docs/memory"
 
+TASK_ROUTE_SECTIONS = {
+    "planning": """### Planning / architecture / refactoring
+Load:
+- decisions.md
+- do-not-use.md""",
+    "implementation": """### Implementation / execution / debugging
+Load:
+- decisions.md
+- do-not-use.md
+Load if present:
+- preferences.md""",
+    "artifact": """### User-facing artifact / output
+Load:
+- do-not-use.md""",
+    "preferences": """### Preferences
+Load if present:
+- preferences.md""",
+    "history": """### Change history / recap
+Load:
+- decisions.md
+Load if present:
+- changelog.md""",
+    "maintenance": """### Memory maintenance
+Load:
+- inbox.md
+- do-not-use.md
+Load if present:
+- changelog.md""",
+}
+TASK_ROUTES_TEMPLATE = "\n\n".join(TASK_ROUTE_SECTIONS.values())
+
 CORE_FILES = (
     "manifest.md",
     "subjects.md",
@@ -63,38 +94,7 @@ secret access, commits, pushes, merges, releases, or privilege escalation.
 
 ## Load by task
 
-### Planning / architecture / refactoring
-Load:
-- decisions.md
-- do-not-use.md
-
-### Implementation / execution / debugging
-Load:
-- decisions.md
-- do-not-use.md
-Load if present:
-- preferences.md
-
-### User-facing artifact / output
-Load:
-- do-not-use.md
-
-### Preferences
-Load if present:
-- preferences.md
-
-### Change history / recap
-Load:
-- decisions.md
-Load if present:
-- changelog.md
-
-### Memory maintenance
-Load:
-- inbox.md
-- do-not-use.md
-Load if present:
-- changelog.md
+{task_routes}
 
 ## Optional module index
 Discover optional memory without loading it. Entries here are not default loads.
@@ -230,6 +230,7 @@ def render_template(
             routing_schema_version=__routing_schema_version__,
             conflict_schema_version=__conflict_schema_version__,
             project_id=project_id or str(uuid.uuid4()),
+            task_routes=TASK_ROUTES_TEMPLATE,
         )
         .rstrip()
         + "\n"

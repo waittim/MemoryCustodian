@@ -99,23 +99,12 @@ def _migrate_decisions(
 
 def _migration_entry_seed(
     project_root: Path,
-    memory_dir: Path,
     manifest: str,
+    sources: dict[str, str],
 ) -> tuple[dict[str, str], Path | None]:
-    sources: list[tuple[str, str]] = []
-    decisions = memory_dir / "decisions.md"
-    if decisions.exists():
-        sources.append(("decisions.md", decisions.read_text(encoding="utf-8")))
-    for relative in sorted(
-        path for path in optional_index_paths(manifest)
-        if path.startswith("areas/") and path.endswith(".md")
-    ):
-        path = memory_dir.joinpath(*Path(relative).parts)
-        if path.exists():
-            sources.append((relative, path.read_text(encoding="utf-8")))
     keys: list[str] = []
     fingerprint_parts = [digest_text(manifest)]
-    for relative, text in sources:
+    for relative, text in sorted(sources.items()):
         fingerprint_parts.extend([relative, digest_text(text)])
         _preamble, sections = split_h2(text)
         for index, section in enumerate(sections):
@@ -125,34 +114,36 @@ def _migration_entry_seed(
     return pending_entry_suffixes("migrate-entries", project_root, source_sha, keys)
 
 
+def _migration_sources(memory_dir: Path, manifest: str) -> dict[str, str]:
+    """Read every migration operand before creating persistent preview seeds."""
+
+    relatives = {"decisions.md"}
+    relatives.update(
+        path
+        for path in optional_index_paths(manifest)
+        if path.startswith("areas/") and path.endswith(".md")
+    )
+    sources: dict[str, str] = {}
+    for relative in sorted(relatives):
+        path = memory_dir.joinpath(*Path(relative).parts)
+        if path.exists():
+            sources[relative] = path.read_text(encoding="utf-8")
+    return sources
+
+
 def _upgraded_manifest(
     original: str,
     project_id: str,
 ) -> tuple[str, bool, bool, bool, int]:
     """Build and validate the complete migration candidate without local state."""
 
-    metadata = protocol_metadata(original)
-    seeded = original
-    if "project_id" not in metadata:
-        marker = "## MemoryCustodian Protocol"
-        if marker in seeded:
-            seeded = seeded.replace(marker, marker + f"\n- project_id: {project_id}", 1)
-        else:
-            lines = seeded.splitlines()
-            insert_at = next(
-                (index for index, line in enumerate(lines) if line.startswith("## ")),
-                len(lines),
-            )
-            lines[insert_at:insert_at] = [
-                "## MemoryCustodian Protocol",
-                f"- project_id: {project_id}",
-                "",
-            ]
-            seeded = "\n".join(lines).rstrip() + "\n"
     routed, optional_routes_changed, legacy_optional_count = (
-        manifest_with_protocol_07_optional_routes(seeded)
+        manifest_with_protocol_07_optional_routes(original)
     )
-    updated, metadata_changed = manifest_with_current_protocol_metadata(routed)
+    updated, metadata_changed = manifest_with_current_protocol_metadata(
+        routed,
+        project_id=project_id,
+    )
     updated, routing_changed = manifest_with_current_task_routing(updated)
     updated, missing_routes_changed = manifest_with_complete_task_routing(updated)
     routing_changed = routing_changed or missing_routes_changed
@@ -189,13 +180,24 @@ def _build_plan(project_root: Path, memory_dir: Path) -> tuple[MutationPlan, lis
         )
     provisional_project_id = project_id or "00000000-0000-4000-8000-000000000000"
     _upgraded_manifest(original, provisional_project_id)
+    sources = _migration_sources(memory_dir, original)
+    changelog_path = memory_dir / "changelog.md"
+    changelog_original = (
+        changelog_path.read_text(encoding="utf-8")
+        if changelog_path.exists()
+        else None
+    )
     if not project_id:
         project_id, seed_path = pending_project_id(
             "migrate",
             project_root,
             digest_text(original),
         )
-    suffixes, entry_seed_path = _migration_entry_seed(project_root, memory_dir, original)
+    suffixes, entry_seed_path = _migration_entry_seed(
+        project_root,
+        original,
+        sources,
+    )
     (
         updated,
         metadata_changed,
@@ -224,8 +226,8 @@ def _build_plan(project_root: Path, memory_dir: Path) -> tuple[MutationPlan, lis
     decisions_path = memory_dir / "decisions.md"
     manual_reports: list[str] = []
     migrated_count = 0
-    if decisions_path.exists():
-        decisions = decisions_path.read_text(encoding="utf-8")
+    if "decisions.md" in sources:
+        decisions = sources["decisions.md"]
         migrated, migrated_count, manual, generated = _migrate_decisions(decisions, suffixes)
         if migrated != decisions:
             mutations.append(TextMutation(decisions_path, migrated))
@@ -239,10 +241,10 @@ def _build_plan(project_root: Path, memory_dir: Path) -> tuple[MutationPlan, lis
         if path.startswith("areas/") and path.endswith(".md")
     ):
         area_path = memory_dir.joinpath(*Path(relative).parts)
-        if not area_path.exists():
+        if relative not in sources:
             continue
         slug = Path(relative).stem
-        area_original = area_path.read_text(encoding="utf-8")
+        area_original = sources[relative]
         area_updated, area_count, area_manual, area_generated = _migrate_decisions(
             area_original,
             suffixes,
@@ -259,13 +261,12 @@ def _build_plan(project_root: Path, memory_dir: Path) -> tuple[MutationPlan, lis
         if area_manual:
             manual_reports.append(f"{area_manual} ambiguous {relative} H2 section(s)")
 
-    changelog = memory_dir / "changelog.md"
-    if changelog.exists() and mutations:
+    if changelog_original is not None and mutations:
         mutations.append(
             TextMutation(
-                changelog,
+                changelog_path,
                 changelog_text(
-                    changelog.read_text(encoding="utf-8"),
+                    changelog_original,
                     "Migrated project memory to Protocol 0.7 without rewriting legacy freeform units.",
                 ),
             )

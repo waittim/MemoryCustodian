@@ -60,6 +60,235 @@ def subject_unit(subject_id: str, title: str, canonical_ref: str = "") -> str:
 
 
 class RoutingAndQualityReleaseTests(unittest.TestCase):
+    def test_protocol_heading_edges_fail_closed_without_rejecting_comments(self):
+        invalid_cases = (
+            (
+                "setext",
+                lambda text: text.replace(
+                    "## MemoryCustodian Protocol",
+                    "MemoryCustodian Protocol\n---",
+                    1,
+                ),
+            ),
+            (
+                "attached-closing-hash",
+                lambda text: text.replace(
+                    "## MemoryCustodian Protocol",
+                    "## MemoryCustodian Protocol#",
+                    1,
+                ),
+            ),
+            (
+                "indented-metadata",
+                lambda text: re.sub(
+                    r"(?m)^(- (?:protocol_version|entry_schema_version|subject_schema_version|"
+                    r"subject_registry|routing_schema_version|conflict_schema_version|"
+                    r"initialized_with|last_migrated_with|project_id|admission_policy|"
+                    r"routing_policy|conflict_policy):)",
+                    r"    \1",
+                    text,
+                ),
+            ),
+        )
+        for name, mutate in invalid_cases:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as tmp:
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["init", "--project-root", tmp]), 0)
+                memory = Path(tmp) / "docs/memory"
+                manifest = memory / "manifest.md"
+                manifest.write_text(
+                    mutate(manifest.read_text(encoding="utf-8")),
+                    encoding="utf-8",
+                )
+                for command in (
+                    ("read", "--task", "implementation", "--strict-routing", "--names-only"),
+                    ("check", "--routing"),
+                    ("enable", "preferences"),
+                ):
+                    code, output, error = capture([
+                        *command,
+                        "--project-root", tmp,
+                    ])
+                    self.assertNotEqual(code, 0, output + error)
+                self.assertFalse((memory / "preferences.md").exists())
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            manifest = Path(tmp) / "docs/memory/manifest.md"
+            manifest.write_text(
+                manifest.read_text(encoding="utf-8").rstrip()
+                + "\n\n<!--\n## MemoryCustodian Protocol\n"
+                + "- protocol_version: 0.6\n-->\n",
+                encoding="utf-8",
+            )
+            code, output, error = capture([
+                "read", "--task", "implementation", "--strict-routing",
+                "--names-only", "--project-root", tmp,
+            ])
+            self.assertEqual(code, 0, output + error)
+            self.assertIn("Routing completeness: COMPLETE", output)
+
+    def test_duplicate_optional_module_index_invalidates_all_contract_gates(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            memory = Path(tmp) / "docs/memory"
+            manifest = memory / "manifest.md"
+            manifest.write_text(
+                manifest.read_text(encoding="utf-8").rstrip()
+                + "\n\n## Optional module index\n\n### Enabled rules\n"
+                + "- `rules/evil.md`\n  - activation: explicit-only\n",
+                encoding="utf-8",
+            )
+            for command in (
+                ("read", "--task", "implementation", "--strict-routing", "--names-only"),
+                ("check", "--routing"),
+                ("enable", "preferences"),
+            ):
+                code, output, error = capture([*command, "--project-root", tmp])
+                self.assertNotEqual(code, 0, output + error)
+                self.assertIn("at most one Optional module index", output + error)
+            self.assertFalse((memory / "preferences.md").exists())
+
+    @unittest.skipIf(os.name == "nt", "POSIX symlink semantics")
+    def test_local_reset_hashes_bytes_and_never_follows_symlinks(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as state:
+            with patch.dict(os.environ, {"XDG_STATE_HOME": state}):
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["init", "--project-root", tmp]), 0)
+                    self.assertEqual(main(["local", "enable", "--project-root", tmp]), 0)
+                    self.assertEqual(main(["local", "link", "--project-root", tmp]), 0)
+                manifest = Path(tmp) / "docs/memory/manifest.md"
+                project_id = re.search(
+                    r"(?m)^- project_id: (\S+)",
+                    manifest.read_text(encoding="utf-8"),
+                ).group(1)
+                overlay = (
+                    Path(state) / "memory-custodian/projects" / project_id / "local"
+                )
+                outside = Path(state) / "outside.txt"
+                outside.write_text("first", encoding="utf-8")
+                link = overlay / "outside-link"
+                link.symlink_to(outside)
+
+                code, first, error = capture([
+                    "local", "reset", "--project-root", tmp,
+                ])
+                self.assertEqual(code, 0, error)
+                self.assertIn("Unsafe local overlay symlink", first)
+                first_plan = re.search(r"Plan ID: ([0-9a-f]{16})", first).group(1)
+                outside.write_text("second", encoding="utf-8")
+                _code, second, _error = capture([
+                    "local", "reset", "--project-root", tmp,
+                ])
+                self.assertEqual(
+                    first_plan,
+                    re.search(r"Plan ID: ([0-9a-f]{16})", second).group(1),
+                )
+
+                link.unlink()
+                (overlay / "manifest.md").write_bytes(b"\xff\xfe")
+                code, binary, error = capture([
+                    "local", "reset", "--project-root", tmp,
+                ])
+                self.assertEqual(code, 0, error)
+                self.assertIn("Local overlay status: REVIEW", binary)
+                self.assertIn("Plan ID:", binary)
+                self.assertNotIn("Blockers:\n- none", binary)
+
+    def test_migration_completes_routes_from_the_template_authority(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            manifest = Path(tmp) / "docs/memory/manifest.md"
+            implementation = (
+                "### Implementation / execution / debugging\n"
+                "Load:\n- decisions.md\n- do-not-use.md\n"
+                "Load if present:\n- preferences.md\n\n"
+            )
+            manifest.write_text(
+                manifest.read_text(encoding="utf-8")
+                .replace("- protocol_version: 0.7", "- protocol_version: 0.6", 1)
+                .replace(implementation, "", 1),
+                encoding="utf-8",
+            )
+            code, output, error = capture(["migrate", "--project-root", tmp])
+            self.assertEqual(code, 0, output + error)
+            self.assertIn("Plan ID:", output)
+            self.assertNotIn("duplicate paths: constraints.md", output + error)
+
+    def test_task_routes_require_one_parent_and_no_out_of_parent_canonical_h3(self):
+        mutations = (
+            (
+                lambda text: text.replace("## Load by task", "## Other task routes", 1),
+                "expected exactly one 'Load by task' section, found 0",
+            ),
+            (
+                lambda text: text.rstrip() + "\n\n## Load by task\n",
+                "expected exactly one 'Load by task' section, found 2",
+            ),
+            (
+                lambda text: text.rstrip()
+                + "\n\n## Other task routes\n\n### Planning / architecture / refactoring\n"
+                + "Load:\n- decisions.md\n",
+                "canonical heading appears outside",
+            ),
+        )
+        for mutate, expected in mutations:
+            with self.subTest(expected=expected), tempfile.TemporaryDirectory() as tmp:
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["init", "--project-root", tmp]), 0)
+                manifest = Path(tmp) / "docs/memory/manifest.md"
+                manifest.write_text(
+                    mutate(manifest.read_text(encoding="utf-8")),
+                    encoding="utf-8",
+                )
+                code, output, error = capture([
+                    "check", "--routing", "--project-root", tmp,
+                ])
+                self.assertEqual(code, 1, output + error)
+                self.assertIn(expected, output)
+
+    def test_migration_reuses_normalized_protocol_heading(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            manifest = Path(tmp) / "docs/memory/manifest.md"
+            manifest.write_text(
+                manifest.read_text(encoding="utf-8")
+                .replace("## MemoryCustodian Protocol", "## MEMORYCUSTODIAN PROTOCOL ##", 1)
+                .replace("- protocol_version: 0.7", "- protocol_version: 0.6", 1),
+                encoding="utf-8",
+            )
+            code, output, error = capture(["migrate", "--project-root", tmp])
+            self.assertEqual(code, 0, output + error)
+            self.assertIn("Plan ID:", output)
+            self.assertNotIn("exactly one MemoryCustodian Protocol", output + error)
+
+    def test_migration_operand_decode_failure_precedes_all_pending_seeds(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as state:
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            memory = Path(tmp) / "docs/memory"
+            manifest = memory / "manifest.md"
+            manifest.write_text(
+                re.sub(
+                    r"(?m)^- project_id:.*\n",
+                    "",
+                    manifest.read_text(encoding="utf-8").replace(
+                        "- protocol_version: 0.7", "- protocol_version: 0.6", 1,
+                    ),
+                ),
+                encoding="utf-8",
+            )
+            (memory / "decisions.md").write_bytes(b"\xff\xfe")
+            with patch.dict(os.environ, {"XDG_STATE_HOME": state}):
+                code, output, _error = capture(["migrate", "--project-root", tmp])
+            self.assertEqual(code, 2)
+            self.assertNotIn("Plan ID:", output)
+            self.assertEqual(tuple(Path(state).rglob("*")), ())
+
     def test_routing_contract_gates_writers_recovery_and_focused_checks(self):
         with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as state:
             with redirect_stdout(StringIO()):

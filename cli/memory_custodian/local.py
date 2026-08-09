@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import hashlib
+import os
+from pathlib import Path
+import stat
 
 from .entries import validate_evidence
 from .erasure import ErasureScope, render_scope
@@ -15,9 +18,53 @@ from .local_overlay import (
     render_overlay_status,
     validated_project_identity,
 )
-from .locking import project_mutation_guard
-from .plans import digest_path
+from .locking import (
+    ensure_private_directory,
+    project_mutation_guard,
+    validate_private_file,
+)
 from .protocol import resolve_memory_dir, resolve_project_root
+
+
+def _reset_inventory(
+    directory: Path,
+) -> tuple[list[str], list[str]]:
+    """Hash private state bytes without following unsafe filesystem nodes."""
+
+    dependencies: list[str] = []
+    blockers: list[str] = []
+    try:
+        ensure_private_directory(directory)
+    except OSError as exc:
+        return ["local:unsafe-root"], [f"Unsafe local overlay root requires review: {exc}"]
+    paths: list[Path] = []
+    for root, directories, files in os.walk(directory, followlinks=False):
+        root_path = Path(root)
+        paths.extend(root_path / name for name in directories)
+        paths.extend(root_path / name for name in files)
+    binding_path = directory.parent / "bindings.json"
+    if binding_path.exists() or binding_path.is_symlink():
+        paths.append(binding_path)
+    for path in sorted(set(paths)):
+        relative = path.relative_to(directory.parent).as_posix()
+        try:
+            metadata = path.lstat()
+            if stat.S_ISDIR(metadata.st_mode):
+                continue
+            if stat.S_ISLNK(metadata.st_mode):
+                target = os.readlink(path)
+                dependencies.append(
+                    f"{relative}:symlink:{hashlib.sha256(target.encode('utf-8')).hexdigest()}"
+                )
+                blockers.append(f"Unsafe local overlay symlink requires review: {relative}")
+                continue
+            validate_private_file(path)
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            dependencies.append(f"{relative}:file:{digest}")
+        except (OSError, ValueError) as exc:
+            dependencies.append(f"{relative}:unreadable")
+            blockers.append(f"Unsafe local overlay state requires review: {relative}: {exc}")
+    return dependencies, blockers
 
 
 def run(args) -> int:
@@ -47,21 +94,10 @@ def run(args) -> int:
                 topic_retained_in_new_records=False,
             ))
             return 0
-        dependency_paths = [
-            path for path in overlay.directory.rglob("*") if path.is_file()
-        ]
-        binding_path = overlay.directory.parent / "bindings.json"
-        if binding_path.is_file():
-            dependency_paths.append(binding_path)
-        dependencies = [
-            f"{path.relative_to(overlay.directory.parent).as_posix()}:{digest_path(path)}"
-            for path in sorted(set(dependency_paths))
-        ]
-        blockers = (
-            list(overlay.warnings)
-            if overlay.status in {LocalStatus.UNBOUND, LocalStatus.REVIEW}
-            else []
-        )
+        dependencies, inventory_blockers = _reset_inventory(overlay.directory)
+        blockers = list(inventory_blockers)
+        if overlay.status in {LocalStatus.UNBOUND, LocalStatus.REVIEW}:
+            blockers.extend(overlay.warnings)
         seed = "\0".join([
             "local-reset",
             project_id,
