@@ -50,7 +50,10 @@ def _project_state(project_id: str) -> Path:
 
 
 def _project_state_path(project_id: str) -> Path:
-    return existing_private_state_directory("projects") / project_id
+    path = existing_private_state_directory("projects") / project_id
+    if path.exists() or path.is_symlink():
+        ensure_private_directory(path)
+    return path
 
 
 def overlay_directory(project_id: str) -> Path:
@@ -161,7 +164,15 @@ def _parse_manifest(path: Path, expected_project_id: str) -> tuple[Path, ...]:
 def inspect_overlay(project_root: Path, project_id: str, *, disabled: bool = False) -> LocalOverlay:
     if disabled or not project_id:
         return LocalOverlay(LocalStatus.DISABLED, Path("."), project_id)
-    directory = overlay_directory(project_id)
+    try:
+        directory = overlay_directory(project_id)
+    except OSError as exc:
+        return LocalOverlay(
+            LocalStatus.REVIEW,
+            Path("__invalid_local_overlay_state__"),
+            project_id,
+            warnings=(f"Unsafe local overlay project directory: {exc}",),
+        )
     if not directory.exists():
         return LocalOverlay(LocalStatus.DISABLED, directory, project_id)
     manifest = directory / "manifest.md"

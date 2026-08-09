@@ -21,13 +21,23 @@ class MarkdownHeading:
 
 
 def visible_lines(text: str) -> tuple[MarkdownLine, ...]:
-    """Return lines outside fenced code and HTML comments."""
+    """Return lines under the manifest's deliberately limited Markdown contract."""
 
     visible: list[MarkdownLine] = []
     fence_character: str | None = None
     fence_length = 0
     in_comment = False
     for index, raw in enumerate(text.splitlines()):
+        if in_comment:
+            _comment, marker, trailing = raw.partition("-->")
+            if not marker:
+                continue
+            if trailing.strip():
+                raise ValueError(
+                    "HTML comment closing lines in manifest.md must contain no other content"
+                )
+            in_comment = False
+            continue
         if fence_character is not None:
             closing = re.fullmatch(
                 rf" {{0,3}}{re.escape(fence_character)}{{{fence_length},}}[ \t]*",
@@ -37,39 +47,41 @@ def visible_lines(text: str) -> tuple[MarkdownLine, ...]:
                 fence_character = None
                 fence_length = 0
             continue
-        opening = re.match(r"^ {0,3}(`{3,}|~{3,})(?:[^`].*)?$", raw)
-        if opening and not in_comment:
+        opening = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", raw)
+        if opening:
             marker = opening.group(1)
+            info = opening.group(2)
+            if marker[0] == "`" and "`" in info:
+                raise ValueError(
+                    "Backtick fence info strings in manifest.md must not contain backticks"
+                )
             fence_character = marker[0]
             fence_length = len(marker)
             continue
 
-        remainder = raw
-        rendered = ""
-        while remainder:
-            if in_comment:
-                _before, marker, remainder = remainder.partition("-->")
-                if not marker:
-                    remainder = ""
-                    break
-                in_comment = False
-                continue
-            before, marker, after = remainder.partition("<!--")
-            rendered += before
-            if not marker:
-                break
-            in_comment = True
-            remainder = after
-        if in_comment and not rendered:
+        comment = re.match(r"^ {0,3}<!--", raw)
+        if comment:
+            _before, marker, trailing = raw[comment.end():].partition("-->")
+            if marker:
+                if trailing.strip():
+                    raise ValueError(
+                        "HTML comments in manifest.md must occupy complete lines"
+                    )
+            else:
+                in_comment = True
             continue
-        leading_spaces = len(rendered) - len(rendered.lstrip(" "))
+        leading_spaces = len(raw) - len(raw.lstrip(" "))
         visible.append(
             MarkdownLine(
                 index,
-                rendered,
-                leading_spaces >= 4 or rendered.startswith("\t"),
+                raw,
+                leading_spaces >= 4 or raw.startswith("\t"),
             )
         )
+    if fence_character is not None:
+        raise ValueError("Unclosed fenced code block in manifest.md")
+    if in_comment:
+        raise ValueError("Unclosed HTML comment in manifest.md")
     return tuple(visible)
 
 

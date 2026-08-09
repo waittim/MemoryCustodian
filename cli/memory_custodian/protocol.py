@@ -1171,6 +1171,29 @@ def validate_manifest_routes(manifest: str) -> list[str]:
             "task routes: expected exactly one 'Load by task' section, "
             f"found {load_by_task_count}"
         )
+    else:
+        parent_position, parent = next(
+            (position, heading)
+            for position, heading in enumerate(all_headings)
+            if heading.level == 2 and heading.title == "load by task"
+        )
+        parent_end = len(lines)
+        for following in all_headings[parent_position + 1:]:
+            if following.level <= 2:
+                parent_end = following.index
+                break
+        canonical_titles = set().union(*CATEGORY_HEADINGS.values())
+        unknown = sorted({
+            heading.title
+            for heading in all_headings
+            if heading.level == 3
+            and parent.index < heading.index < parent_end
+            and heading.title not in canonical_titles
+        })
+        if unknown:
+            issues.append(
+                "task routes: unknown H3 route heading(s): " + ", ".join(unknown)
+            )
     sections = _route_sections(manifest)
     for category, matches in sections.items():
         global_count = sum(

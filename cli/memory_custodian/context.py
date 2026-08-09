@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 import re
 
@@ -261,65 +261,6 @@ def route_context(
         )
         for declaration in declarations
     ]
-    exclusive_declarations: dict[str, list[ModuleDeclaration]] = {}
-    for declaration in declarations:
-        if not declaration.exclusive_group:
-            continue
-        exclusive_declarations.setdefault(declaration.exclusive_group, []).append(declaration)
-    optional_by_id = {module.module_id: module for module in optional}
-    ambiguous_groups: dict[str, tuple[str, ...]] = {}
-    selected_groups: dict[str, str] = {}
-    active_by_group: dict[str, set[str]] = {}
-    for group, group_declarations in exclusive_declarations.items():
-        explicit_ids = [
-            declaration.module_id
-            for declaration in group_declarations
-            if declaration.slug in requested["areas"]
-            and declaration.activation == "path-or-explicit"
-        ]
-        active_ids = {
-            declaration.module_id
-            for declaration in group_declarations
-            if optional_by_id[declaration.module_id].disposition != ModuleDisposition.SKIPPED
-        }
-        active_by_group[group] = active_ids
-        if len(explicit_ids) == 1:
-            selected_groups[group] = explicit_ids[0]
-        elif len(active_ids) > 1:
-            ambiguous_groups[group] = tuple(sorted(active_ids))
-    suppressed_modules = {
-        module_id
-        for group, selected in selected_groups.items()
-        for module_id in active_by_group[group]
-        if module_id != selected
-    }
-    if suppressed_modules:
-        optional = [
-            replace(
-                module,
-                reasons=(RouteReason.EXCLUSIVE_SELECTION,),
-                disposition=ModuleDisposition.SKIPPED,
-                details=("another area in the exclusive group was explicitly selected",),
-            )
-            if module.module_id in suppressed_modules else module
-            for module in optional
-        ]
-    if ambiguous_groups:
-        ambiguous_modules = {
-            module_id for module_ids in ambiguous_groups.values() for module_id in module_ids
-        }
-        optional = [
-            replace(
-                module,
-                reasons=(RouteReason.AMBIGUOUS,),
-                disposition=ModuleDisposition.SKIPPED,
-                details=(
-                    "multiple activation sources selected mutually exclusive area routes",
-                ),
-            )
-            if module.module_id in ambiguous_modules else module
-            for module in optional
-        ]
     modules = merge_routed_modules([*base, *optional, *missing_explicit])
     results: list[RoutedModule] = []
     contents: list[tuple[str, str]] = []
@@ -349,17 +290,8 @@ def route_context(
     if any(item.disposition == ModuleDisposition.MISSING_REQUIRED for item in results):
         incomplete.append("required-module-missing")
         warnings.append("One or more required routed modules are missing.")
-    if ambiguous_groups:
-        incomplete.append("mutually-exclusive-area-routes")
-        for group, module_ids in sorted(ambiguous_groups.items()):
-            warnings.append(
-                f"{RouteReason.AMBIGUOUS.value}: Multiple activations select mutually exclusive "
-                f"area routes in group {group!r}: {', '.join(module_ids)}. "
-                "Supply an explicit area or narrower paths."
-            )
     completeness = (
-        RoutingCompleteness.AMBIGUOUS
-        if ambiguous_groups else RoutingCompleteness.INCOMPLETE if incomplete else RoutingCompleteness.COMPLETE
+        RoutingCompleteness.INCOMPLETE if incomplete else RoutingCompleteness.COMPLETE
     )
     if any(item.disposition == ModuleDisposition.INVALID for item in results):
         completeness = RoutingCompleteness.INVALID

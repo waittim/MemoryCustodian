@@ -60,6 +60,249 @@ def subject_unit(subject_id: str, title: str, canonical_ref: str = "") -> str:
 
 
 class RoutingAndQualityReleaseTests(unittest.TestCase):
+    def test_manifest_lexical_contract_handles_code_spans_and_fence_info(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            manifest = Path(tmp) / "docs/memory/manifest.md"
+            original = manifest.read_text(encoding="utf-8")
+
+            manifest.write_text("`<!--`\n\n" + original, encoding="utf-8")
+            code, output, error = capture([
+                "read", "--task", "implementation", "--strict-routing",
+                "--names-only", "--project-root", tmp,
+            ])
+            self.assertEqual(code, 0, output + error)
+            self.assertIn("Routing completeness: COMPLETE", output)
+
+            manifest.write_text(
+                original.rstrip()
+                + "\n\n~~~`legal tilde info\n"
+                + "## MemoryCustodian Protocol\n- protocol_version: 0.6\n~~~\n",
+                encoding="utf-8",
+            )
+            code, output, error = capture([
+                "check", "--routing", "--project-root", tmp,
+            ])
+            self.assertEqual(code, 0, output + error)
+
+            manifest.write_text(
+                "```python`invalid\n" + original + "\n```\n",
+                encoding="utf-8",
+            )
+            for command in (
+                ("read", "--task", "implementation", "--strict-routing", "--names-only"),
+                ("check", "--routing"),
+                ("enable", "preferences"),
+            ):
+                command_code, command_output, command_error = capture([
+                    *command, "--project-root", tmp,
+                ])
+                self.assertNotEqual(
+                    command_code,
+                    0,
+                    command_output + command_error,
+                )
+                self.assertIn(
+                    "must not contain backticks",
+                    command_output + command_error,
+                )
+            self.assertFalse((Path(tmp) / "docs/memory/preferences.md").exists())
+
+    def test_migration_rejects_unparsed_and_escaping_optional_operands_before_seed(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as state:
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            memory = Path(tmp) / "docs/memory"
+            manifest = memory / "manifest.md"
+            original = manifest.read_text(encoding="utf-8").replace(
+                "- protocol_version: 0.7",
+                "- protocol_version: 0.6",
+                1,
+            )
+            outside = Path(tmp) / "outside.md"
+            outside.write_text(
+                "# Outside\n\n## Legacy\nDecision:\nDo not touch.\n",
+                encoding="utf-8",
+            )
+            malicious = original.replace(
+                "## Optional module index\n",
+                "## Optional module index\n\n"
+                "- `areas/../../../outside.md`\n"
+                "  - activation: path\n"
+                "  - paths: `src/**`\n",
+                1,
+            )
+            manifest.write_text(malicious, encoding="utf-8")
+            before = outside.read_bytes()
+            with patch.dict(os.environ, {"XDG_STATE_HOME": state}):
+                code, output, error = capture(["migrate", "--project-root", tmp])
+            self.assertEqual(code, 2, output + error)
+            self.assertNotIn("Plan ID:", output)
+            self.assertIn("outside a canonical subsection", error)
+            self.assertEqual(outside.read_bytes(), before)
+            self.assertEqual(tuple(Path(state).rglob("*")), ())
+
+            manifest.write_text(
+                original.replace(
+                    "### Enabled areas\n- None enabled.",
+                    "### Enabled areas\n"
+                    "- `areas/link.md`\n"
+                    "  - activation: path\n"
+                    "  - paths: `src/**`",
+                ),
+                encoding="utf-8",
+            )
+            (memory / "areas").mkdir(exist_ok=True)
+            (memory / "areas/link.md").symlink_to(outside)
+            with patch.dict(os.environ, {"XDG_STATE_HOME": state}):
+                code, output, error = capture(["migrate", "--project-root", tmp])
+            self.assertEqual(code, 2, output + error)
+            self.assertNotIn("Plan ID:", output)
+            self.assertIn("escapes the managed memory directory", error)
+            self.assertEqual(tuple(Path(state).rglob("*")), ())
+
+    @unittest.skipIf(os.name == "nt", "POSIX symlink semantics")
+    def test_local_overlay_rejects_symlinked_project_state_ancestor(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as state, tempfile.TemporaryDirectory() as external:
+            with patch.dict(os.environ, {"XDG_STATE_HOME": state}):
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["init", "--project-root", tmp]), 0)
+                    self.assertEqual(main(["local", "enable", "--project-root", tmp]), 0)
+                    self.assertEqual(main(["local", "link", "--project-root", tmp]), 0)
+                    self.assertEqual(main([
+                        "local", "add", "Ancestor symlink marker.",
+                        "--type", "preference", "--evidence", "user-confirmed",
+                        "--project-root", tmp,
+                    ]), 0)
+                manifest = Path(tmp) / "docs/memory/manifest.md"
+                project_id = re.search(
+                    r"(?m)^- project_id: (\S+)",
+                    manifest.read_text(encoding="utf-8"),
+                ).group(1)
+                project_state = (
+                    Path(state) / "memory-custodian/projects" / project_id
+                )
+                external_state = Path(external) / project_id
+                shutil.move(project_state, external_state)
+                project_state.symlink_to(external_state, target_is_directory=True)
+
+                status_code, status, status_error = capture([
+                    "local", "status", "--project-root", tmp,
+                ])
+                self.assertEqual(status_code, 0, status_error)
+                self.assertIn("Local overlay status: REVIEW", status)
+                self.assertIn("Unsafe local overlay project directory", status)
+
+                read_code, read_output, read_error = capture([
+                    "read", "--task", "preferences", "--project-root", tmp,
+                ])
+                self.assertEqual(read_code, 0, read_error)
+                self.assertNotIn("Ancestor symlink marker.", read_output)
+                self.assertNotIn("Local overlay status: BOUND", read_output)
+
+                reset_code, reset, reset_error = capture([
+                    "local", "reset", "--project-root", tmp,
+                ])
+                self.assertEqual(reset_code, 0, reset_error)
+                self.assertNotIn("Blockers:\n- none", reset)
+                self.assertIn("Unsafe local overlay", reset)
+
+    def test_optional_and_task_topology_fail_closed(self):
+        cases = (
+            (
+                lambda text: text.replace(
+                    "### Enabled profiles",
+                    "### Enabled rules\n- None enabled.\n\n### Enabled profiles",
+                    1,
+                ),
+                "duplicate optional module subsection",
+            ),
+            (
+                lambda text: text.replace(
+                    "### Enabled rules\n- None enabled.",
+                    "### Enabled rules\n- None enabled.\n"
+                    "- `rules/output.md`\n  - activation: explicit-only",
+                    1,
+                ),
+                "contradictory optional module sentinel",
+            ),
+            (
+                lambda text: text.replace(
+                    "### Planning / architecture / refactoring",
+                    "### Unknown task route\nLoad:\n- decisions.md\n\n"
+                    "### Planning / architecture / refactoring",
+                    1,
+                ),
+                "unknown H3 route heading",
+            ),
+            (
+                lambda text: text.replace(
+                    "## Optional module index\n",
+                    "## Optional module index\n\n"
+                    "- `rules/output.md`\n  - activation: explicit-only\n",
+                    1,
+                ),
+                "outside a canonical subsection",
+            ),
+        )
+        for mutate, expected in cases:
+            with self.subTest(expected=expected), tempfile.TemporaryDirectory() as tmp:
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["init", "--project-root", tmp]), 0)
+                manifest = Path(tmp) / "docs/memory/manifest.md"
+                manifest.write_text(
+                    mutate(manifest.read_text(encoding="utf-8")),
+                    encoding="utf-8",
+                )
+                code, output, error = capture([
+                    "check", "--routing", "--project-root", tmp,
+                ])
+                self.assertEqual(code, 1, output + error)
+                self.assertIn(expected, output + error)
+
+    def test_local_reset_binds_directories_and_blocks_unreadable_inventory(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as state:
+            with patch.dict(os.environ, {"XDG_STATE_HOME": state}):
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["init", "--project-root", tmp]), 0)
+                    self.assertEqual(main(["local", "enable", "--project-root", tmp]), 0)
+                    self.assertEqual(main(["local", "link", "--project-root", tmp]), 0)
+                manifest = Path(tmp) / "docs/memory/manifest.md"
+                project_id = re.search(
+                    r"(?m)^- project_id: (\S+)",
+                    manifest.read_text(encoding="utf-8"),
+                ).group(1)
+                overlay = (
+                    Path(state) / "memory-custodian/projects" / project_id / "local"
+                )
+                _code, baseline, _error = capture([
+                    "local", "reset", "--project-root", tmp,
+                ])
+                baseline_plan = re.search(r"Plan ID: ([0-9a-f]{16})", baseline).group(1)
+
+                empty = overlay / "empty"
+                empty.mkdir()
+                _code, with_empty, _error = capture([
+                    "local", "reset", "--project-root", tmp,
+                ])
+                empty_plan = re.search(r"Plan ID: ([0-9a-f]{16})", with_empty).group(1)
+                self.assertNotEqual(baseline_plan, empty_plan)
+
+                locked = overlay / "locked"
+                locked.mkdir()
+                (locked / "state.bin").write_bytes(b"state")
+                locked.chmod(0)
+                try:
+                    code, output, error = capture([
+                        "local", "reset", "--project-root", tmp,
+                    ])
+                    self.assertEqual(code, 0, error)
+                    self.assertNotIn("Blockers:\n- none", output)
+                    self.assertIn("Unreadable local overlay directory", output)
+                finally:
+                    locked.chmod(0o700)
+
     def test_protocol_heading_edges_fail_closed_without_rejecting_comments(self):
         invalid_cases = (
             (
@@ -1018,88 +1261,29 @@ class RoutingAndQualityReleaseTests(unittest.TestCase):
                 self.assertEqual(manifest.read_text(encoding="utf-8"), before)
                 self.assertFalse((Path(tmp) / "docs/memory/preferences.md").exists())
 
-    def test_mutually_exclusive_path_routes_are_reachably_ambiguous(self):
+    def test_exclusive_group_is_unknown_in_routing_schema_one(self):
         with tempfile.TemporaryDirectory() as tmp:
             with redirect_stdout(StringIO()):
                 self.assertEqual(main(["init", "--project-root", tmp]), 0)
-            memory = Path(tmp) / "docs/memory"
-            (memory / "areas").mkdir()
-            (memory / "areas/client.md").write_text("# Client\n", encoding="utf-8")
-            (memory / "areas/server.md").write_text("# Server\n", encoding="utf-8")
-            manifest = memory / "manifest.md"
+            manifest = Path(tmp) / "docs/memory/manifest.md"
             manifest.write_text(
                 manifest.read_text(encoding="utf-8").replace(
                     "### Enabled areas\n- None enabled.",
                     "### Enabled areas\n"
-                    "- `areas/client.md`\n"
-                    "  - activation: path-or-explicit\n"
-                    "  - paths: `client/**`\n"
-                    "  - exclusive-group: runtime\n"
-                    "- `areas/server.md`\n"
-                    "  - activation: path-or-explicit\n"
-                    "  - paths: `server/**`\n"
+                    "- `areas/backend.md`\n"
+                    "  - activation: path\n"
+                    "  - paths: `cli/**`\n"
                     "  - exclusive-group: runtime",
                 ),
                 encoding="utf-8",
             )
             code, output, error = capture([
-                "read", "--task", "implementation", "--path", "client/app.py",
-                "--path", "server/app.py",
-                "--explain", "--names-only", "--project-root", tmp,
+                "read", "--task", "implementation", "--path", "cli/app.py",
+                "--names-only", "--project-root", tmp,
             ])
-            self.assertEqual(code, 1)
-            self.assertEqual(error, "")
-            self.assertIn("Routing completeness: AMBIGUOUS", output)
-            self.assertIn("MC-ROUTE-AMBIGUOUS", output)
-            self.assertIn("brief.md", output)
-            self.assertIn("constraints.md", output)
-            self.assertIn("group 'runtime'", output)
-            self.assertIn("areas/client.md", output)
-            self.assertIn("Disposition: skipped", output)
-
-            selected_code, selected, _error = capture([
-                "read", "--task", "implementation", "--path", "client/app.py",
-                "--path", "server/app.py",
-                "--area", "client", "--explain", "--names-only",
-                "--project-root", tmp,
-            ])
-            self.assertEqual(selected_code, 0)
-            self.assertIn("Routing completeness: COMPLETE", selected)
-            self.assertIn("MC-SKIP-EXCLUSIVE-SELECTION", selected)
-            loaded_section = selected.split("Loaded:\n", 1)[1].split(
-                "Skipped optional:\n", 1,
-            )[0]
-            self.assertIn("areas/client.md", loaded_section)
-            self.assertNotIn("areas/server.md", loaded_section)
-
-            mixed_code, mixed, _error = capture([
-                "read", "--task", "implementation", "--path", "server/app.py",
-                "--area", "client", "--explain", "--names-only",
-                "--project-root", tmp,
-            ])
-            self.assertEqual(mixed_code, 0)
-            self.assertIn("Routing completeness: COMPLETE", mixed)
-            mixed_loaded = mixed.split("Loaded:\n", 1)[1].split(
-                "Skipped optional:\n", 1,
-            )[0]
-            self.assertIn("areas/client.md", mixed_loaded)
-            self.assertNotIn("areas/server.md", mixed_loaded)
-
-            explicit_code, explicit_output, _error = capture([
-                "read", "--task", "implementation", "--area", "client",
-                "--area", "server", "--names-only", "--project-root", tmp,
-            ])
-            self.assertEqual(explicit_code, 1)
-            self.assertIn("Routing completeness: AMBIGUOUS", explicit_output)
-
-            strict_code, strict_output, strict_error = capture([
-                "read", "--task", "implementation", "--path", "client/app.py",
-                "--path", "server/app.py",
-                "--strict-routing", "--names-only", "--project-root", tmp,
-            ])
-            self.assertEqual(strict_code, 2)
-            self.assertIn("Context pack not approved for substantial work", strict_output)
-            self.assertIn("completeness=AMBIGUOUS", strict_error)
+            self.assertEqual(code, 2)
+            self.assertIn("Routing completeness: INVALID", output)
+            self.assertIn("unknown optional module key 'exclusive-group'", output + error)
 
     def test_invalid_routing_uses_structured_result_and_stderr(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1120,30 +1304,6 @@ class RoutingAndQualityReleaseTests(unittest.TestCase):
             self.assertIn("Routing completeness: INVALID", output)
             self.assertIn("Disposition: invalid", output)
             self.assertIn("MC-ROUTE-INVALID", output)
-            self.assertIn("Error:", error)
-
-    def test_exclusive_group_requires_path_activated_area(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            with redirect_stdout(StringIO()):
-                self.assertEqual(main(["init", "--project-root", tmp]), 0)
-            manifest = Path(tmp) / "docs/memory/manifest.md"
-            manifest.write_text(
-                manifest.read_text(encoding="utf-8").replace(
-                    "### Enabled areas\n- None enabled.",
-                    "### Enabled areas\n"
-                    "- `areas/backend.md`\n"
-                    "  - activation: explicit-only\n"
-                    "  - exclusive-group: runtime",
-                ),
-                encoding="utf-8",
-            )
-            code, output, error = capture([
-                "read", "--task", "implementation", "--names-only",
-                "--project-root", tmp,
-            ])
-            self.assertEqual(code, 2)
-            self.assertIn("Routing completeness: INVALID", output)
-            self.assertIn("exclusive-group requires path activation", output)
             self.assertIn("Error:", error)
 
     def test_reachability_and_freshness_cover_hard_and_historical_entries(self):

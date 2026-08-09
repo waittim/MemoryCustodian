@@ -27,7 +27,6 @@ from .protocol import (
     manifest_contract_metadata,
     manifest_with_optional_index,
     manifest_with_protocol_07_optional_routes,
-    optional_index_paths,
     protocol_metadata,
     strict_protocol_metadata,
     valid_project_id,
@@ -35,6 +34,7 @@ from .protocol import (
     resolve_project_root,
     today,
 )
+from .routes import parse_optional_module_index
 from .templates import render_template
 
 
@@ -119,13 +119,23 @@ def _migration_sources(memory_dir: Path, manifest: str) -> dict[str, str]:
 
     relatives = {"decisions.md"}
     relatives.update(
-        path
-        for path in optional_index_paths(manifest)
-        if path.startswith("areas/") and path.endswith(".md")
+        declaration.module_id
+        for declaration in parse_optional_module_index(
+            manifest,
+            legacy_compatible=True,
+        )
+        if declaration.module_type == "areas"
     )
     sources: dict[str, str] = {}
+    resolved_memory = memory_dir.resolve()
     for relative in sorted(relatives):
         path = memory_dir.joinpath(*Path(relative).parts)
+        try:
+            path.resolve().relative_to(resolved_memory)
+        except ValueError as exc:
+            raise ValueError(
+                f"Migration operand escapes the managed memory directory: {relative}"
+            ) from exc
         if path.exists():
             sources[relative] = path.read_text(encoding="utf-8")
     return sources
@@ -237,8 +247,7 @@ def _build_plan(project_root: Path, memory_dir: Path) -> tuple[MutationPlan, lis
             manual_reports.append(f"{manual} ambiguous decisions.md H2 section(s)")
 
     for relative in sorted(
-        path for path in optional_index_paths(original)
-        if path.startswith("areas/") and path.endswith(".md")
+        path for path in sources if path.startswith("areas/")
     ):
         area_path = memory_dir.joinpath(*Path(relative).parts)
         if relative not in sources:

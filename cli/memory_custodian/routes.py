@@ -69,7 +69,6 @@ class RouteReason(str, Enum):
     NO_PATH_MATCH = "MC-SKIP-NO-PATH-MATCH"
     NOT_REQUESTED = "MC-SKIP-NOT-REQUESTED"
     SCOPE_MISSING = "MC-SKIP-SCOPE-MISSING"
-    EXCLUSIVE_SELECTION = "MC-SKIP-EXCLUSIVE-SELECTION"
     MISSING_REQUIRED = "MC-MISSING-REQUIRED"
     OPTIONAL_ABSENT = "MC-MISSING-OPTIONAL"
     BUDGET_OMISSION = "MC-OMIT-BUDGET"
@@ -93,7 +92,6 @@ class ModuleDeclaration:
     tasks: tuple[str, ...] = ()
     paths: tuple[str, ...] = ()
     description: str = ""
-    exclusive_group: str = ""
 
     @property
     def slug(self) -> str:
@@ -201,7 +199,7 @@ def merge_routed_modules(modules: list[RoutedModule]) -> list[RoutedModule]:
 _MODULE_LINE_RE = re.compile(r"^- `([^`]+)`(?:\s*:\s*(.*))?$")
 _META_LINE_RE = re.compile(r"^  - ([a-z-]+):\s*(.*)$")
 _CODE_SPAN_RE = re.compile(r"`([^`]+)`")
-_ALLOWED_KEYS = {"activation", "tasks", "paths", "description", "exclusive-group"}
+_ALLOWED_KEYS = {"activation", "tasks", "paths", "description"}
 _ACTIVATIONS = {"task", "explicit-only", "task-or-explicit", "path", "path-or-explicit"}
 _SECTION_TYPES = {
     "enabled rules": "rules",
@@ -285,7 +283,7 @@ def normalize_input_path(project_root: Path, value: str) -> NormalizedPath:
 
 def _metadata_values(
     raw: dict[str, str], module_id: str,
-) -> tuple[str, tuple[str, ...], tuple[str, ...], str, str]:
+) -> tuple[str, tuple[str, ...], tuple[str, ...], str]:
     activation = raw.get("activation", "")
     if activation not in _ACTIVATIONS:
         raise ValueError(f"{module_id}: invalid activation {activation!r}")
@@ -304,10 +302,7 @@ def _metadata_values(
             raise ValueError(f"{module_id}: paths must be comma-separated Markdown code spans")
         paths = tuple(dict.fromkeys(validate_glob(item) for item in spans))
     description = raw.get("description", "")
-    exclusive_group = raw.get("exclusive-group", "")
-    if exclusive_group and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", exclusive_group):
-        raise ValueError(f"{module_id}: invalid exclusive-group {exclusive_group!r}")
-    return activation, tasks, paths, description, exclusive_group
+    return activation, tasks, paths, description
 
 
 def _validate_declaration(declaration: ModuleDeclaration) -> None:
@@ -320,15 +315,11 @@ def _validate_declaration(declaration: ModuleDeclaration) -> None:
             raise ValueError(f"{declaration.module_id}: task activation requires tasks metadata")
         if declaration.paths:
             raise ValueError(f"{declaration.module_id}: rules forbid paths metadata")
-        if declaration.exclusive_group:
-            raise ValueError(f"{declaration.module_id}: rules forbid exclusive-group metadata")
     elif kind == "profiles":
         if activation != "explicit-only":
             raise ValueError(f"{declaration.module_id}: profiles must use explicit-only activation")
         if declaration.tasks or declaration.paths:
             raise ValueError(f"{declaration.module_id}: profiles forbid tasks and paths metadata")
-        if declaration.exclusive_group:
-            raise ValueError(f"{declaration.module_id}: profiles forbid exclusive-group metadata")
     elif kind == "areas":
         if activation not in {"path", "path-or-explicit", "explicit-only"}:
             raise ValueError(f"{declaration.module_id}: areas do not support {activation!r}")
@@ -336,10 +327,6 @@ def _validate_declaration(declaration: ModuleDeclaration) -> None:
             raise ValueError(f"{declaration.module_id}: path activation requires paths metadata")
         if declaration.tasks:
             raise ValueError(f"{declaration.module_id}: areas forbid tasks metadata")
-        if declaration.exclusive_group and "path" not in activation:
-            raise ValueError(
-                f"{declaration.module_id}: exclusive-group requires path activation"
-            )
 
 
 def parse_optional_module_index(manifest: str, *, legacy_compatible: bool = False) -> tuple[ModuleDeclaration, ...]:
@@ -374,6 +361,9 @@ def parse_optional_module_index(manifest: str, *, legacy_compatible: bool = Fals
     current_path: str | None = None
     current_meta: dict[str, str] = {}
     legacy_description = ""
+    seen_subsections: set[str] = set()
+    none_subsections: set[str] = set()
+    declared_subsections: set[str] = set()
 
     def flush() -> None:
         nonlocal current_path, current_meta, legacy_description
@@ -390,12 +380,11 @@ def parse_optional_module_index(manifest: str, *, legacy_compatible: bool = Fals
                 module_id, current_type, "explicit-only", description=legacy_description
             )
         else:
-            activation, tasks, paths, description, exclusive_group = _metadata_values(
+            activation, tasks, paths, description = _metadata_values(
                 current_meta, module_id,
             )
             declaration = ModuleDeclaration(
                 module_id, current_type, activation, tasks, paths, description,
-                exclusive_group,
             )
         _validate_declaration(declaration)
         declarations.append(declaration)
@@ -414,18 +403,48 @@ def parse_optional_module_index(manifest: str, *, legacy_compatible: bool = Fals
             current_type = _SECTION_TYPES.get(subsection_titles[index])
             if current_type is None:
                 raise ValueError(f"unknown optional module subsection: {stripped}")
+            if current_type in seen_subsections:
+                raise ValueError(
+                    f"duplicate optional module subsection: {stripped}"
+                )
+            seen_subsections.add(current_type)
             continue
-        if not stripped or stripped == "- None enabled." or current_type is None:
+        if not stripped:
             continue
         module_match = _MODULE_LINE_RE.fullmatch(line)
-        if module_match:
+        meta_match = _META_LINE_RE.fullmatch(line)
+        if current_type is None:
+            if (
+                module_match
+                or meta_match
+                or stripped == "- None enabled."
+                or stripped.startswith("- ")
+                or line.startswith("  - ")
+            ):
+                raise ValueError(
+                    f"optional module declaration appears outside a canonical subsection: {line!r}"
+                )
+            continue
+        if stripped == "- None enabled.":
             flush()
+            if current_type in none_subsections or current_type in declared_subsections:
+                raise ValueError(
+                    f"contradictory optional module sentinel in {current_type} subsection"
+                )
+            none_subsections.add(current_type)
+            continue
+        if module_match:
+            if current_type in none_subsections:
+                raise ValueError(
+                    f"contradictory optional module sentinel in {current_type} subsection"
+                )
+            flush()
+            declared_subsections.add(current_type)
             current_path = module_match.group(1)
             legacy_description = (module_match.group(2) or "").strip()
             if legacy_description and not legacy_compatible:
                 raise ValueError(f"{current_path}: Protocol 0.7 module line may not contain inline metadata")
             continue
-        meta_match = _META_LINE_RE.fullmatch(line)
         if meta_match and current_path is not None:
             key, value = meta_match.groups()
             if key not in _ALLOWED_KEYS:
@@ -450,6 +469,4 @@ def render_optional_declaration(declaration: ModuleDeclaration) -> str:
         lines.append("  - paths: " + ", ".join(f"`{item}`" for item in declaration.paths))
     if declaration.description:
         lines.append(f"  - description: {declaration.description}")
-    if declaration.exclusive_group:
-        lines.append(f"  - exclusive-group: {declaration.exclusive_group}")
     return "\n".join(lines)

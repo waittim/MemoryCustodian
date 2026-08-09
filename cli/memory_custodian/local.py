@@ -19,9 +19,7 @@ from .local_overlay import (
     validated_project_identity,
 )
 from .locking import (
-    ensure_private_directory,
     project_mutation_guard,
-    validate_private_file,
 )
 from .protocol import resolve_memory_dir, resolve_project_root
 
@@ -34,23 +32,34 @@ def _reset_inventory(
     dependencies: list[str] = []
     blockers: list[str] = []
     try:
-        ensure_private_directory(directory)
+        root_metadata = directory.lstat()
+        if stat.S_ISLNK(root_metadata.st_mode) or not stat.S_ISDIR(root_metadata.st_mode):
+            raise OSError("local overlay root is not a real directory")
+        if hasattr(os, "getuid") and root_metadata.st_uid != os.getuid():
+            raise OSError("local overlay root is not owned by the current user")
     except OSError as exc:
         return ["local:unsafe-root"], [f"Unsafe local overlay root requires review: {exc}"]
     paths: list[Path] = []
-    for root, directories, files in os.walk(directory, followlinks=False):
+    walk_errors: list[OSError] = []
+    for root, directories, files in os.walk(
+        directory,
+        followlinks=False,
+        onerror=walk_errors.append,
+    ):
         root_path = Path(root)
         paths.extend(root_path / name for name in directories)
         paths.extend(root_path / name for name in files)
     binding_path = directory.parent / "bindings.json"
     if binding_path.exists() or binding_path.is_symlink():
         paths.append(binding_path)
+    for error in walk_errors:
+        location = error.filename or "unknown"
+        dependencies.append(f"walk-error:{location}:{error.errno}")
+        blockers.append(f"Cannot traverse local overlay state: {location}: {error}")
     for path in sorted(set(paths)):
         relative = path.relative_to(directory.parent).as_posix()
         try:
             metadata = path.lstat()
-            if stat.S_ISDIR(metadata.st_mode):
-                continue
             if stat.S_ISLNK(metadata.st_mode):
                 target = os.readlink(path)
                 dependencies.append(
@@ -58,8 +67,35 @@ def _reset_inventory(
                 )
                 blockers.append(f"Unsafe local overlay symlink requires review: {relative}")
                 continue
-            validate_private_file(path)
-            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            if stat.S_ISDIR(metadata.st_mode):
+                mode = stat.S_IMODE(metadata.st_mode)
+                dependencies.append(f"{relative}:directory:{mode:o}")
+                if hasattr(os, "getuid") and metadata.st_uid != os.getuid():
+                    blockers.append(
+                        f"Unsafe local overlay directory owner requires review: {relative}"
+                    )
+                if mode & 0o700 != 0o700:
+                    blockers.append(
+                        f"Unreadable local overlay directory requires review: {relative}"
+                    )
+                continue
+            flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+            descriptor = os.open(path, flags)
+            try:
+                opened = os.fstat(descriptor)
+                if not stat.S_ISREG(opened.st_mode):
+                    raise OSError("private state node is not a regular file")
+                if hasattr(os, "getuid") and opened.st_uid != os.getuid():
+                    raise OSError("private state file is not owned by the current user")
+                digestor = hashlib.sha256()
+                while True:
+                    chunk = os.read(descriptor, 64 * 1024)
+                    if not chunk:
+                        break
+                    digestor.update(chunk)
+                digest = digestor.hexdigest()
+            finally:
+                os.close(descriptor)
             dependencies.append(f"{relative}:file:{digest}")
         except (OSError, ValueError) as exc:
             dependencies.append(f"{relative}:unreadable")
