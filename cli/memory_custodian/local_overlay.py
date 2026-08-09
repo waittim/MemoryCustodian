@@ -118,7 +118,18 @@ def _read_bindings(project_id: str) -> tuple[str, ...]:
     if not path.exists() and not path.is_symlink():
         return ()
     try:
-        payload = json.loads(read_local_private_file(path))
+        def unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+            payload: dict[str, object] = {}
+            for key, value in pairs:
+                if key in payload:
+                    raise ValueError(f"duplicate JSON key: {key}")
+                payload[key] = value
+            return payload
+
+        payload = json.loads(
+            read_local_private_file(path),
+            object_pairs_hook=unique_object,
+        )
         if not isinstance(payload, dict) or payload.get("project_id") != project_id:
             raise ValueError
         roots = payload["roots"]
@@ -130,6 +141,8 @@ def _read_bindings(project_id: str) -> tuple[str, ...]:
 
 
 def link_root(project_root: Path, project_id: str) -> tuple[str, ...]:
+    directory = overlay_directory(project_id)
+    _parse_manifest(directory / "manifest.md", project_id)
     roots = set(_read_bindings(project_id))
     roots.add(_normalized_root(project_root))
     ordered = tuple(sorted(roots))
@@ -137,7 +150,7 @@ def link_root(project_root: Path, project_id: str) -> tuple[str, ...]:
         _binding_path(project_id),
         json.dumps({"project_id": project_id, "roots": list(ordered)}, sort_keys=True, indent=2) + "\n",
     )
-    return ordered
+    return _read_bindings(project_id)
 
 
 def _manifest_text(project_id: str) -> str:
@@ -152,7 +165,14 @@ def _manifest_text(project_id: str) -> str:
 
 
 def enable_overlay(project_id: str) -> Path:
-    directory = ensure_private_directory(_project_state(project_id) / "local")
+    project_state = _project_state(project_id)
+    _read_bindings(project_id)
+    directory = project_state / "local"
+    if directory.exists() or directory.is_symlink():
+        _validate_local_directory(directory)
+        _parse_manifest(directory / "manifest.md", project_id)
+        return directory
+    directory = ensure_private_directory(directory)
     ensure_private_directory(directory / "profiles")
     manifest = directory / "manifest.md"
     preferences = directory / "preferences.md"
@@ -160,6 +180,7 @@ def enable_overlay(project_id: str) -> Path:
         write_private_file(manifest, _manifest_text(project_id))
     if not preferences.exists():
         write_private_file(preferences, "# Local Preferences\n\nEntries are newest first.\n")
+    _parse_manifest(manifest, project_id)
     return directory
 
 
@@ -179,13 +200,15 @@ def _parse_manifest(path: Path, expected_project_id: str) -> tuple[Path, ...]:
     module_lines: list[str] = []
     for line in text.splitlines():
         stripped = line.strip()
-        if not stripped or stripped in allowed_lines:
+        if not stripped:
             continue
-        if re.fullmatch(r"- (?:local_overlay_schema_version|project_id):\s*\S+", stripped):
+        if line in allowed_lines:
+            continue
+        if re.fullmatch(r"- (?:local_overlay_schema_version|project_id):\s*\S+\s*", line):
             continue
         module = re.fullmatch(
             r"- ((?:preferences\.md)|(?:profiles/[A-Za-z0-9][A-Za-z0-9._-]*\.md))",
-            stripped,
+            line,
         )
         if module:
             module_lines.append(module.group(1))
@@ -193,9 +216,12 @@ def _parse_manifest(path: Path, expected_project_id: str) -> tuple[Path, ...]:
         raise ValueError(f"Local overlay manifest contains an invalid declaration: {line!r}")
     if len(module_lines) != len(set(module_lines)):
         raise ValueError("Local overlay manifest contains a duplicate module declaration.")
+    if "preferences.md" not in module_lines:
+        raise ValueError("Local overlay manifest must declare preferences.md exactly once.")
     profiles = path.parent / "profiles"
-    if profiles.exists() or profiles.is_symlink():
-        _validate_local_directory(profiles)
+    if not profiles.exists() and not profiles.is_symlink():
+        raise ValueError("Local overlay is missing its required profiles directory.")
+    _validate_local_directory(profiles)
     modules: list[Path] = []
     for raw in module_lines:
         candidate = path.parent / raw
@@ -203,9 +229,10 @@ def _parse_manifest(path: Path, expected_project_id: str) -> tuple[Path, ...]:
             candidate.resolve().relative_to(path.parent.resolve())
         except (OSError, RuntimeError, ValueError) as exc:
             raise ValueError("Local overlay module path escapes its project state directory.") from exc
-        if candidate.exists() or candidate.is_symlink():
-            read_local_private_file(candidate)
-            modules.append(candidate)
+        if not candidate.exists() and not candidate.is_symlink():
+            raise ValueError(f"Local overlay is missing declared module: {raw}")
+        read_local_private_file(candidate)
+        modules.append(candidate)
     return tuple(modules)
 
 
@@ -273,7 +300,10 @@ def validated_project_identity(memory_dir: Path) -> str:
 
 def add_local_preference(project_root: Path, project_id: str, message: str, evidence: tuple[str, ...]) -> str:
     overlay = inspect_overlay(project_root, project_id)
-    if overlay.status not in {LocalStatus.BOUND, LocalStatus.REVIEW} or overlay.directory is None:
+    if overlay.status == LocalStatus.REVIEW:
+        detail = "; ".join(overlay.warnings) or "manual review is required"
+        raise ValueError(f"Local overlay requires review before writes: {detail}")
+    if overlay.status != LocalStatus.BOUND or overlay.directory is None:
         raise ValueError("Local overlay must be enabled and explicitly linked before adding content.")
     path = overlay.directory / "preferences.md"
     if path not in overlay.modules:

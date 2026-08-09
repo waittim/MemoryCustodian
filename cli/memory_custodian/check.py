@@ -359,7 +359,7 @@ def run(args) -> int:
     local_paths: set[Path] = set()
     if overlay is not None and overlay.status == LocalStatus.REVIEW:
         warnings.extend(f"local overlay: {warning}" for warning in overlay.warnings)
-    if overlay is not None and overlay.status in {LocalStatus.BOUND, LocalStatus.REVIEW}:
+    if overlay is not None and overlay.status == LocalStatus.BOUND:
         for path in overlay.modules:
             if overlay.directory is None:
                 break

@@ -125,7 +125,7 @@ def run(args) -> int:
     )
     local_contents: list[tuple[str, str]] = []
     local_scope_warnings: list[str] = []
-    if overlay.status in {LocalStatus.BOUND, LocalStatus.REVIEW}:
+    if overlay.status == LocalStatus.BOUND:
         for path in overlay.modules:
             if overlay.directory is None:
                 break

@@ -94,7 +94,10 @@ def build_index(
                 records.append(IndexedEntry(match.group(1), status.group(1) if status else "", "project", "reconciliations.md", section.strip()))
     if include_local:
         overlay = inspect_overlay(project_root, validated_project_identity(memory_dir))
-        if overlay.status not in {LocalStatus.BOUND, LocalStatus.REVIEW}:
+        if overlay.status == LocalStatus.REVIEW:
+            detail = "; ".join(overlay.warnings) or "manual review is required"
+            raise ValueError(f"Local overlay requires review before explicit indexing: {detail}")
+        if overlay.status != LocalStatus.BOUND:
             raise ValueError("Local overlay is not bound to this project root.")
         if overlay.directory is None:
             raise ValueError("Local overlay review state has no safe directory.")

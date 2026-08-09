@@ -375,6 +375,131 @@ class RoutingAndQualityReleaseTests(unittest.TestCase):
                 self.assertEqual(code, 0, error)
                 self.assertNotIn("Mismatched binding marker.", output)
 
+    def test_multi_root_review_blocks_writes_and_explicit_indexing(self):
+        with tempfile.TemporaryDirectory() as first, tempfile.TemporaryDirectory() as second, tempfile.TemporaryDirectory() as state:
+            with patch.dict(os.environ, {"XDG_STATE_HOME": state}):
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["init", "--project-root", first]), 0)
+                    self.assertEqual(main(["local", "enable", "--project-root", first]), 0)
+                    self.assertEqual(main(["local", "link", "--project-root", first]), 0)
+                code, added, error = capture([
+                    "local", "add", "Original multi-root marker.",
+                    "--type", "preference", "--evidence", "user-confirmed",
+                    "--project-root", first,
+                ])
+                self.assertEqual(code, 0, error)
+                entry_id = re.search(r"MC-PREF-\d{8}-[0-9a-f]{8}", added).group(0)
+                shutil.copytree(Path(first) / "docs", Path(second) / "docs")
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["local", "link", "--project-root", second]), 0)
+
+                code, status, error = capture(["local", "status", "--project-root", first])
+                self.assertEqual(code, 0, error)
+                self.assertIn("Local overlay status: REVIEW", status)
+                code, output, error = capture([
+                    "read", "--task", "preferences", "--project-root", first,
+                ])
+                self.assertEqual(code, 0, error)
+                self.assertIn("Local overlay status: REVIEW", output)
+                self.assertNotIn("Original multi-root marker.", output)
+                code, output, error = capture([
+                    "local", "add", "Forbidden multi-root write.",
+                    "--type", "preference", "--evidence", "user-confirmed",
+                    "--project-root", first,
+                ])
+                self.assertEqual(code, 2, output + error)
+                self.assertIn("requires review before writes", error)
+                for command in (("list", "--local"), ("show", entry_id, "--local")):
+                    code, output, error = capture([*command, "--project-root", second])
+                    self.assertEqual(code, 2, output + error)
+                    self.assertIn("requires review", error)
+                    self.assertNotIn("Original multi-root marker.", output)
+
+    def test_missing_local_scaffold_and_indented_metadata_are_corrupt(self):
+        mutations = (
+            lambda directory, project_id: (directory / "preferences.md").unlink(),
+            lambda directory, project_id: (directory / "profiles").rmdir(),
+            lambda directory, project_id: (directory / "manifest.md").write_text(
+                (directory / "manifest.md").read_text(encoding="utf-8").replace(
+                    "- preferences.md\n", "", 1,
+                ),
+                encoding="utf-8",
+            ),
+            lambda directory, project_id: (directory / "manifest.md").write_text(
+                (directory / "manifest.md").read_text(encoding="utf-8").replace(
+                    f"- project_id: {project_id}",
+                    f"- project_id: {project_id}\n  - project_id: 00000000-0000-4000-8000-000000000000",
+                    1,
+                ),
+                encoding="utf-8",
+            ),
+        )
+        for mutate in mutations:
+            with self.subTest(mutate=mutate), tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as state:
+                with patch.dict(os.environ, {"XDG_STATE_HOME": state}):
+                    with redirect_stdout(StringIO()):
+                        self.assertEqual(main(["init", "--project-root", tmp]), 0)
+                        self.assertEqual(main(["local", "enable", "--project-root", tmp]), 0)
+                        self.assertEqual(main(["local", "link", "--project-root", tmp]), 0)
+                    shared = Path(tmp) / "docs/memory/manifest.md"
+                    project_id = re.search(
+                        r"(?m)^- project_id: (\S+)", shared.read_text(encoding="utf-8"),
+                    ).group(1)
+                    directory = Path(state) / "memory-custodian/projects" / project_id / "local"
+                    mutate(directory, project_id)
+                    code, status, error = capture(["local", "status", "--project-root", tmp])
+                    self.assertEqual(code, 0, error)
+                    self.assertIn("Local overlay status: REVIEW", status)
+
+    def test_bindings_reject_duplicate_json_keys(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as state:
+            with patch.dict(os.environ, {"XDG_STATE_HOME": state}):
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["init", "--project-root", tmp]), 0)
+                    self.assertEqual(main(["local", "enable", "--project-root", tmp]), 0)
+                    self.assertEqual(main(["local", "link", "--project-root", tmp]), 0)
+                shared = Path(tmp) / "docs/memory/manifest.md"
+                project_id = re.search(
+                    r"(?m)^- project_id: (\S+)", shared.read_text(encoding="utf-8"),
+                ).group(1)
+                binding = Path(state) / "memory-custodian/projects" / project_id / "bindings.json"
+                binding.write_text(
+                    "{\n"
+                    '  "project_id": "wrong",\n'
+                    f'  "project_id": "{project_id}",\n'
+                    f'  "roots": [{json.dumps(str(Path(tmp).resolve()))}]\n'
+                    "}\n",
+                    encoding="utf-8",
+                )
+                code, status, error = capture(["local", "status", "--project-root", tmp])
+                self.assertEqual(code, 0, error)
+                self.assertIn("Local overlay status: REVIEW", status)
+                self.assertIn("corrupt", status)
+
+    def test_enable_and_link_reject_existing_corrupt_overlay(self):
+        with tempfile.TemporaryDirectory() as first, tempfile.TemporaryDirectory() as second, tempfile.TemporaryDirectory() as state:
+            with patch.dict(os.environ, {"XDG_STATE_HOME": state}):
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["init", "--project-root", first]), 0)
+                    self.assertEqual(main(["local", "enable", "--project-root", first]), 0)
+                    self.assertEqual(main(["local", "link", "--project-root", first]), 0)
+                shutil.copytree(Path(first) / "docs", Path(second) / "docs")
+                shared = Path(first) / "docs/memory/manifest.md"
+                project_id = re.search(
+                    r"(?m)^- project_id: (\S+)", shared.read_text(encoding="utf-8"),
+                ).group(1)
+                project_state = Path(state) / "memory-custodian/projects" / project_id
+                local_manifest = project_state / "local/manifest.md"
+                local_manifest.write_text("# corrupt\n", encoding="utf-8")
+                binding = project_state / "bindings.json"
+                before = binding.read_bytes()
+                for command, root in ((('local', 'enable'), first), (('local', 'link'), second)):
+                    code, output, error = capture([*command, "--project-root", root])
+                    self.assertEqual(code, 2, output + error)
+                    self.assertNotIn("enabled", output.casefold())
+                    self.assertNotIn("linked", output.casefold())
+                self.assertEqual(binding.read_bytes(), before)
+
     @unittest.skipIf(os.name == "nt", "POSIX symlink semantics")
     def test_invalid_overlay_state_never_scans_relative_sentinel(self):
         with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as state, tempfile.TemporaryDirectory() as external, tempfile.TemporaryDirectory() as cwd:
