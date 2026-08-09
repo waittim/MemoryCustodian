@@ -476,6 +476,115 @@ def structured_entry_storage_issues(
     return issues
 
 
+def structured_relation_issues(entries: list[StructuredEntry]) -> list[str]:
+    """Validate reciprocal lifecycle relations and preserved structural identity."""
+
+    by_id: dict[str, list[StructuredEntry]] = {}
+    for entry in entries:
+        by_id.setdefault(entry.entry_id.casefold(), []).append(entry)
+    issues: set[str] = set()
+
+    def unique(entry_id: str) -> StructuredEntry | None:
+        matches = by_id.get(entry_id.casefold(), [])
+        return matches[0] if len(matches) == 1 else None
+
+    def identity(entry: StructuredEntry) -> tuple[str, str, str]:
+        return (
+            entry.scope.casefold(),
+            entry.fields.get("Subject", "").casefold(),
+            entry.fields.get("Facet", "").casefold(),
+        )
+
+    for entry in entries:
+        for relation in (
+            "Supersedes",
+            "Superseded-By",
+            "Promoted-From",
+            "Promoted-To",
+            "Exception-To",
+        ):
+            target_id = entry.fields.get(relation, "")
+            if target_id and target_id.casefold() not in by_id:
+                issues.add(
+                    f"{entry.entry_id} {relation} references missing entry {target_id}"
+                )
+
+        previous_id = entry.fields.get("Supersedes", "")
+        previous = unique(previous_id) if previous_id else None
+        if previous is not None:
+            if entry.status not in {"active", "superseded"} or previous.status != "superseded":
+                issues.add(
+                    f"{entry.entry_id} Supersedes requires a current/historical replacement and superseded source"
+                )
+            if previous.fields.get("Superseded-By", "").casefold() != entry.entry_id.casefold():
+                issues.add(f"{entry.entry_id} Supersedes relation is not reciprocal")
+            if identity(entry) != identity(previous):
+                issues.add(
+                    f"{entry.entry_id} Supersedes must preserve Scope+Subject+Facet identity"
+                )
+
+        replacement_id = entry.fields.get("Superseded-By", "")
+        replacement = unique(replacement_id) if replacement_id else None
+        if replacement is not None:
+            if entry.status != "superseded" or replacement.status not in {"active", "superseded"}:
+                issues.add(
+                    f"{entry.entry_id} Superseded-By requires a superseded source and current/historical replacement"
+                )
+            if replacement.fields.get("Supersedes", "").casefold() != entry.entry_id.casefold():
+                issues.add(f"{entry.entry_id} Superseded-By relation is not reciprocal")
+            if identity(entry) != identity(replacement):
+                issues.add(
+                    f"{entry.entry_id} Superseded-By must preserve Scope+Subject+Facet identity"
+                )
+
+        source_id = entry.fields.get("Promoted-From", "")
+        source = unique(source_id) if source_id else None
+        if source is not None:
+            expected_codes = {
+                "decision": "DEC",
+                "constraint": "CON",
+                "preference": "PREF",
+                "tombstone": "DNU",
+                "do-not-use": "DNU",
+            }
+            target_code = entry.entry_id.split("-", 2)[1].upper()
+            candidate_type = source.fields.get("Candidate-Type", "").casefold()
+            if entry.status != "active" or source.status != "promoted":
+                issues.add(
+                    f"{entry.entry_id} Promoted-From requires an active target and promoted candidate"
+                )
+            if source.fields.get("Promoted-To", "").casefold() != entry.entry_id.casefold():
+                issues.add(f"{entry.entry_id} Promoted-From relation is not reciprocal")
+            if expected_codes.get(candidate_type) != target_code:
+                issues.add(
+                    f"{entry.entry_id} type does not match source Candidate-Type {candidate_type!r}"
+                )
+            if entry.scope.casefold() != source.scope.casefold():
+                issues.add(f"{entry.entry_id} promotion must preserve Scope")
+            provisional = (
+                source.fields.get("Provisional-Subject", "").casefold(),
+                source.fields.get("Provisional-Facet", "").casefold(),
+            )
+            target_identity = (
+                entry.fields.get("Subject", "").casefold(),
+                entry.fields.get("Facet", "").casefold(),
+            )
+            if provisional != ("", "") and provisional != target_identity:
+                issues.add(f"{entry.entry_id} promotion must preserve provisional Subject+Facet")
+
+        target_id = entry.fields.get("Promoted-To", "")
+        target = unique(target_id) if target_id else None
+        if target is not None:
+            if entry.status != "promoted" or target.status != "active":
+                issues.add(
+                    f"{entry.entry_id} Promoted-To requires a promoted candidate and active target"
+                )
+            if target.fields.get("Promoted-From", "").casefold() != entry.entry_id.casefold():
+                issues.add(f"{entry.entry_id} Promoted-To relation is not reciprocal")
+
+    return sorted(issues)
+
+
 def supersede_entry(text: str, old_id: str, new_id: str) -> str:
     preamble, sections = split_h2(text)
     changed = False

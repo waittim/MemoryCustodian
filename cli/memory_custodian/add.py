@@ -181,7 +181,24 @@ def _validate_subject_and_conflict(
         )
     if bool(subject_id) != bool(facet):
         raise ValueError("--subject and --facet must be supplied together.")
+    old = None
+    if args.supersedes:
+        old = _find_entry(memory_dir, args.supersedes)
+        if old.status != "active":
+            replacement = old.fields.get("Superseded-By")
+            raise ValueError(
+                f"Entry {old.entry_id} is already {old.status}"
+                + (f" and was replaced by {replacement}" if replacement else "")
+            )
+        if old.scope.casefold() != scope.casefold():
+            raise ValueError("--supersedes must retain the old entry's Scope.")
     if not subject_id:
+        if old is not None and (
+            old.fields.get("Subject", "") or old.fields.get("Facet", "")
+        ):
+            raise ValueError(
+                "--supersedes must retain the old entry's Subject and Facet identity."
+            )
         return None, None
     if not SUBJECT_ID_RE.fullmatch(subject_id):
         raise ValueError(f"Invalid Subject ID: {subject_id}")
@@ -216,18 +233,12 @@ def _validate_subject_and_conflict(
             "Use --supersedes, adjust Scope, or review the Subject."
         )
     if args.supersedes:
-        old = _find_entry(memory_dir, args.supersedes)
+        assert old is not None
         old_subject = old.fields.get("Subject")
         old_facet = old.fields.get("Facet")
-        if old.status != "active":
-            replacement = old.fields.get("Superseded-By")
-            raise ValueError(
-                f"Entry {old.entry_id} is already {old.status}"
-                + (f" and was replaced by {replacement}" if replacement else "")
-            )
-        if old_subject and old_subject.casefold() != subject.subject_id.casefold():
+        if (old_subject or "").casefold() != subject.subject_id.casefold():
             raise ValueError("--supersedes must retain the old entry's Subject identity.")
-        if old_facet and old_facet.casefold() != normalized_facet:
+        if (old_facet or "").casefold() != normalized_facet:
             raise ValueError("--supersedes must retain the old entry's Facet.")
     return subject.subject_id, normalized_facet
 

@@ -7,6 +7,7 @@ from pathlib import Path
 import subprocess
 
 from .conflicts import analyze_conflicts, canonical_entries
+from .entries import structured_relation_issues
 from .protocol import (
     manifest_contract_metadata,
     parse_manifest_task_file_specs,
@@ -138,10 +139,7 @@ def freshness_findings(project_root: Path, memory_dir: Path) -> tuple[QualityFin
     head = _head_revision(project_root)
     saw_revision = False
     entries = canonical_entries(memory_dir)
-    by_id = {
-        entry.entry_id.casefold(): entry
-        for entry in canonical_entries(memory_dir, include_archive=True)
-    }
+    all_entries = canonical_entries(memory_dir, include_archive=True)
     for entry in entries:
         if entry.status in {"active", "candidate"}:
             for evidence in entry.evidence:
@@ -161,13 +159,10 @@ def freshness_findings(project_root: Path, memory_dir: Path) -> tuple[QualityFin
                             "WARNING", "MC-FRESH-002",
                             f"{entry.entry_id} Evidence revision differs from current Git HEAD.",
                         ))
-        for relation in ("Supersedes", "Superseded-By", "Promoted-From", "Promoted-To", "Exception-To"):
-            target = entry.fields.get(relation)
-            if target and target.casefold() not in by_id:
-                findings.append(QualityFinding(
-                    "ERROR", "MC-FRESH-004",
-                    f"{entry.entry_id} {relation} references missing entry {target}.",
-                ))
+    findings.extend(
+        QualityFinding("ERROR", "MC-FRESH-004", issue + ".")
+        for issue in structured_relation_issues(all_entries)
+    )
     from .subjects import load_subjects
     subjects = {item.subject_id.casefold(): item for item in load_subjects(memory_dir)}
     for subject in subjects.values():

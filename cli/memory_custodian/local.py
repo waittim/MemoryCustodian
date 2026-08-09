@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 import stat
 
-from .entries import validate_evidence
+from .entries import memory_entry_ids, validate_evidence
 from .erasure import ErasureScope, render_scope
 from .local_overlay import (
     LocalStatus,
@@ -123,12 +123,13 @@ def run(args) -> int:
     if not manifest.exists():
         raise ValueError("manifest.md is missing; the MemoryCustodian setup is incomplete or corrupted")
     project_id = validated_project_identity(memory_dir)
+    shared_ids = memory_entry_ids(memory_dir)
     command = args.local_command
     if command == "status":
-        render_overlay_status(inspect_overlay(project_root, project_id))
+        render_overlay_status(inspect_overlay(project_root, project_id, shared_ids=shared_ids))
         return 0
     if command == "reset":
-        overlay = inspect_overlay(project_root, project_id)
+        overlay = inspect_overlay(project_root, project_id, shared_ids=shared_ids)
         render_overlay_status(overlay)
         if overlay.status == LocalStatus.DISABLED:
             print("No local overlay state exists for this project; nothing to reset.")
@@ -183,14 +184,14 @@ def run(args) -> int:
         break_stale=args.break_stale_lock,
     ):
         if command == "enable":
-            directory = enable_overlay(project_root, project_id)
+            directory = enable_overlay(project_root, project_id, shared_ids=shared_ids)
             print(f"Local overlay enabled for project_id {project_id}.")
             print(f"State directory: {directory}")
             print("Run `memory-custodian local link` before local content can load.")
             return 0
         if command == "link":
-            enable_overlay(project_root, project_id)
-            roots = link_root(project_root, project_id)
+            enable_overlay(project_root, project_id, shared_ids=shared_ids)
+            roots = link_root(project_root, project_id, shared_ids=shared_ids)
             print("Local overlay linked to this normalized project root.")
             if len(roots) > 1:
                 print("Local overlay status: REVIEW")
@@ -200,7 +201,13 @@ def run(args) -> int:
             if args.type != "preference":
                 raise ValueError("Protocol 0.7 local add currently supports --type preference only.")
             evidence = validate_evidence(args.evidence, project_root)
-            entry_id = add_local_preference(project_root, project_id, args.message, evidence)
+            entry_id = add_local_preference(
+                project_root,
+                project_id,
+                args.message,
+                evidence,
+                shared_ids=shared_ids,
+            )
             print(f"Added local preference {entry_id}.")
             return 0
     raise ValueError(f"Unknown local command: {command}")

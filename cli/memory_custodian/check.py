@@ -30,9 +30,11 @@ from .entries import (
     INTERNAL_EVIDENCE,
     VALID_SCOPES_RE,
     heading_entry_ids,
+    memory_entry_ids,
     parse_structured_entries,
     structured_entry_schema_issues,
     structured_entry_storage_issues,
+    structured_relation_issues,
     validate_evidence,
 )
 from .scanning import scan_text
@@ -352,7 +354,11 @@ def run(args) -> int:
     except (OSError, ValueError):
         overlay_project_id = None
     overlay = (
-        inspect_overlay(project_root, overlay_project_id)
+        inspect_overlay(
+            project_root,
+            overlay_project_id,
+            shared_ids=memory_entry_ids(memory_dir),
+        )
         if overlay_project_id is not None
         else None
     )
@@ -407,35 +413,11 @@ def run(args) -> int:
         if len(paths) > 1:
             issues.append(f"duplicate Entry ID {value.upper()} in: {', '.join(paths)}")
 
-    for entries in structured_by_id.values():
-        if len(entries) != 1:
-            continue
-        entry = entries[0]
-        relative = entry.path.relative_to(memory_dir).as_posix()
-        relations = (
-            ("Promoted-To", entry.fields.get("Promoted-To")),
-            ("Superseded-By", entry.fields.get("Superseded-By")),
-            ("Supersedes", entry.fields.get("Supersedes")),
-        )
-        for label, target_id in relations:
-            if target_id and target_id.casefold() not in structured_by_id:
-                issues.append(
-                    f"{relative}: {entry.entry_id} {label} references missing entry {target_id}"
-                )
-        superseded_by = entry.fields.get("Superseded-By")
-        if superseded_by and len(structured_by_id.get(superseded_by.casefold(), [])) == 1:
-            replacement = structured_by_id[superseded_by.casefold()][0]
-            if replacement.fields.get("Supersedes", "").casefold() != entry.entry_id.casefold():
-                issues.append(
-                    f"{relative}: {entry.entry_id} Superseded-By relation is not reciprocal"
-                )
-        supersedes = entry.fields.get("Supersedes")
-        if supersedes and len(structured_by_id.get(supersedes.casefold(), [])) == 1:
-            previous = structured_by_id[supersedes.casefold()][0]
-            if previous.fields.get("Superseded-By", "").casefold() != entry.entry_id.casefold():
-                issues.append(
-                    f"{relative}: {entry.entry_id} Supersedes relation is not reciprocal"
-                )
+    issues.extend(structured_relation_issues([
+        entry
+        for matches in structured_by_id.values()
+        for entry in matches
+    ]))
 
     security = [item for item in detailed_findings if item.category == "security"]
     privacy = [item for item in detailed_findings if item.category == "privacy"]

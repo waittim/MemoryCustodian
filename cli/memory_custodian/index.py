@@ -13,6 +13,7 @@ from .entries import (
     StructuredEntry,
     structured_entry_schema_issues,
     structured_entry_storage_issues,
+    memory_entry_ids,
     validate_evidence,
 )
 from .local_overlay import (
@@ -93,7 +94,11 @@ def build_index(
                 status = re.search(r"(?m)^Status:\s*(\S+)", section)
                 records.append(IndexedEntry(match.group(1), status.group(1) if status else "", "project", "reconciliations.md", section.strip()))
     if include_local:
-        overlay = inspect_overlay(project_root, validated_project_identity(memory_dir))
+        overlay = inspect_overlay(
+            project_root,
+            validated_project_identity(memory_dir),
+            shared_ids=memory_entry_ids(memory_dir),
+        )
         if overlay.status == LocalStatus.REVIEW:
             detail = "; ".join(overlay.warnings) or "manual review is required"
             raise ValueError(f"Local overlay requires review before explicit indexing: {detail}")

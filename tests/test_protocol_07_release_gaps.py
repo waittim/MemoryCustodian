@@ -656,6 +656,201 @@ class RoutingAndQualityReleaseTests(unittest.TestCase):
                 self.assertIn("Local overlay status: REVIEW", status)
                 self.assertIn("binding file is corrupt", status.casefold())
 
+    def test_local_entries_reject_governance_and_partial_lifecycle(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as state:
+            with patch.dict(os.environ, {"XDG_STATE_HOME": state}):
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["init", "--project-root", tmp]), 0)
+                    self.assertEqual(main(["local", "enable", "--project-root", tmp]), 0)
+                    self.assertEqual(main(["local", "link", "--project-root", tmp]), 0)
+                shared = Path(tmp) / "docs/memory/manifest.md"
+                project_id = re.search(
+                    r"(?m)^- project_id: (\S+)", shared.read_text(encoding="utf-8"),
+                ).group(1)
+                preferences = Path(state) / "memory-custodian/projects" / project_id / "local/preferences.md"
+                entry = render_active_entry(
+                    "preference", "MC-PREF-20260809-11111111", "Forbidden relation",
+                    "Must not load.", None, "local-user", ("user-confirmed",),
+                ).replace(
+                    "Status: active",
+                    "Status: superseded\n"
+                    "Superseded-By: MC-PREF-20260809-22222222\n"
+                    "Exception-To: MC-CON-20260809-33333333",
+                    1,
+                )
+                preferences.write_text(
+                    "# Local Preferences\n\nEntries are newest first.\n\n" + entry + "\n",
+                    encoding="utf-8",
+                )
+                code, status, error = capture(["local", "status", "--project-root", tmp])
+                self.assertEqual(code, 0, error)
+                self.assertIn("Local overlay status: REVIEW", status)
+                self.assertIn("unsupported local Status", status)
+                self.assertIn("forbid governance relations", status)
+                code, output, error = capture([
+                    "read", "--task", "preferences", "--strict-routing",
+                    "--project-root", tmp,
+                ])
+                self.assertEqual(code, 1, output + error)
+                self.assertNotIn("Must not load.", output)
+
+    def test_shared_local_duplicate_id_invalidates_all_local_surfaces(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as state:
+            with patch.dict(os.environ, {"XDG_STATE_HOME": state}):
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["init", "--project-root", tmp]), 0)
+                code, added, error = capture([
+                    "add", "Shared identity.", "--type", "preference",
+                    "--evidence", "user-confirmed", "--project-root", tmp,
+                ])
+                self.assertEqual(code, 0, added + error)
+                entry_id = re.search(r"MC-PREF-\d{8}-[0-9a-f]{8}", added).group(0)
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["local", "enable", "--project-root", tmp]), 0)
+                    self.assertEqual(main(["local", "link", "--project-root", tmp]), 0)
+                shared = Path(tmp) / "docs/memory/manifest.md"
+                project_id = re.search(
+                    r"(?m)^- project_id: (\S+)", shared.read_text(encoding="utf-8"),
+                ).group(1)
+                preferences = Path(state) / "memory-custodian/projects" / project_id / "local/preferences.md"
+                local_entry = render_active_entry(
+                    "preference", entry_id, "Local collision", "Local duplicate body.",
+                    None, "local-user", ("user-confirmed",),
+                )
+                preferences.write_text(
+                    preferences.read_text(encoding="utf-8").rstrip()
+                    + "\n\n" + local_entry + "\n",
+                    encoding="utf-8",
+                )
+                code, status, error = capture(["local", "status", "--project-root", tmp])
+                self.assertEqual(code, 0, error)
+                self.assertIn("Local overlay status: REVIEW", status)
+                self.assertIn("across shared/local storage", status)
+                code, output, error = capture(["check", "--project-root", tmp])
+                self.assertEqual(code, 1, output + error)
+                self.assertIn("across shared/local storage", output)
+                code, output, error = capture([
+                    "read", "--task", "preferences", "--strict-routing",
+                    "--project-root", tmp,
+                ])
+                self.assertEqual(code, 1, output + error)
+                self.assertNotIn("Local duplicate body.", output)
+
+    def test_supersession_requires_complete_structural_identity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            memory = Path(tmp) / "docs/memory"
+            subject_id = "MC-SUBJ-20260809-11111111"
+            old_id = "MC-DEC-20260809-11111111"
+            new_id = "MC-AREA-20260809-22222222"
+            (memory / "subjects.md").write_text(
+                "# Subject Registry\n\n" + subject_unit(subject_id, "Supersession"),
+                encoding="utf-8",
+            )
+            old = render_active_entry(
+                "decision", old_id, "Project owner", "Project invariant.", None,
+                "project", ("user-confirmed",), subject=subject_id, facet="interface",
+            )
+            (memory / "decisions.md").write_text("# Decisions\n\n" + old + "\n", encoding="utf-8")
+            command = [
+                "add", "Area replacement.", "--type", "decision", "--area", "backend",
+                "--subject", subject_id, "--facet", "interface", "--supersedes", old_id,
+                "--evidence", "user-confirmed", "--project-root", tmp,
+            ]
+            code, output, error = capture(command)
+            self.assertEqual(code, 2, output + error)
+            self.assertIn("retain the old entry's Scope", error)
+            self.assertNotIn("Plan ID:", output)
+
+            old_superseded = old.replace(
+                "Status: active", f"Status: superseded\nSuperseded-By: {new_id}", 1,
+            )
+            (memory / "decisions.md").write_text(
+                "# Decisions\n\n" + old_superseded + "\n", encoding="utf-8",
+            )
+            (memory / "areas").mkdir(exist_ok=True)
+            replacement = render_active_entry(
+                "area", new_id, "Area owner", "Area invariant.", None,
+                "area:backend", ("user-confirmed",), subject=subject_id,
+                facet="interface", supersedes=old_id,
+            )
+            (memory / "areas/backend.md").write_text(
+                "# Backend\n\n" + replacement + "\n", encoding="utf-8",
+            )
+            code, output, error = capture(["check", "--project-root", tmp])
+            self.assertEqual(code, 1, output + error)
+            self.assertIn("preserve Scope+Subject+Facet identity", output)
+
+    def test_promotion_pair_validation_is_shared_by_check_and_freshness(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            memory = Path(tmp) / "docs/memory"
+            (memory / "brief.md").write_text(
+                "# Project Brief\n\nPurpose:\nPromotion relation test.\n",
+                encoding="utf-8",
+            )
+            candidate_id = "MC-INBOX-20260809-11111111"
+            target_id = "MC-PREF-20260809-22222222"
+            candidate = render_candidate_entry(
+                candidate_id, "Promoted candidate", "preference", "Candidate body.",
+                "project", ("user-confirmed",), None,
+            ).replace(
+                "Status: candidate",
+                f"Status: promoted\nPromoted-To: {target_id}",
+                1,
+            )
+            target = render_active_entry(
+                "preference", target_id, "Promoted target", "Target body.", None,
+                "project", ("user-confirmed",),
+            ).replace("Evidence:\n", f"Promoted-From: {candidate_id}\nEvidence:\n", 1)
+            (memory / "inbox.md").write_text("# Memory Inbox\n\n" + candidate + "\n", encoding="utf-8")
+            preferences = memory / "preferences.md"
+            preferences.write_text("# Preferences\n\n" + target + "\n", encoding="utf-8")
+            code, output, error = capture(["check", "--project-root", tmp])
+            self.assertEqual(code, 0, output + error)
+            code, output, error = capture(["check", "--freshness", "--project-root", tmp])
+            self.assertEqual(code, 0, output + error)
+
+            preferences.write_text(
+                preferences.read_text(encoding="utf-8").replace(
+                    f"Promoted-From: {candidate_id}\n", "", 1,
+                ),
+                encoding="utf-8",
+            )
+            code, output, error = capture(["check", "--project-root", tmp])
+            self.assertEqual(code, 1, output + error)
+            self.assertIn("Promoted-To relation is not reciprocal", output)
+            code, output, error = capture(["check", "--freshness", "--project-root", tmp])
+            self.assertEqual(code, 1, output + error)
+            self.assertIn("MC-FRESH-004", output)
+            self.assertIn("Promoted-To relation is not reciprocal", output)
+
+            preferences.write_text("# Preferences\n\n" + target + "\n", encoding="utf-8")
+            (memory / "inbox.md").write_text(
+                "# Memory Inbox\n\n"
+                + candidate.replace("Candidate-Type: preference", "Candidate-Type: decision", 1)
+                + "\n",
+                encoding="utf-8",
+            )
+            code, output, error = capture(["check", "--project-root", tmp])
+            self.assertEqual(code, 1, output + error)
+            self.assertIn("type does not match source Candidate-Type", output)
+            code, output, error = capture(["check", "--freshness", "--project-root", tmp])
+            self.assertEqual(code, 1, output + error)
+            self.assertIn("type does not match source Candidate-Type", output)
+
+            (memory / "inbox.md").write_text(
+                "# Memory Inbox\n\n"
+                + candidate.replace("Scope: project", "Scope: area:backend", 1)
+                + "\n",
+                encoding="utf-8",
+            )
+            code, output, error = capture(["check", "--project-root", tmp])
+            self.assertEqual(code, 1, output + error)
+            self.assertIn("promotion must preserve Scope", output)
+
     @unittest.skipIf(os.name == "nt", "POSIX symlink semantics")
     def test_invalid_overlay_state_never_scans_relative_sentinel(self):
         with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as state, tempfile.TemporaryDirectory() as external, tempfile.TemporaryDirectory() as cwd:

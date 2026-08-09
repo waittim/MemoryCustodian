@@ -7,7 +7,7 @@ import sys
 
 from .conflicts import ConflictResult, ConflictStatus, analyze_conflicts, render_conflict_result
 from .context import ContextRoutingResult, invalid_context_result, route_context
-from .entries import parse_structured_entries
+from .entries import memory_entry_ids, parse_structured_entries
 from .local_overlay import (
     LocalOverlay,
     LocalStatus,
@@ -121,6 +121,7 @@ def run(args) -> int:
             project_root,
             project_identity(memory_dir),
             disabled=getattr(args, "no_local", False),
+            shared_ids=memory_entry_ids(memory_dir),
         )
     )
     local_contents: list[tuple[str, str]] = []

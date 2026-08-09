@@ -13,6 +13,7 @@ import stat
 from .entries import (
     generate_entry_id,
     heading_entry_ids,
+    LIFECYCLE_FIELDS,
     parse_structured_entries,
     render_active_entry,
     structured_entry_schema_issues,
@@ -157,10 +158,16 @@ def _read_bindings(project_id: str) -> tuple[str, ...]:
     return tuple(sorted(dict.fromkeys(roots)))
 
 
-def link_root(project_root: Path, project_id: str) -> tuple[str, ...]:
+def link_root(
+    project_root: Path,
+    project_id: str,
+    *,
+    shared_ids: set[str] | None = None,
+) -> tuple[str, ...]:
     directory = overlay_directory(project_id)
     modules = _parse_manifest(directory / "manifest.md", project_id)
     issues = _local_module_issues(modules, directory, project_root)
+    issues.extend(_cross_storage_id_issues(modules, shared_ids))
     if issues:
         raise ValueError("Local overlay content is invalid: " + "; ".join(issues))
     roots = set(_read_bindings(project_id))
@@ -192,7 +199,12 @@ def _manifest_text(project_id: str) -> str:
     )
 
 
-def enable_overlay(project_root: Path, project_id: str) -> Path:
+def enable_overlay(
+    project_root: Path,
+    project_id: str,
+    *,
+    shared_ids: set[str] | None = None,
+) -> Path:
     project_state = _project_state(project_id)
     _read_bindings(project_id)
     directory = project_state / "local"
@@ -200,6 +212,7 @@ def enable_overlay(project_root: Path, project_id: str) -> Path:
         _validate_local_directory(directory)
         modules = _parse_manifest(directory / "manifest.md", project_id)
         issues = _local_module_issues(modules, directory, project_root)
+        issues.extend(_cross_storage_id_issues(modules, shared_ids))
         if issues:
             raise ValueError("Local overlay content is invalid: " + "; ".join(issues))
         return directory
@@ -213,6 +226,7 @@ def enable_overlay(project_root: Path, project_id: str) -> Path:
         write_private_file(preferences, "# Local Preferences\n\nEntries are newest first.\n")
     modules = _parse_manifest(manifest, project_id)
     issues = _local_module_issues(modules, directory, project_root)
+    issues.extend(_cross_storage_id_issues(modules, shared_ids))
     if issues:
         raise ValueError("Local overlay content is invalid: " + "; ".join(issues))
     return directory
@@ -300,12 +314,20 @@ def _local_module_issues(
                 issues.append(
                     f"{relative}: {entry.entry_id} must use Scope: local-user or local-machine"
                 )
-            if entry.status not in {"active", "superseded"}:
+            if entry.status != "active":
                 issues.append(
                     f"{relative}: {entry.entry_id} has unsupported local Status {entry.status!r}"
                 )
-            if entry.status == "superseded" and not entry.fields.get("Superseded-By"):
-                issues.append(f"{relative}: superseded entry {entry.entry_id} has no Superseded-By")
+            forbidden_relations = sorted(
+                field
+                for field in (*LIFECYCLE_FIELDS, "Exception-To")
+                if entry.field_counts.get(field, 0)
+            )
+            if forbidden_relations:
+                issues.append(
+                    f"{relative}: {entry.entry_id} local entries forbid governance relations: "
+                    + ", ".join(forbidden_relations)
+                )
             if not entry.evidence:
                 issues.append(f"{relative}: {entry.entry_id} has no Evidence")
             else:
@@ -327,7 +349,26 @@ def _local_module_issues(
     return issues
 
 
-def inspect_overlay(project_root: Path, project_id: str, *, disabled: bool = False) -> LocalOverlay:
+def _cross_storage_id_issues(
+    modules: tuple[Path, ...],
+    shared_ids: set[str] | None,
+) -> list[str]:
+    normalized_shared = {value.casefold() for value in (shared_ids or set())}
+    return [
+        f"duplicate Entry ID across shared/local storage: {entry_id}"
+        for path in modules
+        for entry_id in heading_entry_ids(read_local_private_file(path))
+        if entry_id.casefold() in normalized_shared
+    ]
+
+
+def inspect_overlay(
+    project_root: Path,
+    project_id: str,
+    *,
+    disabled: bool = False,
+    shared_ids: set[str] | None = None,
+) -> LocalOverlay:
     if disabled or not project_id:
         return LocalOverlay(LocalStatus.DISABLED, Path("."), project_id)
     try:
@@ -392,6 +433,7 @@ def inspect_overlay(project_root: Path, project_id: str, *, disabled: bool = Fal
             corrupt=True,
         )
     entry_issues = _local_module_issues(modules, directory, project_root)
+    entry_issues.extend(_cross_storage_id_issues(modules, shared_ids))
     if entry_issues:
         return LocalOverlay(
             LocalStatus.REVIEW,
@@ -427,8 +469,15 @@ def validated_project_identity(memory_dir: Path) -> str:
     return metadata["project_id"]
 
 
-def add_local_preference(project_root: Path, project_id: str, message: str, evidence: tuple[str, ...]) -> str:
-    overlay = inspect_overlay(project_root, project_id)
+def add_local_preference(
+    project_root: Path,
+    project_id: str,
+    message: str,
+    evidence: tuple[str, ...],
+    *,
+    shared_ids: set[str] | None = None,
+) -> str:
+    overlay = inspect_overlay(project_root, project_id, shared_ids=shared_ids)
     if overlay.status == LocalStatus.REVIEW:
         detail = "; ".join(overlay.warnings) or "manual review is required"
         raise ValueError(f"Local overlay requires review before writes: {detail}")
@@ -441,7 +490,9 @@ def add_local_preference(project_root: Path, project_id: str, message: str, evid
     findings = scan_text(path, message)
     if any(item.category == "security" for item in findings):
         raise ValueError("Local memory may not store credential-like secrets.")
-    entry_id = generate_entry_id("preference", set(re.findall(r"MC-PREF-\d{8}-[0-9a-f]{8}", existing, re.I)))
+    existing_ids = set(re.findall(r"MC-PREF-\d{8}-[0-9a-f]{8}", existing, re.I))
+    existing_ids.update(shared_ids or ())
+    entry_id = generate_entry_id("preference", existing_ids)
     entry = render_active_entry(
         "preference", entry_id, "Local preference", message, None,
         "local-user", evidence,
