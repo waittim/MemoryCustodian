@@ -89,6 +89,8 @@ memory-custodian check --conflicts --merge-base origin/main  # when Git/ref is a
   directories, traversal errors, and no-follow descriptor reads. Treat `exclusive-group` as unknown in schema 1.
 - Also cover a symlinked `local/` root, exact POSIX `0700`/`0600` modes, duplicate local metadata, mismatched binding
   identity, collision-proof invalid state, migration symlink loops, and human-readable Optional-index preambles.
+- Exercise multi-root write/index attempts, missing mandatory scaffold nodes or declarations, indented scalar-shaped
+  metadata, duplicate binding JSON keys, and enable/link against already corrupt overlay state.
 
 ## Scope And Portability
 

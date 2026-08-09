@@ -443,7 +443,9 @@ and root-binding digests when a plan is meaningful.
 Its private-state inventory records directories and traversal failures, validates the project-id and `local/`
 directories as real owner-only `0700` paths, and hashes owner-only `0600` regular files through no-follow descriptors,
 so symlinks, permissive modes, corrupt metadata, and corrupt UTF-8 state produce blocker-aware plans without loading
-local content. Local manifest scalars are unique and bindings must carry the matching project identity.
+local content. Local manifest scalars are canonical and unique, bindings reject duplicate JSON keys and must carry
+the matching project identity, and the required manifest/preferences/profiles scaffold cannot be omitted. Multi-root
+`REVIEW` overlays remain diagnostic-only: writes and explicit `list/show --local` indexing require `BOUND`.
 Migration derives operands only from normalized declarations, checks containment inside the memory directory, and
 snapshots all text operands before persisting preview seeds.
 

@@ -302,7 +302,9 @@ precede them, sentinels cannot coexist with declarations, and routing schema 1 a
 Promotion and Subject merge reuse structural operand checks, and their Plan IDs bind the exact candidate, registry,
 and referenced Entry state used by the preview. Local overlay selection validates both the project-id state ancestor
 and `local/` itself as real owner-only `0700` directories. Manifest schema/project scalars are unique, binding identity
-must match, and every loaded local file is an owner-only `0600` regular file read through a no-follow descriptor.
+must match, duplicate binding JSON keys are invalid, and every loaded local file is an owner-only `0600` regular file
+read through a no-follow descriptor. The manifest, declared preferences file, and profiles directory are mandatory.
+Multi-root `REVIEW` is diagnostic-only; writes and explicit local indexing require a single-root `BOUND` overlay.
 Local reset records directories/traversal failures and refuses symlink nodes without reading targets. Migration
 accepts operands only from normalized declarations contained in the managed memory directory, normalizes symlink-loop
 failures before seed creation, preserves human prose outside declaration shapes, and renders missing routes from the
