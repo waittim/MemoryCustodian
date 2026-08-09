@@ -79,6 +79,10 @@ memory-custodian check --conflicts --merge-base origin/main  # when Git/ref is a
   Include unsafe routes, fenced and indented heading lookalikes, a genuinely bound local overlay, valid operand IDs,
   structural operand corruption, Plan dependency mutations, recovery failures after legacy-entry discovery, and all
   disabled/unbound/bound/multi-root local-reset states.
+- Exercise Markdown-equivalent boundaries: Setext and attached-hash Protocol lookalikes are invalid, fenced and HTML
+  comment examples are inert, protocol metadata cannot be indented code, task H3 routes require exactly one canonical
+  parent, and duplicate Optional module indexes fail closed. Private-state tests must include symlinks and non-UTF-8
+  files, while recovery tests assert that operand failures precede all pending seed creation.
 
 ## Scope And Portability
 

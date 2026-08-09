@@ -2,6 +2,10 @@
 
 Entries are newest first.
 
+## 2026-08-09
+- Unified manifest Markdown section walking, made route topology and Optional index uniqueness fail closed, hardened
+  local reset against symlinks/binary state, and made migration operand validation seed-free on failure.
+
 ## 2026-08-01
 - Closed v0.11 audit gaps in activation-complete exclusivity, lifecycle-aware reconciliation, route-complete strict contracts, dependency-bound governance/local plans, relation-safe forgetting, and freshness.
 - Upgraded dogfood memory to Protocol 0.7 deterministic routing, structural conflict review, and bound local-overlay contracts.

@@ -445,11 +445,15 @@ run the same contract preflight before reading business operands, creating local
 Malformed migration input is rejected before pending project or Entry identity is persisted.
 The current-project preflight combines strict Protocol metadata with deterministic route validation. Unsafe or
 malformed routes therefore block ordinary writers, focused diagnostics, and recovery candidates. Protocol heading
-recognition follows Markdown boundaries: fenced examples are ignored, while an indented-code lookalike cannot act as
-the canonical H2. Repo-external overlay reads require the same validated project identity.
+recognition follows Markdown boundaries: fenced examples and HTML comments are ignored, while Setext, attached-hash,
+and indented-code lookalikes cannot act as the canonical H2. Canonical task H3 routes must live under exactly one
+`Load by task` H2, and the Optional module index may appear at most once. Repo-external overlay reads require the
+same validated project identity.
 Promotion and Subject-merge previews validate their structural operands and bind the exact Entry/Subject text they
 render. Local reset reports no plan for a disabled overlay, blocks unbound or multi-root state, and binds local file
 and root-binding digests when a plan is meaningful.
+Its private-state inventory uses `lstat`, never follows symlinks, and hashes regular-file bytes so corrupt UTF-8 state
+can still produce a blocker-aware review plan. Migration snapshots all text operands before persisting preview seeds.
 
 When Git is available, `check --conflicts --merge-base <ref>` compares semantic units changed on both sides. It
 distinguishes deterministic collisions from concurrent hard-memory changes requiring semantic reconciliation.

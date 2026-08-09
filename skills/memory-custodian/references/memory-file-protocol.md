@@ -293,9 +293,13 @@ Public Subject, supersede, forget, compact, promotion, replacement, local-overla
 consume this same contract before operand lookup or Plan construction. Recovery syntax validation precedes pending
 identity creation, so malformed input cannot leave a project or Entry seed behind.
 Current-project preflight also validates all canonical routes. Fenced Markdown examples do not count as headings;
-four-space indented Protocol lookalikes are malformed traces, not metadata sections. Local overlay selection requires
-the resulting validated project identity. Promotion and Subject merge reuse structural operand checks, and their
-Plan IDs bind the exact candidate, registry, and referenced Entry state used by the preview.
+HTML comments are ignored, while Setext, attached-hash, and four-space indented Protocol lookalikes are malformed
+traces, not metadata sections. Canonical task H3 routes must be direct content of exactly one `Load by task` H2, and
+the Optional module index is unique. Local overlay selection requires the resulting validated project identity.
+Promotion and Subject merge reuse structural operand checks, and their Plan IDs bind the exact candidate, registry,
+and referenced Entry state used by the preview. Local reset inventories private state with `lstat`, refuses symlink
+nodes without reading their targets, and hashes regular-file bytes. Migration reads every operand before creating
+pending identity state and renders missing routes from the same authority used by initialization.
 
 ## Local Overlay
 
