@@ -78,6 +78,10 @@
 - Made multi-root `REVIEW` diagnostic-only for writes and explicit local indexing. Required local scaffold components
   and declared modules must exist; local scalars require canonical placement; bindings reject duplicate JSON keys;
   and enable/link validate existing state before reporting success or changing root bindings.
+- Restored moved-project recovery by replacing one nonexistent stale binding on explicit link while retaining REVIEW
+  for concurrently live roots. REVIEW modules remain eligible for security/privacy diagnostics, formal local Entries
+  reuse schema/Evidence validation, binding roots must be normalized absolute paths, and orphan bindings become
+  blocker-aware REVIEW/reset state instead of DISABLED.
 - Added matched-context conflict gates and optional read-only merge-base review for cross-branch structural collisions
   and concurrent hard-memory changes requiring human reconciliation.
 - Subject names, timestamps, Evidence counts, file order, and prose similarity never choose a winner. This release

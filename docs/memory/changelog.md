@@ -5,8 +5,8 @@ Entries are newest first.
 ## 2026-08-09
 - Closed manifest lexical/topology bypasses, contained migration operands including symlink loops, enforced local
   overlay path/mode/identity/scaffold boundaries, made multi-root review diagnostic-only, completed reset inventory
-  dependencies, and removed the unversioned `exclusive-group` routing extension while recording the Protocol 0.7
-  AMBIGUOUS producer deferral.
+  dependencies, restored stale-root move recovery, validated local Entry schema/Evidence and diagnostic scans, and
+  removed the unversioned `exclusive-group` routing extension while recording the Protocol 0.7 AMBIGUOUS deferral.
 - Unified manifest Markdown section walking, made route topology and Optional index uniqueness fail closed, hardened
   local reset against symlinks/binary state, and made migration operand validation seed-free on failure.
 

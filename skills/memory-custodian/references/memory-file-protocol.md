@@ -305,6 +305,10 @@ and `local/` itself as real owner-only `0700` directories. Manifest schema/proje
 must match, duplicate binding JSON keys are invalid, and every loaded local file is an owner-only `0600` regular file
 read through a no-follow descriptor. The manifest, declared preferences file, and profiles directory are mandatory.
 Multi-root `REVIEW` is diagnostic-only; writes and explicit local indexing require a single-root `BOUND` overlay.
+Security/privacy checks may scan path-safe REVIEW modules without making them available to context or ID operations.
+Binding roots are unique normalized absolute paths. Explicit link replaces a sole nonexistent old root after a move;
+multiple live roots remain REVIEW. A binding without `local/` is corrupt REVIEW state, not disabled state. Formal local
+Entries reuse the shared schema and Evidence checks, with only local-user/local-machine Scope and local storage types.
 Local reset records directories/traversal failures and refuses symlink nodes without reading targets. Migration
 accepts operands only from normalized declarations contained in the managed memory directory, normalizes symlink-loop
 failures before seed creation, preserves human prose outside declaration shapes, and renders missing routes from the

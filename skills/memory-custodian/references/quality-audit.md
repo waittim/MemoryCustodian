@@ -91,6 +91,8 @@ memory-custodian check --conflicts --merge-base origin/main  # when Git/ref is a
   identity, collision-proof invalid state, migration symlink loops, and human-readable Optional-index preambles.
 - Exercise multi-root write/index attempts, missing mandatory scaffold nodes or declarations, indented scalar-shaped
   metadata, duplicate binding JSON keys, and enable/link against already corrupt overlay state.
+- Include an actual project directory move, two concurrently live roots, security findings in REVIEW modules, malformed
+  formal local Entries, orphan binding-only state, and relative or non-normalized binding roots.
 
 ## Scope And Portability
 

@@ -445,7 +445,11 @@ directories as real owner-only `0700` paths, and hashes owner-only `0600` regula
 so symlinks, permissive modes, corrupt metadata, and corrupt UTF-8 state produce blocker-aware plans without loading
 local content. Local manifest scalars are canonical and unique, bindings reject duplicate JSON keys and must carry
 the matching project identity, and the required manifest/preferences/profiles scaffold cannot be omitted. Multi-root
-`REVIEW` overlays remain diagnostic-only: writes and explicit `list/show --local` indexing require `BOUND`.
+`REVIEW` overlays remain diagnostic-only: writes, context loading, and explicit `list/show --local` indexing require
+`BOUND`, while security/privacy diagnostics still scan safely validated REVIEW modules. Binding roots must be unique,
+absolute normalized paths; explicit link replaces one stale nonexistent root after a project move but preserves REVIEW
+when multiple real roots coexist. Orphan bindings are corrupt REVIEW state included in reset inventory. Formal local
+Entries use the shared schema/Evidence contract plus local-only storage and Scope rules.
 Migration derives operands only from normalized declarations, checks containment inside the memory directory, and
 snapshots all text operands before persisting preview seeds.
 
