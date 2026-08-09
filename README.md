@@ -453,6 +453,11 @@ Entries use the shared schema/Evidence contract plus local-only storage and Scop
 Migration derives operands only from normalized declarations, checks containment inside the memory directory, and
 snapshots all text operands before persisting preview seeds.
 
+Supersession admission and audit preserve the complete `Scope + Subject + Facet` identity. Promotion audit validates
+both directions, source/target lifecycle, Candidate-Type, Scope, and provisional Subject/Facet through the same
+relation checker used by freshness. Protocol 0.7 local Entries are active-only and cannot declare Exception-To,
+supersession, promotion, or other governance relations. Entry IDs remain unique across shared and local storage.
+
 When Git is available, `check --conflicts --merge-base <ref>` compares semantic units changed on both sides. It
 distinguishes deterministic collisions from concurrent hard-memory changes requiring semantic reconciliation.
 Short files and timestamps improve reviewability but do not resolve contradictions or establish precedence.

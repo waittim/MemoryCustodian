@@ -16,8 +16,9 @@ Precedence is fixed:
 4. Local preferences and profiles
 5. Task convenience
 
-Local modules use only `Scope: local-user` or `Scope: local-machine`. They cannot redefine shared routes, create
-`Exception-To` overrides, grant authority, or store secrets. `read --no-local` produces shared-only context.
+Local modules use only active Entries with `Scope: local-user` or `Scope: local-machine`. They cannot redefine shared
+routes, create `Exception-To`, supersession, promotion, or other governance relations, grant authority, or store
+secrets. Entry IDs must remain unique across shared and local storage. `read --no-local` produces shared-only context.
 
 `local status`, `enable`, `link`, and `add` are available in Protocol 0.7. `local reset` is preview-only and uses the
 same ErasureScope vocabulary as forgetting. Transactional reset requires Protocol 0.8 and never claims to affect

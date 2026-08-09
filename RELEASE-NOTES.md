@@ -82,6 +82,10 @@
   for concurrently live roots. REVIEW modules remain eligible for security/privacy diagnostics, formal local Entries
   reuse schema/Evidence validation, binding roots must be normalized absolute paths, and orphan bindings become
   blocker-aware REVIEW/reset state instead of DISABLED.
+- Completed relation integrity checks: supersession preserves Scope as well as Subject/Facet; promotion validates
+  reciprocal links, lifecycle, Candidate-Type, Scope, and provisional identity in both ordinary and freshness checks.
+  Local Entries are active-only with no governance relations, and shared/local Entry ID collisions fail closed across
+  status, read, check, indexing, enable/link, and local writes.
 - Added matched-context conflict gates and optional read-only merge-base review for cross-branch structural collisions
   and concurrent hard-memory changes requiring human reconciliation.
 - Subject names, timestamps, Evidence counts, file order, and prose similarity never choose a winner. This release

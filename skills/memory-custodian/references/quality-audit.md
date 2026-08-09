@@ -93,6 +93,8 @@ memory-custodian check --conflicts --merge-base origin/main  # when Git/ref is a
   metadata, duplicate binding JSON keys, and enable/link against already corrupt overlay state.
 - Include an actual project directory move, two concurrently live roots, security findings in REVIEW modules, malformed
   formal local Entries, orphan binding-only state, and relative or non-normalized binding roots.
+- Test cross-Scope supersession in preview and hand-edited relations; broken or semantically mismatched promotion pairs
+  in both ordinary/freshness checks; forbidden local lifecycle fields; and shared/local Entry ID collisions.
 
 ## Scope And Portability
 

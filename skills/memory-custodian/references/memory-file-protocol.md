@@ -309,10 +309,16 @@ Security/privacy checks may scan path-safe REVIEW modules without making them av
 Binding roots are unique normalized absolute paths. Explicit link replaces a sole nonexistent old root after a move;
 multiple live roots remain REVIEW. A binding without `local/` is corrupt REVIEW state, not disabled state. Formal local
 Entries reuse the shared schema and Evidence checks, with only local-user/local-machine Scope and local storage types.
+They are active-only and forbid Exception-To plus every supersession/promotion lifecycle field. Entry IDs are checked
+for uniqueness across shared and local storage before local content can become BOUND or loadable.
 Local reset records directories/traversal failures and refuses symlink nodes without reading targets. Migration
 accepts operands only from normalized declarations contained in the managed memory directory, normalizes symlink-loop
 failures before seed creation, preserves human prose outside declaration shapes, and renders missing routes from the
 same authority used by initialization.
+
+Shared supersession preserves exact Scope, Subject, and Facet identity. The common relation audit verifies both sides
+of supersession and promotion, including lifecycle, Candidate-Type, Scope, and provisional Subject/Facet; freshness
+uses the same audit rather than a weaker target-existence check.
 
 ## Local Overlay
 
