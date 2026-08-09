@@ -418,8 +418,6 @@ def parse_optional_module_index(manifest: str, *, legacy_compatible: bool = Fals
                 module_match
                 or meta_match
                 or stripped == "- None enabled."
-                or stripped.startswith("- ")
-                or line.startswith("  - ")
             ):
                 raise ValueError(
                     f"optional module declaration appears outside a canonical subsection: {line!r}"

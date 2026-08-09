@@ -15,7 +15,12 @@ from .entries import (
     structured_entry_storage_issues,
     validate_evidence,
 )
-from .local_overlay import LocalStatus, inspect_overlay, validated_project_identity
+from .local_overlay import (
+    LocalStatus,
+    inspect_overlay,
+    read_local_private_file,
+    validated_project_identity,
+)
 from .protocol import (
     CURRENT_PROTOCOL_VERSION,
     compare_versions,
@@ -91,9 +96,11 @@ def build_index(
         overlay = inspect_overlay(project_root, validated_project_identity(memory_dir))
         if overlay.status not in {LocalStatus.BOUND, LocalStatus.REVIEW}:
             raise ValueError("Local overlay is not bound to this project root.")
+        if overlay.directory is None:
+            raise ValueError("Local overlay review state has no safe directory.")
         from .entries import parse_structured_entries
         for path in overlay.modules:
-            for entry in parse_structured_entries(path, path.read_text(encoding="utf-8")):
+            for entry in parse_structured_entries(path, read_local_private_file(path)):
                 records.append(IndexedEntry(
                     entry.entry_id, entry.status, entry.scope,
                     f"local/{path.relative_to(overlay.directory).as_posix()}", entry.text, entry,

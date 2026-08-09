@@ -46,7 +46,12 @@ from .quality import (
     render_quality,
     routing_findings,
 )
-from .local_overlay import LocalStatus, inspect_overlay, validated_project_identity
+from .local_overlay import (
+    LocalStatus,
+    inspect_overlay,
+    read_local_private_file,
+    validated_project_identity,
+)
 
 
 def _read(path: Path) -> str:
@@ -356,8 +361,10 @@ def run(args) -> int:
         warnings.extend(f"local overlay: {warning}" for warning in overlay.warnings)
     if overlay is not None and overlay.status in {LocalStatus.BOUND, LocalStatus.REVIEW}:
         for path in overlay.modules:
+            if overlay.directory is None:
+                break
             local_paths.add(path)
-            text = _read(path)
+            text = read_local_private_file(path)
             detailed_findings.extend(scan_text(path, text))
             for entry in parse_structured_entries(path, text):
                 if entry.scope not in {"local-user", "local-machine"}:

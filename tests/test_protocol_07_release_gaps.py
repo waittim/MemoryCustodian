@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
+import json
 import os
 from pathlib import Path
 import re
@@ -15,8 +16,10 @@ import unittest
 from unittest.mock import patch
 
 from memory_custodian.conflicts import analyze_conflicts
+from memory_custodian.context import ContextRoutingResult
 from memory_custodian.entries import render_active_entry, render_candidate_entry
 from memory_custodian.main import main
+from memory_custodian.routes import RouteReason, RoutingCompleteness
 
 
 def capture(argv: list[str]) -> tuple[int, str, str]:
@@ -60,6 +63,39 @@ def subject_unit(subject_id: str, title: str, canonical_ref: str = "") -> str:
 
 
 class RoutingAndQualityReleaseTests(unittest.TestCase):
+    def test_ambiguous_result_surface_remains_reserved_and_fail_closed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            result = ContextRoutingResult(
+                "implementation",
+                "implementation",
+                (),
+                (),
+                (),
+                (),
+                RoutingCompleteness.AMBIGUOUS,
+                (),
+                (),
+                (),
+                (f"{RouteReason.AMBIGUOUS.value}: reserved policy ambiguity",),
+                ("reserved-policy-ambiguity",),
+            )
+            with patch("memory_custodian.read.route_context", return_value=result):
+                code, output, error = capture([
+                    "read", "--task", "implementation", "--names-only",
+                    "--project-root", tmp,
+                ])
+                self.assertEqual(code, 1, output + error)
+                self.assertIn("Routing completeness: AMBIGUOUS", output)
+                self.assertIn("MC-ROUTE-AMBIGUOUS", output)
+                code, output, error = capture([
+                    "read", "--task", "implementation", "--strict-routing",
+                    "--names-only", "--project-root", tmp,
+                ])
+                self.assertEqual(code, 2, output + error)
+                self.assertIn("Context pack not approved", output)
+
     def test_manifest_lexical_contract_handles_code_spans_and_fence_info(self):
         with tempfile.TemporaryDirectory() as tmp:
             with redirect_stdout(StringIO()):
@@ -207,6 +243,209 @@ class RoutingAndQualityReleaseTests(unittest.TestCase):
                 self.assertEqual(reset_code, 0, reset_error)
                 self.assertNotIn("Blockers:\n- none", reset)
                 self.assertIn("Unsafe local overlay", reset)
+
+    @unittest.skipIf(os.name == "nt", "POSIX symlink and mode semantics")
+    def test_local_overlay_root_and_modes_fail_closed_before_loading(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as state, tempfile.TemporaryDirectory() as external:
+            with patch.dict(os.environ, {"XDG_STATE_HOME": state}):
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["init", "--project-root", tmp]), 0)
+                    self.assertEqual(main(["local", "enable", "--project-root", tmp]), 0)
+                    self.assertEqual(main(["local", "link", "--project-root", tmp]), 0)
+                    self.assertEqual(main([
+                        "local", "add", "Overlay boundary marker.",
+                        "--type", "preference", "--evidence", "user-confirmed",
+                        "--project-root", tmp,
+                    ]), 0)
+                manifest = Path(tmp) / "docs/memory/manifest.md"
+                project_id = re.search(
+                    r"(?m)^- project_id: (\S+)", manifest.read_text(encoding="utf-8"),
+                ).group(1)
+                project_state = Path(state) / "memory-custodian/projects" / project_id
+                overlay = project_state / "local"
+
+                external_overlay = Path(external) / "local"
+                shutil.move(overlay, external_overlay)
+                overlay.symlink_to(external_overlay, target_is_directory=True)
+                code, status, error = capture(["local", "status", "--project-root", tmp])
+                self.assertEqual(code, 0, error)
+                self.assertIn("Local overlay status: REVIEW", status)
+                code, output, error = capture([
+                    "read", "--task", "preferences", "--project-root", tmp,
+                ])
+                self.assertEqual(code, 0, error)
+                self.assertNotIn("Overlay boundary marker.", output)
+                overlay.unlink()
+                shutil.move(external_overlay, overlay)
+
+                overlay.chmod(0o755)
+                code, status, error = capture(["local", "status", "--project-root", tmp])
+                self.assertEqual(code, 0, error)
+                self.assertIn("mode 0700", status)
+                code, reset, error = capture(["local", "reset", "--project-root", tmp])
+                self.assertEqual(code, 0, error)
+                self.assertNotIn("Blockers:\n- none", reset)
+                overlay.chmod(0o700)
+
+                preferences = overlay / "preferences.md"
+                preferences.chmod(0o644)
+                code, status, error = capture(["local", "status", "--project-root", tmp])
+                self.assertEqual(code, 0, error)
+                self.assertIn("Local overlay status: REVIEW", status)
+                code, reset, error = capture(["local", "reset", "--project-root", tmp])
+                self.assertEqual(code, 0, error)
+                self.assertIn("mode 0600", reset)
+                preferences.chmod(0o600)
+
+                profiles = overlay / "profiles"
+                profiles.chmod(0o755)
+                code, status, error = capture(["local", "status", "--project-root", tmp])
+                self.assertEqual(code, 0, error)
+                self.assertIn("Local overlay status: REVIEW", status)
+                self.assertIn("mode 0700", status)
+
+    def test_local_overlay_metadata_and_binding_identity_are_unique(self):
+        mutations = (
+            lambda text, project_id: text.replace(
+                "- local_overlay_schema_version: 1",
+                "- local_overlay_schema_version: 1\n- local_overlay_schema_version: 2",
+                1,
+            ),
+            lambda text, project_id: text.replace(
+                f"- project_id: {project_id}",
+                f"- project_id: {project_id}\n- project_id: 00000000-0000-4000-8000-000000000000",
+                1,
+            ),
+        )
+        for mutate in mutations:
+            with self.subTest(mutate=mutate), tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as state:
+                with patch.dict(os.environ, {"XDG_STATE_HOME": state}):
+                    with redirect_stdout(StringIO()):
+                        self.assertEqual(main(["init", "--project-root", tmp]), 0)
+                        self.assertEqual(main(["local", "enable", "--project-root", tmp]), 0)
+                        self.assertEqual(main(["local", "link", "--project-root", tmp]), 0)
+                        self.assertEqual(main([
+                            "local", "add", "Corrupt metadata marker.",
+                            "--type", "preference", "--evidence", "user-confirmed",
+                            "--project-root", tmp,
+                        ]), 0)
+                    shared = Path(tmp) / "docs/memory/manifest.md"
+                    project_id = re.search(
+                        r"(?m)^- project_id: (\S+)", shared.read_text(encoding="utf-8"),
+                    ).group(1)
+                    local_manifest = Path(state) / "memory-custodian/projects" / project_id / "local/manifest.md"
+                    local_manifest.write_text(
+                        mutate(local_manifest.read_text(encoding="utf-8"), project_id),
+                        encoding="utf-8",
+                    )
+                    code, status, error = capture(["local", "status", "--project-root", tmp])
+                    self.assertEqual(code, 0, error)
+                    self.assertIn("Local overlay status: REVIEW", status)
+                    code, output, error = capture([
+                        "read", "--task", "preferences", "--project-root", tmp,
+                    ])
+                    self.assertEqual(code, 0, error)
+                    self.assertNotIn("Corrupt metadata marker.", output)
+
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as state:
+            with patch.dict(os.environ, {"XDG_STATE_HOME": state}):
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["init", "--project-root", tmp]), 0)
+                    self.assertEqual(main(["local", "enable", "--project-root", tmp]), 0)
+                    self.assertEqual(main(["local", "link", "--project-root", tmp]), 0)
+                    self.assertEqual(main([
+                        "local", "add", "Mismatched binding marker.",
+                        "--type", "preference", "--evidence", "user-confirmed",
+                        "--project-root", tmp,
+                    ]), 0)
+                shared = Path(tmp) / "docs/memory/manifest.md"
+                project_id = re.search(
+                    r"(?m)^- project_id: (\S+)", shared.read_text(encoding="utf-8"),
+                ).group(1)
+                binding = Path(state) / "memory-custodian/projects" / project_id / "bindings.json"
+                payload = json.loads(binding.read_text(encoding="utf-8"))
+                payload["project_id"] = "00000000-0000-4000-8000-000000000000"
+                binding.write_text(json.dumps(payload), encoding="utf-8")
+                code, status, error = capture(["local", "status", "--project-root", tmp])
+                self.assertEqual(code, 0, error)
+                self.assertIn("Local overlay status: REVIEW", status)
+                code, output, error = capture([
+                    "read", "--task", "preferences", "--project-root", tmp,
+                ])
+                self.assertEqual(code, 0, error)
+                self.assertNotIn("Mismatched binding marker.", output)
+
+    @unittest.skipIf(os.name == "nt", "POSIX symlink semantics")
+    def test_invalid_overlay_state_never_scans_relative_sentinel(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as state, tempfile.TemporaryDirectory() as external, tempfile.TemporaryDirectory() as cwd:
+            with patch.dict(os.environ, {"XDG_STATE_HOME": state}):
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["init", "--project-root", tmp]), 0)
+                    self.assertEqual(main(["local", "enable", "--project-root", tmp]), 0)
+                    self.assertEqual(main(["local", "link", "--project-root", tmp]), 0)
+                shared = Path(tmp) / "docs/memory/manifest.md"
+                project_id = re.search(
+                    r"(?m)^- project_id: (\S+)", shared.read_text(encoding="utf-8"),
+                ).group(1)
+                project_state = Path(state) / "memory-custodian/projects" / project_id
+                external_state = Path(external) / project_id
+                shutil.move(project_state, external_state)
+                project_state.symlink_to(external_state, target_is_directory=True)
+                collision = Path(cwd) / "__invalid_local_overlay_state__"
+                collision.mkdir()
+                marker = collision / "unrelated.txt"
+                marker.write_text("first", encoding="utf-8")
+                previous = Path.cwd()
+                try:
+                    os.chdir(cwd)
+                    _code, first, _error = capture(["local", "reset", "--project-root", tmp])
+                    marker.write_text("second", encoding="utf-8")
+                    _code, second, _error = capture(["local", "reset", "--project-root", tmp])
+                finally:
+                    os.chdir(previous)
+                self.assertEqual(
+                    re.search(r"Plan ID: ([0-9a-f]{16})", first).group(1),
+                    re.search(r"Plan ID: ([0-9a-f]{16})", second).group(1),
+                )
+
+    @unittest.skipIf(os.name == "nt", "POSIX symlink semantics")
+    def test_migration_normalizes_symlink_loops_and_preserves_prose_preamble(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as state:
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            memory = Path(tmp) / "docs/memory"
+            manifest = memory / "manifest.md"
+            original = manifest.read_text(encoding="utf-8").replace(
+                "- protocol_version: 0.7", "- protocol_version: 0.6", 1,
+            )
+            prose = original.replace(
+                "## Optional module index\n",
+                "## Optional module index\n\nMigration notes:\n- Human-readable migration note.\n",
+                1,
+            )
+            manifest.write_text(prose, encoding="utf-8")
+            with patch.dict(os.environ, {"XDG_STATE_HOME": state}):
+                code, output, error = capture(["migrate", "--project-root", tmp])
+            self.assertEqual(code, 0, output + error)
+            self.assertIn("Plan ID:", output)
+
+            manifest.write_text(
+                original.replace(
+                    "### Enabled areas\n- None enabled.",
+                    "### Enabled areas\n- `areas/loop.md`\n"
+                    "  - activation: path\n  - paths: `src/**`",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            (memory / "areas").mkdir(exist_ok=True)
+            loop = memory / "areas/loop.md"
+            loop.symlink_to(loop)
+            with patch.dict(os.environ, {"XDG_STATE_HOME": state}):
+                code, output, error = capture(["migrate", "--project-root", tmp])
+            self.assertEqual(code, 2, output + error)
+            self.assertNotIn("Traceback", error)
+            self.assertIn("cannot be safely resolved", error)
 
     def test_optional_and_task_topology_fail_closed(self):
         cases = (

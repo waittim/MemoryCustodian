@@ -8,7 +8,14 @@ import sys
 from .conflicts import ConflictResult, ConflictStatus, analyze_conflicts, render_conflict_result
 from .context import ContextRoutingResult, invalid_context_result, route_context
 from .entries import parse_structured_entries
-from .local_overlay import LocalOverlay, LocalStatus, inspect_overlay, project_identity, render_overlay_status
+from .local_overlay import (
+    LocalOverlay,
+    LocalStatus,
+    inspect_overlay,
+    project_identity,
+    read_local_private_file,
+    render_overlay_status,
+)
 from .protocol import budget_for, resolve_memory_dir, resolve_project_root
 from .routes import ModuleDisposition, RouteReason, RoutedModule, RoutingCompleteness
 
@@ -120,7 +127,9 @@ def run(args) -> int:
     local_scope_warnings: list[str] = []
     if overlay.status in {LocalStatus.BOUND, LocalStatus.REVIEW}:
         for path in overlay.modules:
-            text = path.read_text(encoding="utf-8")
+            if overlay.directory is None:
+                break
+            text = read_local_private_file(path)
             entries = parse_structured_entries(path, text)
             if any(entry.scope not in {"local-user", "local-machine"} for entry in entries):
                 local_scope_warnings.append(

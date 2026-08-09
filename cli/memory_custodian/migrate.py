@@ -131,7 +131,13 @@ def _migration_sources(memory_dir: Path, manifest: str) -> dict[str, str]:
     for relative in sorted(relatives):
         path = memory_dir.joinpath(*Path(relative).parts)
         try:
-            path.resolve().relative_to(resolved_memory)
+            resolved_path = path.resolve()
+        except (OSError, RuntimeError) as exc:
+            raise ValueError(
+                f"Migration operand cannot be safely resolved: {relative}"
+            ) from exc
+        try:
+            resolved_path.relative_to(resolved_memory)
         except ValueError as exc:
             raise ValueError(
                 f"Migration operand escapes the managed memory directory: {relative}"

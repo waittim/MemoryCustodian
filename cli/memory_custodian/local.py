@@ -25,18 +25,22 @@ from .protocol import resolve_memory_dir, resolve_project_root
 
 
 def _reset_inventory(
-    directory: Path,
+    directory: Path | None,
 ) -> tuple[list[str], list[str]]:
     """Hash private state bytes without following unsafe filesystem nodes."""
 
     dependencies: list[str] = []
     blockers: list[str] = []
+    if directory is None:
+        return ["local:unsafe-root"], ["Unsafe local overlay root requires review."]
     try:
         root_metadata = directory.lstat()
         if stat.S_ISLNK(root_metadata.st_mode) or not stat.S_ISDIR(root_metadata.st_mode):
             raise OSError("local overlay root is not a real directory")
         if hasattr(os, "getuid") and root_metadata.st_uid != os.getuid():
             raise OSError("local overlay root is not owned by the current user")
+        if os.name != "nt" and stat.S_IMODE(root_metadata.st_mode) != 0o700:
+            raise OSError("local overlay root must use mode 0700")
     except OSError as exc:
         return ["local:unsafe-root"], [f"Unsafe local overlay root requires review: {exc}"]
     paths: list[Path] = []
@@ -74,9 +78,10 @@ def _reset_inventory(
                     blockers.append(
                         f"Unsafe local overlay directory owner requires review: {relative}"
                     )
-                if mode & 0o700 != 0o700:
+                if os.name != "nt" and mode != 0o700:
                     blockers.append(
-                        f"Unreadable local overlay directory requires review: {relative}"
+                        f"Unreadable local overlay directory requires review: {relative}; "
+                        "private directories must use mode 0700"
                     )
                 continue
             flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
@@ -87,6 +92,8 @@ def _reset_inventory(
                     raise OSError("private state node is not a regular file")
                 if hasattr(os, "getuid") and opened.st_uid != os.getuid():
                     raise OSError("private state file is not owned by the current user")
+                if os.name != "nt" and stat.S_IMODE(opened.st_mode) != 0o600:
+                    raise OSError("private state file must use mode 0600")
                 digestor = hashlib.sha256()
                 while True:
                     chunk = os.read(descriptor, 64 * 1024)
