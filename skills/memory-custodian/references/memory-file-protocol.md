@@ -292,6 +292,10 @@ unsupported future versions are invalid rather than being routed with legacy gra
 Public Subject, supersede, forget, compact, promotion, replacement, local-overlay, status, and focused-check commands
 consume this same contract before operand lookup or Plan construction. Recovery syntax validation precedes pending
 identity creation, so malformed input cannot leave a project or Entry seed behind.
+Current-project preflight also validates all canonical routes. Fenced Markdown examples do not count as headings;
+four-space indented Protocol lookalikes are malformed traces, not metadata sections. Local overlay selection requires
+the resulting validated project identity. Promotion and Subject merge reuse structural operand checks, and their
+Plan IDs bind the exact candidate, registry, and referenced Entry state used by the preview.
 
 ## Local Overlay
 

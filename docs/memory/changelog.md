@@ -3,7 +3,7 @@
 Entries are newest first.
 
 ## 2026-08-01
-- Closed v0.11 audit gaps in activation-complete exclusivity, lifecycle-aware reconciliation, entrypoint-complete strict contracts, dependency-bound Plan IDs, relation-safe forgetting, and freshness.
+- Closed v0.11 audit gaps in activation-complete exclusivity, lifecycle-aware reconciliation, route-complete strict contracts, dependency-bound governance/local plans, relation-safe forgetting, and freshness.
 - Upgraded dogfood memory to Protocol 0.7 deterministic routing, structural conflict review, and bound local-overlay contracts.
 - Assigned stable Subjects and Facets to remaining active legacy decisions.
 

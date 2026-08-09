@@ -76,6 +76,9 @@ memory-custodian check --conflicts --merge-base origin/main  # when Git/ref is a
   fields. Validate recovery candidates before preview and again before apply; reject ambiguous sections for manual
   repair. Exercise a manifest-state by public-entrypoint matrix: preview and local commands must reject before Plan
   IDs or seeds, while status and every focused check must report the same invalid contract.
+  Include unsafe routes, fenced and indented heading lookalikes, a genuinely bound local overlay, valid operand IDs,
+  structural operand corruption, Plan dependency mutations, recovery failures after legacy-entry discovery, and all
+  disabled/unbound/bound/multi-root local-reset states.
 
 ## Scope And Portability
 

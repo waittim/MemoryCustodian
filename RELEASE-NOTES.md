@@ -60,6 +60,11 @@
   while blockers remain. All public preview, local-overlay, status, and focused diagnostic entrypoints perform this
   preflight before operand lookup, Plan ID rendering, or seed creation; failed migration syntax checks leave no
   pending local identity state.
+- Combined metadata and route validation for every current-project preflight and recovery candidate. Markdown-aware
+  heading scans ignore fenced examples without accepting indented code as the Protocol H2. Bound local data is never
+  selected through an ambiguous manifest identity. Promotion and Subject-merge previews validate structural operands
+  and bind rendered text dependencies; local reset distinguishes disabled, unbound, bound, and multi-root review
+  states and binds the local content it would eventually remove.
 - Added matched-context conflict gates and optional read-only merge-base review for cross-branch structural collisions
   and concurrent hard-memory changes requiring human reconciliation.
 - Subject names, timestamps, Evidence counts, file order, and prose similarity never choose a winner. This release
