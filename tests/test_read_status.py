@@ -204,8 +204,8 @@ class ReadStatusTests(unittest.TestCase):
             out = StringIO()
             with redirect_stdout(out):
                 code = main(["check", "--project-root", tmp])
-            self.assertEqual(code, 1)
-            self.assertIn("route: expected one canonical heading", out.getvalue())
+            self.assertEqual(code, 0)
+            self.assertNotIn("route: expected one canonical heading", out.getvalue())
 
     def test_migrate_updates_generated_implementation_route(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -7,20 +7,17 @@ import hashlib
 from .entries import validate_evidence
 from .erasure import ErasureScope, render_scope
 from .local_overlay import (
+    LocalStatus,
     add_local_preference,
     enable_overlay,
     inspect_overlay,
     link_root,
     render_overlay_status,
+    validated_project_identity,
 )
 from .locking import project_mutation_guard
-from .protocol import (
-    CURRENT_PROTOCOL_VERSION,
-    compare_versions,
-    protocol_contract_metadata,
-    resolve_memory_dir,
-    resolve_project_root,
-)
+from .plans import digest_path
+from .protocol import resolve_memory_dir, resolve_project_root
 
 
 def run(args) -> int:
@@ -29,13 +26,7 @@ def run(args) -> int:
     manifest = memory_dir / "manifest.md"
     if not manifest.exists():
         raise ValueError("manifest.md is missing; the MemoryCustodian setup is incomplete or corrupted")
-    metadata = protocol_contract_metadata(manifest.read_text(encoding="utf-8"))
-    if compare_versions(
-        metadata.get("protocol_version", "0.5"),
-        CURRENT_PROTOCOL_VERSION,
-    ) != 0:
-        raise ValueError("Local overlay commands require Protocol 0.7.")
-    project_id = metadata["project_id"]
+    project_id = validated_project_identity(memory_dir)
     command = args.local_command
     if command == "status":
         render_overlay_status(inspect_overlay(project_root, project_id))
@@ -43,12 +34,53 @@ def run(args) -> int:
     if command == "reset":
         overlay = inspect_overlay(project_root, project_id)
         render_overlay_status(overlay)
-        seed = f"local-reset\0{project_id}\0{overlay.status.value}".encode("utf-8")
+        if overlay.status == LocalStatus.DISABLED:
+            print("No local overlay state exists for this project; nothing to reset.")
+            render_scope(ErasureScope(
+                active_memory=False,
+                managed_archive=False,
+                local_overlay="not-applicable",
+                git_worktree_modified="no",
+                git_history_modified=False,
+                distributed_copies_revoked=False,
+                history_check_status="not-requested",
+                topic_retained_in_new_records=False,
+            ))
+            return 0
+        dependency_paths = [
+            path for path in overlay.directory.rglob("*") if path.is_file()
+        ]
+        binding_path = overlay.directory.parent / "bindings.json"
+        if binding_path.is_file():
+            dependency_paths.append(binding_path)
+        dependencies = [
+            f"{path.relative_to(overlay.directory.parent).as_posix()}:{digest_path(path)}"
+            for path in sorted(set(dependency_paths))
+        ]
+        blockers = (
+            list(overlay.warnings)
+            if overlay.status in {LocalStatus.UNBOUND, LocalStatus.REVIEW}
+            else []
+        )
+        seed = "\0".join([
+            "local-reset",
+            project_id,
+            overlay.status.value,
+            *dependencies,
+            *(f"blocker:{item}" for item in blockers),
+        ]).encode("utf-8")
         print(f"Plan ID: {hashlib.sha256(seed).hexdigest()[:16]}")
+        print("Blockers:")
+        for blocker in blockers or ["none"]:
+            print(f"- {blocker}")
         render_scope(ErasureScope(
             active_memory=False,
             managed_archive=False,
-            local_overlay="current-machine-current-project-on-protocol-0.8-apply",
+            local_overlay=(
+                "blocked-pending-local-overlay-review"
+                if blockers
+                else "current-machine-current-project-on-protocol-0.8-apply"
+            ),
             git_worktree_modified="no",
             git_history_modified=False,
             distributed_copies_revoked=False,

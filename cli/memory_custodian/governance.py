@@ -13,7 +13,7 @@ from .plans import digest_text
 from .protocol import (
     CURRENT_PROTOCOL_VERSION,
     compare_versions,
-    protocol_contract_metadata,
+    manifest_contract_metadata,
     project_id_from_manifest,
     read_text,
     resolve_memory_dir,
@@ -42,7 +42,7 @@ def _project(args) -> GovernanceProject:
     project_root = resolve_project_root(args.project_root)
     memory_dir = resolve_memory_dir(project_root, args.memory_dir)
     manifest = read_text(memory_dir / "manifest.md")
-    metadata = protocol_contract_metadata(manifest)
+    metadata = manifest_contract_metadata(manifest)
     version = metadata["protocol_version"]
     comparison = compare_versions(version, CURRENT_PROTOCOL_VERSION)
     if comparison is None:

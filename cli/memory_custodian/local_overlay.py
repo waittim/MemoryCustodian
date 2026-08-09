@@ -16,7 +16,12 @@ from .locking import (
     validate_private_file,
     write_private_file,
 )
-from .protocol import project_id_from_manifest
+from .protocol import (
+    CURRENT_PROTOCOL_VERSION,
+    compare_versions,
+    manifest_contract_metadata,
+    project_id_from_manifest,
+)
 from .scanning import scan_text
 
 
@@ -186,6 +191,18 @@ def project_identity(memory_dir: Path) -> str:
     return project_id_from_manifest(
         (memory_dir / "manifest.md").read_text(encoding="utf-8"), required=False
     ) or ""
+
+
+def validated_project_identity(memory_dir: Path) -> str:
+    metadata = manifest_contract_metadata(
+        (memory_dir / "manifest.md").read_text(encoding="utf-8")
+    )
+    if compare_versions(
+        metadata.get("protocol_version", "0.5"),
+        CURRENT_PROTOCOL_VERSION,
+    ) != 0:
+        raise ValueError("Local overlay access requires Protocol 0.7.")
+    return metadata["project_id"]
 
 
 def add_local_preference(project_root: Path, project_id: str, message: str, evidence: tuple[str, ...]) -> str:

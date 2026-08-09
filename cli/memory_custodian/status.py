@@ -12,7 +12,7 @@ from .protocol import (
     count_inbox_items,
     estimate_tokens,
     long_decision_entries,
-    protocol_contract_metadata,
+    manifest_contract_metadata,
     protocol_metadata,
     resolve_memory_dir,
     resolve_project_root,
@@ -37,7 +37,7 @@ def run(args) -> int:
     manifest = manifest_path.read_text(encoding="utf-8") if manifest_path.exists() else ""
     protocol_error: str | None = None
     try:
-        metadata = protocol_contract_metadata(manifest, allow_missing_section=True)
+        metadata = manifest_contract_metadata(manifest, allow_missing_section=True)
     except ValueError as exc:
         metadata = protocol_metadata(manifest)
         protocol_error = str(exc)

@@ -14,6 +14,7 @@ from .protocol import (
     count_inbox_items,
     estimate_tokens,
     long_decision_entries,
+    manifest_contract_metadata,
     optional_index_paths,
     parse_manifest_task_file_specs,
     protocol_contract_metadata,
@@ -45,7 +46,7 @@ from .quality import (
     render_quality,
     routing_findings,
 )
-from .local_overlay import LocalStatus, inspect_overlay, project_identity
+from .local_overlay import LocalStatus, inspect_overlay, validated_project_identity
 
 
 def _read(path: Path) -> str:
@@ -85,13 +86,12 @@ def _manifest_mentions_required_policy(text: str) -> list[str]:
 
 def _check_protocol_metadata(text: str) -> list[str]:
     issues: list[str] = []
-    permissive = protocol_metadata(text)
-    if not permissive:
-        return ["manifest.md: missing MemoryCustodian Protocol metadata; run `memory-custodian migrate --apply`"]
     try:
-        metadata = protocol_contract_metadata(text)
+        metadata = protocol_contract_metadata(text, allow_missing_section=True)
     except ValueError as exc:
         return [f"manifest.md: invalid protocol metadata: {exc}"]
+    if not metadata:
+        return ["manifest.md: missing MemoryCustodian Protocol metadata; run `memory-custodian migrate --apply`"]
     version = metadata.get("protocol_version")
     if not version:
         return ["manifest.md: missing protocol_version; run `memory-custodian migrate --apply`"]
@@ -116,7 +116,7 @@ def _specialized_protocol_finding(memory_dir: Path) -> QualityFinding | None:
     if not manifest_path.exists():
         return QualityFinding("ERROR", "MC-ROUTING-007", "manifest.md is missing.")
     try:
-        protocol_contract_metadata(
+        manifest_contract_metadata(
             manifest_path.read_text(encoding="utf-8"),
             allow_missing_section=True,
         )
@@ -131,11 +131,14 @@ def run(args) -> int:
     if not memory_dir.exists():
         print(f"Memory directory missing: {memory_dir}")
         return 1
-    specialized_protocol = _specialized_protocol_finding(memory_dir)
     if getattr(args, "conflicts", False):
+        specialized_protocol = _specialized_protocol_finding(memory_dir)
         if specialized_protocol:
             print("Conflict status: INVALID")
-            print(f"{specialized_protocol.code}: {specialized_protocol.message}")
+            print(
+                f"{specialized_protocol.code} {specialized_protocol.severity}: "
+                f"{specialized_protocol.message}"
+            )
             return 1
         result = analyze_conflicts(memory_dir)
         render_conflict_result(result)
@@ -149,12 +152,8 @@ def run(args) -> int:
     if getattr(args, "routing", False):
         return render_quality("routing check", routing_findings(memory_dir))
     if getattr(args, "reachability", False):
-        if specialized_protocol:
-            return render_quality("reachability check", (specialized_protocol,))
         return render_quality("reachability check", reachability_findings(memory_dir))
     if getattr(args, "freshness", False):
-        if specialized_protocol:
-            return render_quality("freshness check", (specialized_protocol,))
         return render_quality("freshness check", freshness_findings(project_root, memory_dir))
     issues: list[str] = []
     warnings: list[str] = []
@@ -343,11 +342,19 @@ def run(args) -> int:
                 "shorten it semantically and move supporting detail outside the decision entry"
             )
 
-    overlay = inspect_overlay(project_root, project_identity(memory_dir))
+    try:
+        overlay_project_id = validated_project_identity(memory_dir)
+    except (OSError, ValueError):
+        overlay_project_id = None
+    overlay = (
+        inspect_overlay(project_root, overlay_project_id)
+        if overlay_project_id is not None
+        else None
+    )
     local_paths: set[Path] = set()
-    if overlay.status == LocalStatus.REVIEW:
+    if overlay is not None and overlay.status == LocalStatus.REVIEW:
         warnings.extend(f"local overlay: {warning}" for warning in overlay.warnings)
-    if overlay.status in {LocalStatus.BOUND, LocalStatus.REVIEW}:
+    if overlay is not None and overlay.status in {LocalStatus.BOUND, LocalStatus.REVIEW}:
         for path in overlay.modules:
             local_paths.add(path)
             text = _read(path)

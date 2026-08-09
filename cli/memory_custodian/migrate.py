@@ -21,14 +21,16 @@ from .protocol import (
     CURRENT_PROTOCOL_VERSION,
     changelog_text,
     compare_versions,
+    manifest_with_complete_task_routing,
     manifest_with_current_protocol_metadata,
     manifest_with_current_task_routing,
+    manifest_contract_metadata,
     manifest_with_optional_index,
     manifest_with_protocol_07_optional_routes,
     optional_index_paths,
-    protocol_contract_metadata,
     protocol_metadata,
     strict_protocol_metadata,
+    valid_project_id,
     resolve_memory_dir,
     resolve_project_root,
     today,
@@ -123,30 +125,13 @@ def _migration_entry_seed(
     return pending_entry_suffixes("migrate-entries", project_root, source_sha, keys)
 
 
-def _build_plan(project_root: Path, memory_dir: Path) -> tuple[MutationPlan, list[str], tuple[Path, ...]]:
-    manifest_path = memory_dir / "manifest.md"
-    original = manifest_path.read_text(encoding="utf-8")
-    strict_protocol_metadata(original, allow_missing_section=True)
+def _upgraded_manifest(
+    original: str,
+    project_id: str,
+) -> tuple[str, bool, bool, bool, int]:
+    """Build and validate the complete migration candidate without local state."""
+
     metadata = protocol_metadata(original)
-    version = metadata.get("protocol_version")
-    if version:
-        comparison = compare_versions(version, CURRENT_PROTOCOL_VERSION)
-        if comparison is None:
-            raise ValueError(f"Invalid protocol version {version!r}; review manifest.md manually.")
-        if comparison > 0:
-            raise ValueError(
-                f"Project protocol {version} is newer than this CLI supports ({CURRENT_PROTOCOL_VERSION})."
-            )
-    seed_path: Path | None = None
-    project_id = metadata.get("project_id")
-    if not project_id:
-        project_id, seed_path = pending_project_id(
-            "migrate",
-            project_root,
-            digest_text(original),
-        )
-    suffixes, entry_seed_path = _migration_entry_seed(project_root, memory_dir, original)
-    # Supply the stable preview seed through metadata; the protocol helper preserves it.
     seeded = original
     if "project_id" not in metadata:
         marker = "## MemoryCustodian Protocol"
@@ -164,11 +149,60 @@ def _build_plan(project_root: Path, memory_dir: Path) -> tuple[MutationPlan, lis
                 "",
             ]
             seeded = "\n".join(lines).rstrip() + "\n"
-    routed, optional_routes_changed, legacy_optional_count = manifest_with_protocol_07_optional_routes(seeded)
+    routed, optional_routes_changed, legacy_optional_count = (
+        manifest_with_protocol_07_optional_routes(seeded)
+    )
     updated, metadata_changed = manifest_with_current_protocol_metadata(routed)
     updated, routing_changed = manifest_with_current_task_routing(updated)
+    updated, missing_routes_changed = manifest_with_complete_task_routing(updated)
+    routing_changed = routing_changed or missing_routes_changed
     updated, index_changed = manifest_with_optional_index(updated)
-    protocol_contract_metadata(updated)
+    manifest_contract_metadata(updated)
+    return (
+        updated,
+        metadata_changed,
+        routing_changed,
+        index_changed,
+        legacy_optional_count if optional_routes_changed else 0,
+    )
+
+
+def _build_plan(project_root: Path, memory_dir: Path) -> tuple[MutationPlan, list[str], tuple[Path, ...]]:
+    manifest_path = memory_dir / "manifest.md"
+    original = manifest_path.read_text(encoding="utf-8")
+    strict_protocol_metadata(original, allow_missing_section=True)
+    metadata = protocol_metadata(original)
+    version = metadata.get("protocol_version")
+    if version:
+        comparison = compare_versions(version, CURRENT_PROTOCOL_VERSION)
+        if comparison is None:
+            raise ValueError(f"Invalid protocol version {version!r}; review manifest.md manually.")
+        if comparison > 0:
+            raise ValueError(
+                f"Project protocol {version} is newer than this CLI supports ({CURRENT_PROTOCOL_VERSION})."
+            )
+    seed_path: Path | None = None
+    project_id = metadata.get("project_id")
+    if project_id and not valid_project_id(project_id):
+        raise ValueError(
+            f"Invalid project_id {project_id!r}; review manifest.md manually."
+        )
+    provisional_project_id = project_id or "00000000-0000-4000-8000-000000000000"
+    _upgraded_manifest(original, provisional_project_id)
+    if not project_id:
+        project_id, seed_path = pending_project_id(
+            "migrate",
+            project_root,
+            digest_text(original),
+        )
+    suffixes, entry_seed_path = _migration_entry_seed(project_root, memory_dir, original)
+    (
+        updated,
+        metadata_changed,
+        routing_changed,
+        index_changed,
+        legacy_optional_count,
+    ) = _upgraded_manifest(original, project_id)
     mutations: list[TextMutation] = []
     changes: list[str] = []
     if updated != original:
@@ -176,10 +210,10 @@ def _build_plan(project_root: Path, memory_dir: Path) -> tuple[MutationPlan, lis
     if metadata_changed or updated != original:
         changes.append("manifest.md: upgrade protocol metadata to 0.7 and preserve/generate project_id")
     if routing_changed:
-        changes.append("manifest.md: load decisions.md for implementation, execution, and debugging")
+        changes.append("manifest.md: complete canonical task routing for Protocol 0.7")
     if index_changed:
         changes.append("manifest.md: add optional module index")
-    if optional_routes_changed and legacy_optional_count:
+    if legacy_optional_count:
         changes.append("manifest.md: preserve legacy optional descriptions with explicit-only activation")
 
     subjects_path = memory_dir / "subjects.md"

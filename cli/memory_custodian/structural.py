@@ -46,6 +46,34 @@ def active_structural_operand_issues(
     return tuple(issues)
 
 
+def candidate_structural_operand_issues(
+    entry: StructuredEntry,
+    subjects: dict[str, tuple[Subject, ...]],
+) -> tuple[StructuralOperandIssue, ...]:
+    """Validate the provisional structural identity used by promotion preview."""
+
+    issues: list[StructuralOperandIssue] = []
+    if entry.status != "candidate":
+        issues.append(StructuralOperandIssue("Status", "Entry must be a candidate."))
+    if VALID_SCOPES_RE.fullmatch(entry.scope) is None:
+        issues.append(StructuralOperandIssue("Scope", f"Invalid Scope {entry.scope!r}."))
+
+    subject_id = entry.fields.get("Provisional-Subject", "")
+    matches = subjects.get(subject_id.casefold(), ()) if subject_id else ()
+    if len(matches) != 1 or matches[0].status != "active":
+        issues.append(StructuralOperandIssue(
+            "Provisional-Subject",
+            "Provisional Subject must resolve exactly once to an active registry entry.",
+        ))
+
+    facet = entry.fields.get("Provisional-Facet", "")
+    if facet not in FACETS:
+        issues.append(StructuralOperandIssue(
+            "Provisional-Facet", f"Invalid provisional Facet {facet!r}."
+        ))
+    return tuple(issues)
+
+
 def structural_identity(entry: StructuredEntry) -> tuple[str, str, str]:
     return (
         entry.scope.casefold(),

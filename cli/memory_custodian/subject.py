@@ -5,7 +5,12 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
-from .entries import parse_structured_entries, validate_evidence
+from .entries import (
+    parse_structured_entries,
+    structured_entry_schema_issues,
+    structured_entry_storage_issues,
+    validate_evidence,
+)
 from .locking import (
     create_private_file,
     discard_private_file,
@@ -16,14 +21,15 @@ from .mutations import TextMutation, apply_mutations
 from .plans import (
     MutationPlan,
     digest_path,
+    digest_text,
     pending_plan_directory,
     print_plan,
 )
 from .protocol import (
     CURRENT_PROTOCOL_VERSION,
     compare_versions,
+    manifest_contract_metadata,
     prepended_text,
-    protocol_contract_metadata,
     resolve_memory_dir,
     resolve_project_root,
 )
@@ -37,6 +43,11 @@ from .subjects import (
     render_subject,
     subject_indexes,
     validate_subject_kind,
+)
+from .structural import (
+    active_structural_operand_issues,
+    candidate_structural_operand_issues,
+    subject_index as structural_subject_index,
 )
 
 
@@ -54,7 +65,7 @@ def _project(args) -> tuple[Path, Path, str]:
     if not manifest.exists():
         raise ValueError("manifest.md is missing; Subject operations require Protocol 0.7 metadata.")
     manifest_text = manifest.read_text(encoding="utf-8")
-    metadata = protocol_contract_metadata(manifest_text)
+    metadata = manifest_contract_metadata(manifest_text)
     comparison = compare_versions(
         metadata.get("protocol_version", "0.5"),
         CURRENT_PROTOCOL_VERSION,
@@ -155,7 +166,7 @@ def _apply_preview(
             )
         if (
             compare_versions(
-                protocol_contract_metadata(guard.manifest_text or "").get(
+                manifest_contract_metadata(guard.manifest_text or "").get(
                     "protocol_version",
                     "0.5",
                 ),
@@ -396,25 +407,63 @@ def _merge(args) -> int:
     current: list[str] = []
     historical: list[str] = []
     resulting: dict[tuple[str, str], list[str]] = {}
+    blockers: list[str] = []
+    entry_dependencies: set[str] = set()
+    structural_subjects = structural_subject_index(subjects)
     for entry in canonical_entries(memory_dir, include_archive=True):
         reference = entry.fields.get("Subject") or entry.fields.get("Provisional-Subject")
         if not reference or reference.casefold() != source.subject_id.casefold():
             continue
         relative = entry.path.relative_to(memory_dir).as_posix()
         item = f"{entry.entry_id} ({relative}; {entry.status})"
+        entry_dependencies.add(
+            f"{relative}:{entry.entry_id}:{digest_text(entry.text)}"
+        )
         if entry.status in {"active", "candidate"} and not relative.startswith("archive/"):
             current.append(item)
+            entry_issues = [
+                *structured_entry_schema_issues(entry, relative),
+                *structured_entry_storage_issues(entry, relative),
+            ]
+            structural_issues = (
+                active_structural_operand_issues(entry, structural_subjects)
+                if entry.status == "active"
+                else candidate_structural_operand_issues(entry, structural_subjects)
+            )
+            entry_issues.extend(
+                f"{issue.field}: {issue.message}" for issue in structural_issues
+            )
+            blockers.extend(
+                f"{entry.entry_id}: {issue}" for issue in entry_issues
+            )
             if entry.status == "active":
                 resulting.setdefault((entry.scope, entry.fields.get("Facet", "")), []).append(entry.entry_id)
         else:
             historical.append(item)
     for entry in canonical_entries(memory_dir):
         if entry.status == "active" and entry.fields.get("Subject", "").casefold() == target.subject_id.casefold():
+            relative = entry.path.relative_to(memory_dir).as_posix()
+            entry_dependencies.add(
+                f"{relative}:{entry.entry_id}:{digest_text(entry.text)}"
+            )
+            entry_issues = [
+                *structured_entry_schema_issues(entry, relative),
+                *structured_entry_storage_issues(entry, relative),
+                *(
+                    f"{issue.field}: {issue.message}"
+                    for issue in active_structural_operand_issues(
+                        entry, structural_subjects,
+                    )
+                ),
+            ]
+            blockers.extend(
+                f"{entry.entry_id}: {issue}" for issue in entry_issues
+            )
             resulting.setdefault((entry.scope, entry.fields.get("Facet", "")), []).append(entry.entry_id)
-    blockers = [
+    blockers.extend(
         f"Resulting structural identity {scope}+{target.subject_id}+{facet} has owners: {', '.join(ids)}"
         for (scope, facet), ids in sorted(resulting.items()) if len(ids) > 1
-    ]
+    )
     reviews: list[str] = []
     if source.canonical_ref and target.canonical_ref and source.canonical_ref != target.canonical_ref:
         reviews.append("Source and target have different Canonical-Ref values; reviewer must choose target identity.")
@@ -424,7 +473,17 @@ def _merge(args) -> int:
         reviews.append("Source and target share an exact normalized alias.")
     seed = (
         f"subject-merge\0{project_id}\0{source.subject_id}\0{target.subject_id}\0"
-        + "\0".join(sorted(current + historical + blockers))
+        + "\0".join(sorted([
+            f"manifest:{digest_path(memory_dir / 'manifest.md')}",
+            f"registry:{digest_path(memory_dir / 'subjects.md')}",
+            f"source:{digest_text(source.text)}",
+            f"target:{digest_text(target.text)}",
+            *(f"entry:{item}" for item in entry_dependencies),
+            *(f"current:{item}" for item in current),
+            *(f"historical:{item}" for item in historical),
+            *(f"review:{item}" for item in reviews),
+            *(f"blocker:{item}" for item in blockers),
+        ]))
     ).encode("utf-8")
     print("Subject merge preview:")
     print(f"Source: {source.subject_id} — {source.title}")

@@ -7,6 +7,7 @@ from io import StringIO
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -14,7 +15,7 @@ import unittest
 from unittest.mock import patch
 
 from memory_custodian.conflicts import analyze_conflicts
-from memory_custodian.entries import render_active_entry
+from memory_custodian.entries import render_active_entry, render_candidate_entry
 from memory_custodian.main import main
 
 
@@ -59,7 +60,339 @@ def subject_unit(subject_id: str, title: str, canonical_ref: str = "") -> str:
 
 
 class RoutingAndQualityReleaseTests(unittest.TestCase):
+    def test_routing_contract_gates_writers_recovery_and_focused_checks(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as state:
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            memory = Path(tmp) / "docs/memory"
+            manifest = memory / "manifest.md"
+            unsafe = manifest.read_text(encoding="utf-8").replace(
+                "- brief.md\n- constraints.md",
+                "- ../outside.md\n- constraints.md",
+                1,
+            )
+            manifest.write_text(unsafe, encoding="utf-8")
+
+            for command in (
+                ("enable", "preferences"),
+                ("init", "--repair"),
+            ):
+                code, output, error = capture([
+                    *command, "--project-root", tmp,
+                ])
+                self.assertEqual(code, 2, output + error)
+                self.assertIn("unsafe or malformed memory path", error)
+                self.assertEqual(manifest.read_text(encoding="utf-8"), unsafe)
+            self.assertFalse((memory / "preferences.md").exists())
+
+            code, output, _error = capture([
+                "check", "--reachability", "--project-root", tmp,
+            ])
+            self.assertEqual(code, 1)
+            self.assertIn("MC-ROUTING-007 ERROR", output)
+            self.assertIn("unsafe or malformed memory path", output)
+
+            legacy = unsafe.replace(
+                "- protocol_version: 0.7", "- protocol_version: 0.6", 1,
+            )
+            manifest.write_text(legacy, encoding="utf-8")
+            (memory / "decisions.md").write_text(
+                "# Decisions\n\n## Legacy decision\nDecision:\nKeep legacy.\n",
+                encoding="utf-8",
+            )
+            with patch.dict(os.environ, {"XDG_STATE_HOME": state}):
+                code, output, error = capture(["migrate", "--project-root", tmp])
+            self.assertEqual(code, 2)
+            self.assertNotIn("Plan ID:", output)
+            self.assertIn("unsafe or malformed memory path", error)
+            self.assertEqual(tuple(Path(state).rglob("*")), ())
+
+    def test_protocol_heading_scan_respects_markdown_code(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            manifest = Path(tmp) / "docs/memory/manifest.md"
+            original = manifest.read_text(encoding="utf-8")
+            manifest.write_text(
+                original.replace(
+                    "## MemoryCustodian Protocol",
+                    "    ## MemoryCustodian Protocol",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            for command in (
+                ("read", "--task", "implementation", "--strict-routing", "--names-only"),
+                ("check", "--routing"),
+                ("local", "status"),
+            ):
+                code, output, error = capture([
+                    *command, "--project-root", tmp,
+                ])
+                self.assertNotEqual(code, 0, output + error)
+
+            manifest.write_text(
+                original.rstrip()
+                + "\n\n```markdown\n## MemoryCustodian Protocol\n"
+                + "- protocol_version: 0.6\n```\n",
+                encoding="utf-8",
+            )
+            read_code, read_output, read_error = capture([
+                "read", "--task", "implementation", "--strict-routing",
+                "--names-only", "--project-root", tmp,
+            ])
+            self.assertEqual(read_code, 0, read_output + read_error)
+            self.assertIn("Routing completeness: COMPLETE", read_output)
+            check_code, check_output, check_error = capture([
+                "check", "--routing", "--project-root", tmp,
+            ])
+            self.assertEqual(check_code, 0, check_output + check_error)
+
+    def test_invalid_manifest_cannot_select_bound_local_overlay(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as state:
+            with patch.dict(os.environ, {"XDG_STATE_HOME": state}):
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["init", "--project-root", tmp]), 0)
+                    self.assertEqual(main(["local", "enable", "--project-root", tmp]), 0)
+                    self.assertEqual(main(["local", "link", "--project-root", tmp]), 0)
+                code, added, error = capture([
+                    "local", "add", "Private local preference.",
+                    "--type", "preference", "--evidence", "user-confirmed",
+                    "--project-root", tmp,
+                ])
+                self.assertEqual(code, 0, error)
+                entry_id = re.search(r"MC-PREF-\d{8}-[0-9a-f]{8}", added).group(0)
+                manifest = Path(tmp) / "docs/memory/manifest.md"
+                manifest.write_text(
+                    manifest.read_text(encoding="utf-8").rstrip()
+                    + "\n\n## MemoryCustodian Protocol\n- protocol_version: 0.6\n",
+                    encoding="utf-8",
+                )
+
+                for command in (
+                    ("list", "--local"),
+                    ("show", entry_id, "--local"),
+                ):
+                    command_code, output, command_error = capture([
+                        *command, "--project-root", tmp,
+                    ])
+                    self.assertEqual(command_code, 2, output + command_error)
+                    self.assertNotIn("Private local preference.", output)
+
+                project_id = re.search(
+                    r"(?m)^- project_id: (\S+)",
+                    manifest.read_text(encoding="utf-8"),
+                ).group(1)
+                local_preferences = (
+                    Path(state) / "memory-custodian/projects" / project_id
+                    / "local/preferences.md"
+                )
+                local_preferences.write_text(
+                    local_preferences.read_text(encoding="utf-8")
+                    + "\nprivate@example.com\n",
+                    encoding="utf-8",
+                )
+                check_code, check_output, _check_error = capture([
+                    "check", "--privacy", "--project-root", tmp,
+                ])
+                self.assertEqual(check_code, 1)
+                self.assertNotIn("local/preferences.md", check_output)
+
+    def test_promotion_validates_operand_and_binds_candidate_text(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            memory = Path(tmp) / "docs/memory"
+            subject_id = "MC-SUBJ-20260808-11111111"
+            candidate_id = "MC-INBOX-20260808-11111111"
+            (memory / "subjects.md").write_text(
+                "# Subject Registry\n\n" + subject_unit(subject_id, "Promotion"),
+                encoding="utf-8",
+            )
+            candidate = render_candidate_entry(
+                candidate_id, "Invalid candidate", "decision", "First body.",
+                "project", ("user-confirmed",), None,
+                subject=subject_id, facet="invalid-facet",
+            )
+            inbox = memory / "inbox.md"
+            inbox.write_text("# Memory Inbox\n\n" + candidate + "\n", encoding="utf-8")
+            command = [
+                "promote", candidate_id, "--type", "decision",
+                "--evidence", "user-confirmed", "--project-root", tmp,
+            ]
+            code, first, error = capture(command)
+            self.assertEqual(code, 0, error)
+            self.assertIn("Invalid provisional Facet 'invalid-facet'", first)
+            self.assertNotIn("Blockers:\n- none", first)
+            first_plan = re.search(r"Plan ID: ([0-9a-f]{16})", first).group(1)
+            inbox.write_text(
+                inbox.read_text(encoding="utf-8").replace(
+                    "Statement:\nFirst body.", "Statement:\nChanged body.",
+                ),
+                encoding="utf-8",
+            )
+            _code, second, _error = capture(command)
+            second_plan = re.search(r"Plan ID: ([0-9a-f]{16})", second).group(1)
+            self.assertNotEqual(first_plan, second_plan)
+
+    def test_subject_merge_validates_entries_and_binds_registry_and_entry_text(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            memory = Path(tmp) / "docs/memory"
+            source_id = "MC-SUBJ-20260808-11111111"
+            target_id = "MC-SUBJ-20260808-22222222"
+            entry_id = "MC-DEC-20260808-11111111"
+            subjects = memory / "subjects.md"
+            subjects.write_text(
+                "# Subject Registry\n\n"
+                + subject_unit(source_id, "Source subject")
+                + "\n" + subject_unit(target_id, "Target subject"),
+                encoding="utf-8",
+            )
+            entry = render_active_entry(
+                "decision", entry_id, "Invalid source entry", "Body.", None,
+                "project", ("user-confirmed",), subject=source_id,
+                facet="invalid-facet",
+            )
+            decisions = memory / "decisions.md"
+            decisions.write_text("# Decisions\n\n" + entry + "\n", encoding="utf-8")
+            command = [
+                "subject", "merge", source_id, "--into", target_id,
+                "--project-root", tmp,
+            ]
+            code, first, error = capture(command)
+            self.assertEqual(code, 0, error)
+            self.assertIn("Invalid Facet 'invalid-facet'", first)
+            first_plan = re.search(r"Plan ID: ([0-9a-f]{16})", first).group(1)
+
+            subjects.write_text(
+                subjects.read_text(encoding="utf-8").replace(
+                    "Target subject", "Renamed target",
+                ),
+                encoding="utf-8",
+            )
+            _code, renamed, _error = capture(command)
+            renamed_plan = re.search(r"Plan ID: ([0-9a-f]{16})", renamed).group(1)
+            self.assertNotEqual(first_plan, renamed_plan)
+
+            decisions.write_text(
+                decisions.read_text(encoding="utf-8").replace(
+                    "Facet: invalid-facet", "Facet: behavior",
+                ),
+                encoding="utf-8",
+            )
+            _code, repaired, _error = capture(command)
+            repaired_plan = re.search(r"Plan ID: ([0-9a-f]{16})", repaired).group(1)
+            self.assertNotEqual(renamed_plan, repaired_plan)
+
+    def test_local_reset_state_semantics_and_dependencies(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as second, tempfile.TemporaryDirectory() as state:
+            with patch.dict(os.environ, {"XDG_STATE_HOME": state}):
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["init", "--project-root", tmp]), 0)
+                code, disabled, error = capture([
+                    "local", "reset", "--project-root", tmp,
+                ])
+                self.assertEqual(code, 0, error)
+                self.assertNotIn("Plan ID:", disabled)
+                self.assertIn("nothing to reset", disabled)
+                self.assertIn("Local overlay: not-applicable", disabled)
+
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["local", "enable", "--project-root", tmp]), 0)
+                _code, unbound, _error = capture([
+                    "local", "reset", "--project-root", tmp,
+                ])
+                self.assertIn("Blockers:", unbound)
+                self.assertNotIn("Blockers:\n- none", unbound)
+                self.assertIn("blocked-pending-local-overlay-review", unbound)
+
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["local", "link", "--project-root", tmp]), 0)
+                    self.assertEqual(main([
+                        "local", "add", "First reset dependency.",
+                        "--type", "preference", "--evidence", "user-confirmed",
+                        "--project-root", tmp,
+                    ]), 0)
+                _code, bound, _error = capture([
+                    "local", "reset", "--project-root", tmp,
+                ])
+                self.assertIn("Blockers:\n- none", bound)
+                bound_plan = re.search(r"Plan ID: ([0-9a-f]{16})", bound).group(1)
+
+                project_id = re.search(
+                    r"(?m)^- project_id: (\S+)",
+                    (Path(tmp) / "docs/memory/manifest.md").read_text(encoding="utf-8"),
+                ).group(1)
+                local_preferences = (
+                    Path(state) / "memory-custodian/projects" / project_id
+                    / "local/preferences.md"
+                )
+                local_preferences.write_text(
+                    local_preferences.read_text(encoding="utf-8")
+                    + "\nChanged reset dependency.\n",
+                    encoding="utf-8",
+                )
+                _code, changed, _error = capture([
+                    "local", "reset", "--project-root", tmp,
+                ])
+                changed_plan = re.search(r"Plan ID: ([0-9a-f]{16})", changed).group(1)
+                self.assertNotEqual(bound_plan, changed_plan)
+
+                shutil.copytree(Path(tmp) / "docs", Path(second) / "docs")
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["local", "link", "--project-root", second]), 0)
+                _code, review, _error = capture([
+                    "local", "reset", "--project-root", tmp,
+                ])
+                self.assertIn("Local overlay status: REVIEW", review)
+                self.assertNotIn("Blockers:\n- none", review)
+
+    def test_semantic_migrate_failure_creates_no_pending_seed(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as state:
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            memory = Path(tmp) / "docs/memory"
+            manifest = memory / "manifest.md"
+            invalid = re.sub(
+                r"(?m)^- project_id:.*$", "- project_id: invalid",
+                manifest.read_text(encoding="utf-8"),
+            ).replace("- protocol_version: 0.7", "- protocol_version: 0.6", 1)
+            manifest.write_text(invalid, encoding="utf-8")
+            (memory / "decisions.md").write_text(
+                "# Decisions\n\n## Legacy\nDecision:\nNeeds an ID.\n",
+                encoding="utf-8",
+            )
+            with patch.dict(os.environ, {"XDG_STATE_HOME": state}):
+                code, output, error = capture(["migrate", "--project-root", tmp])
+            self.assertEqual(code, 2)
+            self.assertNotIn("Plan ID:", output)
+            self.assertIn("Invalid project_id", error)
+            self.assertEqual(tuple(Path(state).rglob("*")), ())
+
+    def test_plain_check_classifies_malformed_only_heading_as_invalid(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            manifest = Path(tmp) / "docs/memory/manifest.md"
+            manifest.write_text(
+                manifest.read_text(encoding="utf-8").replace(
+                    "## MemoryCustodian Protocol",
+                    "### MemoryCustodian Protocol",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            code, output, _error = capture(["check", "--project-root", tmp])
+            self.assertEqual(code, 1)
+            self.assertIn("invalid protocol metadata", output)
+            self.assertNotIn("missing MemoryCustodian Protocol metadata", output)
+
     def test_invalid_protocol_contract_is_rejected_across_public_entrypoints(self):
+        subject_id = "MC-SUBJ-20260801-11111111"
+        active_id = "MC-DEC-20260801-11111111"
+        candidate_id = "MC-INBOX-20260801-11111111"
         states = (
             (
                 "duplicate-heading",
@@ -92,8 +425,8 @@ class RoutingAndQualityReleaseTests(unittest.TestCase):
                 (
                     "add", "replacement", "--type", "decision",
                     "--evidence", "user-confirmed",
-                    "--supersedes", "MC-DEC-20260801-11111111",
-                    "--subject", "MC-SUBJ-20260801-11111111",
+                    "--supersedes", active_id,
+                    "--subject", subject_id,
                     "--facet", "architecture",
                 ),
                 2,
@@ -101,14 +434,14 @@ class RoutingAndQualityReleaseTests(unittest.TestCase):
             ("forget", ("forget", "obsolete"), 2),
             (
                 "forget-id",
-                ("forget", "--id", "MC-DEC-20260801-11111111"),
+                ("forget", "--id", active_id),
                 2,
             ),
             ("compact", ("compact",), 2),
             (
                 "promote",
                 (
-                    "promote", "MC-INBOX-20260801-11111111",
+                    "promote", candidate_id,
                     "--type", "decision", "--evidence", "user-confirmed",
                 ),
                 2,
@@ -125,7 +458,29 @@ class RoutingAndQualityReleaseTests(unittest.TestCase):
             with self.subTest(state=state_name), tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as state:
                 with redirect_stdout(StringIO()):
                     self.assertEqual(main(["init", "--project-root", tmp]), 0)
-                manifest = Path(tmp) / "docs/memory/manifest.md"
+                memory = Path(tmp) / "docs/memory"
+                (memory / "subjects.md").write_text(
+                    "# Subject Registry\n\n"
+                    + subject_unit(subject_id, "Matrix subject"),
+                    encoding="utf-8",
+                )
+                active = render_active_entry(
+                    "decision", active_id, "Existing decision", "Existing.", None,
+                    "project", ("user-confirmed",), subject=subject_id,
+                    facet="architecture",
+                )
+                (memory / "decisions.md").write_text(
+                    "# Decisions\n\n" + active + "\n", encoding="utf-8",
+                )
+                candidate = render_candidate_entry(
+                    candidate_id, "Candidate", "decision", "Candidate body.",
+                    "project", ("user-confirmed",), None,
+                    subject=subject_id, facet="behavior",
+                )
+                (memory / "inbox.md").write_text(
+                    "# Memory Inbox\n\n" + candidate + "\n", encoding="utf-8",
+                )
+                manifest = memory / "manifest.md"
                 invalid = mutate(manifest.read_text(encoding="utf-8"))
                 manifest.write_text(invalid, encoding="utf-8")
 

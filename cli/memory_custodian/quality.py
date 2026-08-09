@@ -8,6 +8,7 @@ import subprocess
 
 from .conflicts import analyze_conflicts, canonical_entries
 from .protocol import (
+    manifest_contract_metadata,
     parse_manifest_task_file_specs,
     protocol_metadata,
     protocol_contract_metadata,
@@ -72,7 +73,14 @@ def routing_findings(memory_dir: Path) -> tuple[QualityFinding, ...]:
 
 def reachability_findings(memory_dir: Path) -> tuple[QualityFinding, ...]:
     manifest = (memory_dir / "manifest.md").read_text(encoding="utf-8")
-    version = protocol_metadata(manifest).get("protocol_version", "0.5")
+    try:
+        metadata = manifest_contract_metadata(
+            manifest,
+            allow_missing_section=True,
+        )
+    except ValueError as exc:
+        return (QualityFinding("ERROR", "MC-ROUTING-007", str(exc)),)
+    version = metadata.get("protocol_version", "0.5")
     declarations = parse_optional_module_index(manifest, legacy_compatible=version != "0.7")
     reachable: set[str] = set()
     for task in CANONICAL_TASKS:
@@ -116,6 +124,16 @@ def _head_revision(project_root: Path) -> str | None:
 
 
 def freshness_findings(project_root: Path, memory_dir: Path) -> tuple[QualityFinding, ...]:
+    manifest_path = memory_dir / "manifest.md"
+    if not manifest_path.exists():
+        return (QualityFinding("ERROR", "MC-ROUTING-007", "manifest.md is missing."),)
+    try:
+        manifest_contract_metadata(
+            manifest_path.read_text(encoding="utf-8"),
+            allow_missing_section=True,
+        )
+    except ValueError as exc:
+        return (QualityFinding("ERROR", "MC-ROUTING-007", str(exc)),)
     findings: list[QualityFinding] = []
     head = _head_revision(project_root)
     saw_revision = False

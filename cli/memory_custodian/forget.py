@@ -27,13 +27,13 @@ from .protocol import (
     compare_versions,
     ensure_newline,
     iter_markdown_files,
+    manifest_contract_metadata,
     optional_index_paths,
     parse_markdown_units,
     read_text,
     render_markdown_document,
     resolve_memory_dir,
     resolve_project_root,
-    protocol_contract_metadata,
     today,
 )
 from .subjects import SUBJECT_ID_RE
@@ -465,7 +465,7 @@ def run(args) -> int:
     if not (memory_dir / "do-not-use.md").exists():
         raise ValueError("do-not-use.md is missing; forgetting cannot safely record removal guards")
     manifest_text = read_text(memory_dir / "manifest.md")
-    metadata = protocol_contract_metadata(
+    metadata = manifest_contract_metadata(
         manifest_text,
         allow_missing_section=True,
     )
@@ -655,7 +655,7 @@ def run(args) -> int:
         break_stale=args.break_stale_lock,
         allow_legacy=True,
     ) as guard:
-        current_metadata = protocol_contract_metadata(
+        current_metadata = manifest_contract_metadata(
             guard.manifest_text or "",
             allow_missing_section=True,
         )

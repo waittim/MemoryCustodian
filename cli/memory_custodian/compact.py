@@ -25,7 +25,7 @@ from .entries import parse_structured_entries
 from .protocol import (
     CURRENT_PROTOCOL_VERSION,
     compare_versions,
-    protocol_contract_metadata,
+    manifest_contract_metadata,
 )
 
 ARCHIVABLE_H2_TARGETS = {"decisions.md", "changelog.md"}
@@ -43,7 +43,7 @@ def _compact_plan(
     mutations: list[TextMutation],
 ) -> MutationPlan:
     manifest = (memory_dir / "manifest.md").read_text(encoding="utf-8")
-    metadata = protocol_contract_metadata(
+    metadata = manifest_contract_metadata(
         manifest,
         allow_missing_section=True,
     )
@@ -579,7 +579,7 @@ def run(args) -> int:
         raise FileNotFoundError(f"Memory directory not found: {memory_dir}")
     if not (memory_dir / "manifest.md").exists():
         raise ValueError("manifest.md is missing; the MemoryCustodian setup is incomplete or corrupted")
-    protocol_contract_metadata(
+    manifest_contract_metadata(
         (memory_dir / "manifest.md").read_text(encoding="utf-8"),
         allow_missing_section=True,
     )

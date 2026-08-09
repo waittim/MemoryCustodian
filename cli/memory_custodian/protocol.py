@@ -109,6 +109,36 @@ Load if present:
 - preferences.md
 """
 
+DEFAULT_TASK_ROUTE_SECTIONS = {
+    "planning": """### Planning / architecture / refactoring
+Load:
+- decisions.md
+- do-not-use.md
+""",
+    "implementation": CURRENT_IMPLEMENTATION_SECTION,
+    "artifact": """### User-facing artifact / output
+Load:
+- do-not-use.md
+""",
+    "preferences": """### Preferences
+Load if present:
+- preferences.md
+""",
+    "history": """### Change history / recap
+Load:
+- decisions.md
+Load if present:
+- changelog.md
+""",
+    "maintenance": """### Memory maintenance
+Load:
+- inbox.md
+- do-not-use.md
+Load if present:
+- changelog.md
+""",
+}
+
 DEFAULT_OPTIONAL_TRIGGERS = {
     "rules/output.md": "Load for user-facing artifacts, publishable text, or copied output.",
     "rules/code-style.md": "Load when writing, reviewing, or refactoring code style.",
@@ -296,6 +326,48 @@ def protocol_metadata(manifest: str) -> dict[str, str]:
     return metadata
 
 
+def _markdown_lines_outside_fences(
+    manifest: str,
+) -> list[tuple[int, str, bool]]:
+    """Return non-fenced lines with CommonMark code-indentation classification."""
+
+    visible: list[tuple[int, str, bool]] = []
+    fence_character: str | None = None
+    fence_length = 0
+    for index, raw in enumerate(manifest.splitlines()):
+        leading_spaces = len(raw) - len(raw.lstrip(" "))
+        candidate = raw[leading_spaces:] if leading_spaces <= 3 else raw
+        if fence_character is not None:
+            closing = re.fullmatch(
+                rf" {{0,3}}{re.escape(fence_character)}{{{fence_length},}}[ \t]*",
+                raw,
+            )
+            if closing:
+                fence_character = None
+                fence_length = 0
+            continue
+        opening = re.match(r"^ {0,3}(`{3,}|~{3,})(?:[^`].*)?$", raw)
+        if opening:
+            marker = opening.group(1)
+            fence_character = marker[0]
+            fence_length = len(marker)
+            continue
+        indented_code = leading_spaces >= 4 or raw.startswith("\t")
+        visible.append((index, candidate, indented_code))
+    return visible
+
+
+def _markdown_headings(manifest: str) -> list[tuple[int, int, str]]:
+    headings: list[tuple[int, int, str]] = []
+    for index, line, indented_code in _markdown_lines_outside_fences(manifest):
+        if indented_code:
+            continue
+        match = re.match(r"^(#{1,6})(?:[ \t]+|$)(.*)$", line)
+        if match:
+            headings.append((index, len(match.group(1)), _normalize_heading(line)))
+    return headings
+
+
 def strict_protocol_metadata(
     manifest: str,
     *,
@@ -303,16 +375,15 @@ def strict_protocol_metadata(
 ) -> dict[str, str]:
     """Parse protocol scalars without silent malformed or duplicate fields."""
 
-    lines = manifest.splitlines()
+    visible_lines = _markdown_lines_outside_fences(manifest)
     section_count = sum(
         1
-        for line in lines
-        if line.strip().startswith("## ")
-        and _normalize_heading(line) == PROTOCOL_SECTION_NAME
+        for _index, level, heading in _markdown_headings(manifest)
+        if level == 2 and heading == PROTOCOL_SECTION_NAME
     )
     heading_trace_count = sum(
         1
-        for line in lines
+        for _index, line, _indented_code in visible_lines
         if line.strip().startswith("#")
         and line.strip().lstrip("#").strip().strip("#").strip().casefold()
         == PROTOCOL_SECTION_NAME
@@ -425,6 +496,23 @@ def protocol_contract_metadata(
         raise ValueError(
             f"Protocol {CURRENT_PROTOCOL_VERSION} requires a valid UUIDv4 project_id"
         )
+    return metadata
+
+
+def manifest_contract_metadata(
+    manifest: str,
+    *,
+    allow_missing_section: bool = False,
+) -> dict[str, str]:
+    """Validate Protocol metadata and deterministic manifest routing together."""
+
+    metadata = protocol_contract_metadata(
+        manifest,
+        allow_missing_section=allow_missing_section,
+    )
+    route_issues = validate_manifest_routes(manifest)
+    if route_issues:
+        raise ValueError("Invalid manifest routing: " + "; ".join(route_issues))
     return metadata
 
 
@@ -591,6 +679,41 @@ def manifest_with_current_task_routing(manifest: str) -> tuple[str, bool]:
         return manifest, False
     updated = manifest.replace(LEGACY_IMPLEMENTATION_SECTION, CURRENT_IMPLEMENTATION_SECTION, 1)
     return ensure_newline(updated), True
+
+
+def manifest_with_complete_task_routing(manifest: str) -> tuple[str, bool]:
+    """Add only missing canonical task sections during explicit migration."""
+
+    sections = _route_sections(manifest)
+    missing = [
+        DEFAULT_TASK_ROUTE_SECTIONS[category].strip()
+        for category in CATEGORY_HEADINGS
+        if not sections[category]
+    ]
+    if not missing:
+        return ensure_newline(manifest), False
+    lines = manifest.splitlines()
+    headings = _markdown_headings(manifest)
+    load_heading = next(
+        (
+            (position, index)
+            for position, (index, level, heading) in enumerate(headings)
+            if level == 2 and heading == "load by task"
+        ),
+        None,
+    )
+    if load_heading is None:
+        insertion = "## Load by task\n\n" + "\n\n".join(missing)
+        return ensure_newline(manifest.rstrip() + "\n\n" + insertion), True
+    position, _index = load_heading
+    insert_at = len(lines)
+    for next_index, next_level, _heading in headings[position + 1:]:
+        if next_level <= 2:
+            insert_at = next_index
+            break
+    inserted = "\n\n".join(missing).splitlines()
+    updated = [*lines[:insert_at], "", *inserted, "", *lines[insert_at:]]
+    return ensure_newline("\n".join(updated)), True
 
 
 def existing_memory_files(memory_dir: Path) -> list[Path]:
@@ -952,20 +1075,18 @@ def _normalize_heading(text: str) -> str:
 
 def _section_lines(manifest: str, heading_level: str, matcher) -> list[str]:
     lines = manifest.splitlines()
-    captured: list[str] = []
-    in_section = False
-    for line in lines:
-        stripped = line.strip()
-        if stripped.startswith(heading_level + " "):
-            if in_section:
-                break
-            in_section = matcher(_normalize_heading(stripped))
+    level = len(heading_level)
+    headings = _markdown_headings(manifest)
+    for position, (index, found_level, heading) in enumerate(headings):
+        if found_level != level or not matcher(heading):
             continue
-        if in_section and stripped.startswith("#" * len(heading_level) + " "):
-            break
-        if in_section:
-            captured.append(line)
-    return captured
+        end = len(lines)
+        for next_index, next_level, _next_heading in headings[position + 1:]:
+            if next_level <= level:
+                end = next_index
+                break
+        return lines[index + 1:end]
+    return []
 
 
 def _parse_bullets(lines: list[str], default_required: bool) -> list[tuple[str, bool]]:
@@ -1003,13 +1124,13 @@ def _dedupe_specs(specs: list[tuple[str, bool]]) -> list[tuple[str, bool]]:
 def _route_sections(manifest: str) -> dict[str, list[tuple[str, list[str]]]]:
     sections = {category: [] for category in CATEGORY_HEADINGS}
     lines = manifest.splitlines()
-    for index, line in enumerate(lines):
-        if not line.strip().startswith("### "):
+    headings = _markdown_headings(manifest)
+    for position, (index, level, heading) in enumerate(headings):
+        if level != 3:
             continue
-        heading = _normalize_heading(line)
         end = len(lines)
-        for next_index in range(index + 1, len(lines)):
-            if lines[next_index].strip().startswith(("### ", "## ")):
+        for next_index, next_level, _next_heading in headings[position + 1:]:
+            if next_level <= 3:
                 end = next_index
                 break
         for category, aliases in CATEGORY_HEADINGS.items():
@@ -1032,9 +1153,14 @@ def validate_manifest_routes(manifest: str) -> list[str]:
     issues: list[str] = []
     always_matches = []
     lines = manifest.splitlines()
-    for index, line in enumerate(lines):
-        if line.strip().startswith("## ") and _normalize_heading(line) == "always load":
-            end = next((i for i in range(index + 1, len(lines)) if lines[i].strip().startswith("## ")), len(lines))
+    headings = _markdown_headings(manifest)
+    for position, (index, level, heading) in enumerate(headings):
+        if level == 2 and heading == "always load":
+            end = len(lines)
+            for next_index, next_level, _next_heading in headings[position + 1:]:
+                if next_level <= 2:
+                    end = next_index
+                    break
             always_matches.append(lines[index + 1:end])
     if len(always_matches) != 1:
         issues.append(f"general route: expected exactly one 'Always load' section, found {len(always_matches)}")

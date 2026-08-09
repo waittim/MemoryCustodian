@@ -35,8 +35,8 @@ from .protocol import (
     is_indexable_optional_path,
     is_safe_memory_name,
     manifest_with_optional_module_index,
+    manifest_contract_metadata,
     prepended_text,
-    protocol_contract_metadata,
     resolve_memory_dir,
     resolve_project_root,
     today,
@@ -357,7 +357,7 @@ def run(args) -> int:
     manifest_path = memory_dir / "manifest.md"
     if not manifest_path.exists():
         raise ValueError("manifest.md is missing; the MemoryCustodian setup is incomplete or corrupted")
-    metadata = protocol_contract_metadata(
+    metadata = manifest_contract_metadata(
         manifest_path.read_text(encoding="utf-8"),
         allow_missing_section=True,
     )
@@ -377,7 +377,7 @@ def run(args) -> int:
             break_stale=args.break_stale_lock,
             allow_legacy=True,
         ) as guard:
-            current_metadata = protocol_contract_metadata(
+            current_metadata = manifest_contract_metadata(
                 guard.manifest_text or "",
                 allow_missing_section=True,
             )

@@ -384,8 +384,8 @@ def project_mutation_guard(
             from .protocol import (
                 CURRENT_PROTOCOL_VERSION,
                 compare_versions,
+                manifest_contract_metadata,
                 project_id_from_manifest,
-                protocol_contract_metadata,
                 strict_protocol_metadata,
             )
 
@@ -395,7 +395,7 @@ def project_mutation_guard(
                     allow_missing_section=True,
                 )
             else:
-                metadata = protocol_contract_metadata(
+                metadata = manifest_contract_metadata(
                     manifest_text,
                     allow_missing_section=allow_legacy,
                 )

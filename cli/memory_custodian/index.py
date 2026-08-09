@@ -9,18 +9,25 @@ from pathlib import Path
 import re
 
 from .conflicts import canonical_entries
-from .entries import StructuredEntry, validate_evidence
-from .local_overlay import LocalStatus, inspect_overlay, project_identity
+from .entries import (
+    StructuredEntry,
+    structured_entry_schema_issues,
+    structured_entry_storage_issues,
+    validate_evidence,
+)
+from .local_overlay import LocalStatus, inspect_overlay, validated_project_identity
 from .protocol import (
     CURRENT_PROTOCOL_VERSION,
     compare_versions,
     iter_markdown_files,
+    manifest_contract_metadata,
     parse_markdown_units,
-    protocol_contract_metadata,
     resolve_memory_dir,
     resolve_project_root,
 )
 from .subjects import load_subjects
+from .plans import digest_text
+from .structural import candidate_structural_operand_issues, subject_index
 
 
 @dataclass(frozen=True)
@@ -81,7 +88,7 @@ def build_index(
                 status = re.search(r"(?m)^Status:\s*(\S+)", section)
                 records.append(IndexedEntry(match.group(1), status.group(1) if status else "", "project", "reconciliations.md", section.strip()))
     if include_local:
-        overlay = inspect_overlay(project_root, project_identity(memory_dir))
+        overlay = inspect_overlay(project_root, validated_project_identity(memory_dir))
         if overlay.status not in {LocalStatus.BOUND, LocalStatus.REVIEW}:
             raise ValueError("Local overlay is not bound to this project root.")
         from .entries import parse_structured_entries
@@ -168,7 +175,7 @@ def run_promote(args) -> int:
     project_root = resolve_project_root(args.project_root)
     memory_dir = resolve_memory_dir(project_root, args.memory_dir)
     manifest = (memory_dir / "manifest.md").read_text(encoding="utf-8")
-    metadata = protocol_contract_metadata(manifest)
+    metadata = manifest_contract_metadata(manifest)
     if compare_versions(metadata["protocol_version"], CURRENT_PROTOCOL_VERSION) != 0:
         raise ValueError("Promotion preview requires Protocol 0.7.")
     records = build_index(project_root, memory_dir)
@@ -191,13 +198,36 @@ def run_promote(args) -> int:
         target = f"areas/{candidate.scope.removeprefix('area:')}.md"
     new_id = _promoted_id(candidate, args.type)
     blockers: list[str] = []
+    relative = candidate.source
+    blockers.extend(structured_entry_schema_issues(candidate.structured, relative))
+    blockers.extend(structured_entry_storage_issues(candidate.structured, relative))
+    subjects = load_subjects(memory_dir)
+    if args.type in {"decision", "constraint", "tombstone", "do-not-use"} or any(
+        candidate.structured.fields.get(field)
+        for field in ("Provisional-Subject", "Provisional-Facet")
+    ):
+        blockers.extend(
+            f"{issue.field}: {issue.message}"
+            for issue in candidate_structural_operand_issues(
+                candidate.structured,
+                subject_index(subjects),
+            )
+        )
+    try:
+        validate_evidence(
+            candidate.structured.evidence,
+            project_root,
+            candidate=True,
+        )
+    except ValueError as exc:
+        blockers.append(str(exc))
     if any(record.entry_id.casefold() == new_id.casefold() for record in records):
         blockers.append(f"Generated active Entry ID already exists: {new_id}")
     subject_id = candidate.structured.fields.get("Provisional-Subject", "")
     facet = candidate.structured.fields.get("Provisional-Facet", "")
     if subject_id and facet:
-        owners = [
-            record.entry_id
+        owner_records = [
+            record
             for record in records
             if record.structured
             and record.status == "active"
@@ -205,13 +235,25 @@ def run_promote(args) -> int:
             and record.structured.fields.get("Subject", "").casefold() == subject_id.casefold()
             and record.structured.fields.get("Facet", "").casefold() == facet.casefold()
         ]
-        if owners:
+        if owner_records:
             blockers.append(
-                "Promotion would duplicate active structural owner(s): " + ", ".join(sorted(owners))
+                "Promotion would duplicate active structural owner(s): "
+                + ", ".join(sorted(record.entry_id for record in owner_records))
             )
+    else:
+        owner_records = []
+    dependency_parts = [
+        f"manifest:{digest_text(manifest)}",
+        f"subjects:{digest_text((memory_dir / 'subjects.md').read_text(encoding='utf-8'))}",
+        f"candidate:{candidate.source}:{digest_text(candidate.text)}",
+    ]
+    dependency_parts.extend(
+        f"owner:{record.source}:{digest_text(record.text)}"
+        for record in sorted(owner_records, key=lambda item: (item.source, item.entry_id))
+    )
     plan_seed = (
         f"promote\0{metadata['project_id']}\0{candidate.entry_id}\0{new_id}\0{target}\0{'|'.join(evidence)}\0"
-        + "|".join(blockers)
+        + "|".join([*dependency_parts, *blockers])
     ).encode("utf-8")
     print("Promotion preview:")
     print(f"- Candidate: {candidate.entry_id} ({candidate.source})")
