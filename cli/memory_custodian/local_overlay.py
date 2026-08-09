@@ -10,7 +10,14 @@ from pathlib import Path
 import re
 import stat
 
-from .entries import generate_entry_id, render_active_entry
+from .entries import (
+    generate_entry_id,
+    heading_entry_ids,
+    parse_structured_entries,
+    render_active_entry,
+    structured_entry_schema_issues,
+    validate_evidence,
+)
 from .locking import (
     ensure_private_directory,
     existing_private_state_directory,
@@ -43,6 +50,7 @@ class LocalOverlay:
     project_id: str
     modules: tuple[Path, ...] = ()
     warnings: tuple[str, ...] = ()
+    corrupt: bool = False
 
 
 def _project_state(project_id: str) -> Path:
@@ -133,18 +141,38 @@ def _read_bindings(project_id: str) -> tuple[str, ...]:
         if not isinstance(payload, dict) or payload.get("project_id") != project_id:
             raise ValueError
         roots = payload["roots"]
-        if not isinstance(roots, list) or any(not isinstance(item, str) for item in roots):
+        if (
+            not isinstance(roots, list)
+            or not roots
+            or any(not isinstance(item, str) for item in roots)
+            or len(roots) != len(set(roots))
+        ):
             raise ValueError
-    except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        for root in roots:
+            path = Path(root)
+            if not path.is_absolute() or _normalized_root(path) != root:
+                raise ValueError
+    except (OSError, RuntimeError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
         raise ValueError("Local overlay binding file is corrupt.") from exc
     return tuple(sorted(dict.fromkeys(roots)))
 
 
 def link_root(project_root: Path, project_id: str) -> tuple[str, ...]:
     directory = overlay_directory(project_id)
-    _parse_manifest(directory / "manifest.md", project_id)
+    modules = _parse_manifest(directory / "manifest.md", project_id)
+    issues = _local_module_issues(modules, directory, project_root)
+    if issues:
+        raise ValueError("Local overlay content is invalid: " + "; ".join(issues))
     roots = set(_read_bindings(project_id))
-    roots.add(_normalized_root(project_root))
+    current = _normalized_root(project_root)
+    if current not in roots and len(roots) == 1:
+        previous = next(iter(roots))
+        if not Path(previous).is_dir():
+            roots = {current}
+        else:
+            roots.add(current)
+    else:
+        roots.add(current)
     ordered = tuple(sorted(roots))
     write_private_file(
         _binding_path(project_id),
@@ -164,13 +192,16 @@ def _manifest_text(project_id: str) -> str:
     )
 
 
-def enable_overlay(project_id: str) -> Path:
+def enable_overlay(project_root: Path, project_id: str) -> Path:
     project_state = _project_state(project_id)
     _read_bindings(project_id)
     directory = project_state / "local"
     if directory.exists() or directory.is_symlink():
         _validate_local_directory(directory)
-        _parse_manifest(directory / "manifest.md", project_id)
+        modules = _parse_manifest(directory / "manifest.md", project_id)
+        issues = _local_module_issues(modules, directory, project_root)
+        if issues:
+            raise ValueError("Local overlay content is invalid: " + "; ".join(issues))
         return directory
     directory = ensure_private_directory(directory)
     ensure_private_directory(directory / "profiles")
@@ -180,7 +211,10 @@ def enable_overlay(project_id: str) -> Path:
         write_private_file(manifest, _manifest_text(project_id))
     if not preferences.exists():
         write_private_file(preferences, "# Local Preferences\n\nEntries are newest first.\n")
-    _parse_manifest(manifest, project_id)
+    modules = _parse_manifest(manifest, project_id)
+    issues = _local_module_issues(modules, directory, project_root)
+    if issues:
+        raise ValueError("Local overlay content is invalid: " + "; ".join(issues))
     return directory
 
 
@@ -236,6 +270,63 @@ def _parse_manifest(path: Path, expected_project_id: str) -> tuple[Path, ...]:
     return tuple(modules)
 
 
+def _local_module_issues(
+    modules: tuple[Path, ...],
+    directory: Path,
+    project_root: Path,
+) -> list[str]:
+    """Reuse formal Entry validation with local-only storage and scope rules."""
+
+    issues: list[str] = []
+    identifiers: dict[str, list[str]] = {}
+    for path in modules:
+        relative = path.relative_to(directory).as_posix()
+        text = read_local_private_file(path)
+        entries = parse_structured_entries(path, text)
+        for value in heading_entry_ids(text):
+            identifiers.setdefault(value.casefold(), []).append(relative)
+        for entry in entries:
+            issues.extend(structured_entry_schema_issues(entry, relative))
+            code = entry.entry_id.split("-", 2)[1].upper()
+            if relative == "preferences.md" and code != "PREF":
+                issues.append(
+                    f"{relative}: {entry.entry_id} type does not match local preference storage"
+                )
+            if relative.startswith("profiles/") and code != "AREA":
+                issues.append(
+                    f"{relative}: {entry.entry_id} type does not match local profile storage"
+                )
+            if entry.scope not in {"local-user", "local-machine"}:
+                issues.append(
+                    f"{relative}: {entry.entry_id} must use Scope: local-user or local-machine"
+                )
+            if entry.status not in {"active", "superseded"}:
+                issues.append(
+                    f"{relative}: {entry.entry_id} has unsupported local Status {entry.status!r}"
+                )
+            if entry.status == "superseded" and not entry.fields.get("Superseded-By"):
+                issues.append(f"{relative}: superseded entry {entry.entry_id} has no Superseded-By")
+            if not entry.evidence:
+                issues.append(f"{relative}: {entry.entry_id} has no Evidence")
+            else:
+                try:
+                    validate_evidence(
+                        entry.evidence,
+                        project_root,
+                        allow_missing=True,
+                    )
+                except ValueError:
+                    issues.append(
+                        f"{relative}: {entry.entry_id} has invalid Evidence schema or unsafe source path"
+                    )
+    for entry_id, locations in identifiers.items():
+        if len(locations) > 1:
+            issues.append(
+                f"duplicate local Entry ID {entry_id.upper()} in: {', '.join(locations)}"
+            )
+    return issues
+
+
 def inspect_overlay(project_root: Path, project_id: str, *, disabled: bool = False) -> LocalOverlay:
     if disabled or not project_id:
         return LocalOverlay(LocalStatus.DISABLED, Path("."), project_id)
@@ -247,6 +338,7 @@ def inspect_overlay(project_root: Path, project_id: str, *, disabled: bool = Fal
             None,
             project_id,
             warnings=(f"Unsafe local overlay project directory: {exc}",),
+            corrupt=True,
         )
     except ValueError as exc:
         return LocalOverlay(
@@ -254,14 +346,35 @@ def inspect_overlay(project_root: Path, project_id: str, *, disabled: bool = Fal
             None,
             project_id,
             warnings=(f"Unsafe local overlay project directory: {exc}",),
+            corrupt=True,
         )
     if not directory.exists():
-        return LocalOverlay(LocalStatus.DISABLED, directory, project_id)
+        binding = directory.parent / "bindings.json"
+        if not binding.exists() and not binding.is_symlink():
+            return LocalOverlay(LocalStatus.DISABLED, directory, project_id)
+        try:
+            _read_bindings(project_id)
+            warning = "Local overlay binding exists but the required local directory is missing."
+        except ValueError as exc:
+            warning = str(exc)
+        return LocalOverlay(
+            LocalStatus.REVIEW,
+            directory,
+            project_id,
+            warnings=(warning,),
+            corrupt=True,
+        )
     manifest = directory / "manifest.md"
     try:
         roots = _read_bindings(project_id)
     except ValueError as exc:
-        return LocalOverlay(LocalStatus.REVIEW, directory, project_id, warnings=(str(exc),))
+        return LocalOverlay(
+            LocalStatus.REVIEW,
+            directory,
+            project_id,
+            warnings=(str(exc),),
+            corrupt=True,
+        )
     current = _normalized_root(project_root)
     if current not in roots:
         return LocalOverlay(
@@ -271,7 +384,23 @@ def inspect_overlay(project_root: Path, project_id: str, *, disabled: bool = Fal
     try:
         modules = _parse_manifest(manifest, project_id)
     except (OSError, ValueError) as exc:
-        return LocalOverlay(LocalStatus.REVIEW, directory, project_id, warnings=(str(exc),))
+        return LocalOverlay(
+            LocalStatus.REVIEW,
+            directory,
+            project_id,
+            warnings=(str(exc),),
+            corrupt=True,
+        )
+    entry_issues = _local_module_issues(modules, directory, project_root)
+    if entry_issues:
+        return LocalOverlay(
+            LocalStatus.REVIEW,
+            directory,
+            project_id,
+            modules,
+            tuple(entry_issues),
+            corrupt=True,
+        )
     status = LocalStatus.REVIEW if len(roots) > 1 else LocalStatus.BOUND
     warnings = (
         ("The same project_id is explicitly bound to multiple roots; review cross-repository overlay reuse.",)

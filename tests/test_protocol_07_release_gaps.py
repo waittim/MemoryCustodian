@@ -500,6 +500,162 @@ class RoutingAndQualityReleaseTests(unittest.TestCase):
                     self.assertNotIn("linked", output.casefold())
                 self.assertEqual(binding.read_bytes(), before)
 
+    def test_moved_project_link_replaces_one_stale_root(self):
+        with tempfile.TemporaryDirectory() as workspace, tempfile.TemporaryDirectory() as state:
+            original = Path(workspace) / "original"
+            moved = Path(workspace) / "moved"
+            original.mkdir()
+            with patch.dict(os.environ, {"XDG_STATE_HOME": state}):
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["init", "--project-root", str(original)]), 0)
+                    self.assertEqual(main(["local", "enable", "--project-root", str(original)]), 0)
+                    self.assertEqual(main(["local", "link", "--project-root", str(original)]), 0)
+                    self.assertEqual(main([
+                        "local", "add", "Moved project marker.",
+                        "--type", "preference", "--evidence", "user-confirmed",
+                        "--project-root", str(original),
+                    ]), 0)
+                original.rename(moved)
+                code, status, error = capture([
+                    "local", "status", "--project-root", str(moved),
+                ])
+                self.assertEqual(code, 0, error)
+                self.assertIn("Local overlay status: UNBOUND", status)
+                code, output, error = capture([
+                    "local", "link", "--project-root", str(moved),
+                ])
+                self.assertEqual(code, 0, output + error)
+                code, status, error = capture([
+                    "local", "status", "--project-root", str(moved),
+                ])
+                self.assertEqual(code, 0, error)
+                self.assertIn("Local overlay status: BOUND", status)
+                self.assertNotIn("REVIEW", status)
+                code, output, error = capture([
+                    "read", "--task", "preferences", "--project-root", str(moved),
+                ])
+                self.assertEqual(code, 0, error)
+                self.assertIn("Moved project marker.", output)
+
+    def test_multi_root_review_remains_in_security_scan(self):
+        with tempfile.TemporaryDirectory() as first, tempfile.TemporaryDirectory() as second, tempfile.TemporaryDirectory() as state:
+            with patch.dict(os.environ, {"XDG_STATE_HOME": state}):
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["init", "--project-root", first]), 0)
+                    self.assertEqual(main(["local", "enable", "--project-root", first]), 0)
+                    self.assertEqual(main(["local", "link", "--project-root", first]), 0)
+                shared = Path(first) / "docs/memory/manifest.md"
+                project_id = re.search(
+                    r"(?m)^- project_id: (\S+)", shared.read_text(encoding="utf-8"),
+                ).group(1)
+                preferences = Path(state) / "memory-custodian/projects" / project_id / "local/preferences.md"
+                preferences.write_text(
+                    preferences.read_text(encoding="utf-8")
+                    + "\nsk-abcdefghijklmnopqrstuvwxyz\n",
+                    encoding="utf-8",
+                )
+                shutil.copytree(Path(first) / "docs", Path(second) / "docs")
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["local", "link", "--project-root", second]), 0)
+                code, output, error = capture([
+                    "check", "--security", "--project-root", first,
+                ])
+                self.assertEqual(code, 1, output + error)
+                self.assertIn("local/preferences.md", output)
+                self.assertNotIn("Security findings: 0", output)
+
+    def test_invalid_local_entry_blocks_status_read_check_and_write(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as state:
+            with patch.dict(os.environ, {"XDG_STATE_HOME": state}):
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["init", "--project-root", tmp]), 0)
+                    self.assertEqual(main(["local", "enable", "--project-root", tmp]), 0)
+                    self.assertEqual(main(["local", "link", "--project-root", tmp]), 0)
+                shared = Path(tmp) / "docs/memory/manifest.md"
+                project_id = re.search(
+                    r"(?m)^- project_id: (\S+)", shared.read_text(encoding="utf-8"),
+                ).group(1)
+                preferences = Path(state) / "memory-custodian/projects" / project_id / "local/preferences.md"
+                preferences.write_text(
+                    preferences.read_text(encoding="utf-8").rstrip()
+                    + "\n\n## MC-PREF-20260809-deadbeef — Invalid local entry\n\n"
+                    "Status: active\nScope: local-user\n\nPreference:\nMust not load.\n",
+                    encoding="utf-8",
+                )
+                code, status, error = capture(["local", "status", "--project-root", tmp])
+                self.assertEqual(code, 0, error)
+                self.assertIn("Local overlay status: REVIEW", status)
+                self.assertIn("Evidence", status)
+                code, output, error = capture([
+                    "read", "--task", "preferences", "--strict-routing",
+                    "--project-root", tmp,
+                ])
+                self.assertEqual(code, 1, output + error)
+                self.assertNotIn("Must not load.", output)
+                code, output, error = capture(["check", "--project-root", tmp])
+                self.assertEqual(code, 1, output + error)
+                self.assertIn("local overlay:", output)
+                self.assertIn("Evidence", output)
+                code, output, error = capture([
+                    "local", "add", "Must remain blocked.",
+                    "--type", "preference", "--evidence", "user-confirmed",
+                    "--project-root", tmp,
+                ])
+                self.assertEqual(code, 2, output + error)
+
+    def test_orphan_binding_is_reviewed_and_inventoried(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as state:
+            with patch.dict(os.environ, {"XDG_STATE_HOME": state}):
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["init", "--project-root", tmp]), 0)
+                    self.assertEqual(main(["local", "enable", "--project-root", tmp]), 0)
+                    self.assertEqual(main(["local", "link", "--project-root", tmp]), 0)
+                shared = Path(tmp) / "docs/memory/manifest.md"
+                project_id = re.search(
+                    r"(?m)^- project_id: (\S+)", shared.read_text(encoding="utf-8"),
+                ).group(1)
+                project_state = Path(state) / "memory-custodian/projects" / project_id
+                shutil.rmtree(project_state / "local")
+                (project_state / "bindings.json").write_text("{ corrupt\n", encoding="utf-8")
+                code, status, error = capture(["local", "status", "--project-root", tmp])
+                self.assertEqual(code, 0, error)
+                self.assertIn("Local overlay status: REVIEW", status)
+                self.assertNotIn("DISABLED", status)
+                code, reset, error = capture(["local", "reset", "--project-root", tmp])
+                self.assertEqual(code, 0, error)
+                self.assertIn("Plan ID:", reset)
+                self.assertIn("orphaned", reset)
+                self.assertNotIn("No local overlay state exists", reset)
+                first_plan = re.search(r"Plan ID: ([0-9a-f]{16})", reset).group(1)
+                (project_state / "bindings.json").write_text("{ changed corrupt\n", encoding="utf-8")
+                _code, changed, _error = capture([
+                    "local", "reset", "--project-root", tmp,
+                ])
+                self.assertNotEqual(
+                    first_plan,
+                    re.search(r"Plan ID: ([0-9a-f]{16})", changed).group(1),
+                )
+
+    def test_binding_roots_require_normalized_absolute_paths(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as state:
+            with patch.dict(os.environ, {"XDG_STATE_HOME": state}):
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["init", "--project-root", tmp]), 0)
+                    self.assertEqual(main(["local", "enable", "--project-root", tmp]), 0)
+                    self.assertEqual(main(["local", "link", "--project-root", tmp]), 0)
+                shared = Path(tmp) / "docs/memory/manifest.md"
+                project_id = re.search(
+                    r"(?m)^- project_id: (\S+)", shared.read_text(encoding="utf-8"),
+                ).group(1)
+                binding = Path(state) / "memory-custodian/projects" / project_id / "bindings.json"
+                payload = json.loads(binding.read_text(encoding="utf-8"))
+                payload["roots"].append("relative/not-normalized")
+                binding.write_text(json.dumps(payload), encoding="utf-8")
+                code, status, error = capture(["local", "status", "--project-root", tmp])
+                self.assertEqual(code, 0, error)
+                self.assertIn("Local overlay status: REVIEW", status)
+                self.assertIn("binding file is corrupt", status.casefold())
+
     @unittest.skipIf(os.name == "nt", "POSIX symlink semantics")
     def test_invalid_overlay_state_never_scans_relative_sentinel(self):
         with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as state, tempfile.TemporaryDirectory() as external, tempfile.TemporaryDirectory() as cwd:

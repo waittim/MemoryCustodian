@@ -33,6 +33,7 @@ def _reset_inventory(
     blockers: list[str] = []
     if directory is None:
         return ["local:unsafe-root"], ["Unsafe local overlay root requires review."]
+    root_missing = False
     try:
         root_metadata = directory.lstat()
         if stat.S_ISLNK(root_metadata.st_mode) or not stat.S_ISDIR(root_metadata.st_mode):
@@ -41,18 +42,23 @@ def _reset_inventory(
             raise OSError("local overlay root is not owned by the current user")
         if os.name != "nt" and stat.S_IMODE(root_metadata.st_mode) != 0o700:
             raise OSError("local overlay root must use mode 0700")
+    except FileNotFoundError:
+        root_missing = True
+        dependencies.append("local:missing-root")
+        blockers.append("Local overlay binding is orphaned because the local directory is missing.")
     except OSError as exc:
         return ["local:unsafe-root"], [f"Unsafe local overlay root requires review: {exc}"]
     paths: list[Path] = []
     walk_errors: list[OSError] = []
-    for root, directories, files in os.walk(
-        directory,
-        followlinks=False,
-        onerror=walk_errors.append,
-    ):
-        root_path = Path(root)
-        paths.extend(root_path / name for name in directories)
-        paths.extend(root_path / name for name in files)
+    if not root_missing:
+        for root, directories, files in os.walk(
+            directory,
+            followlinks=False,
+            onerror=walk_errors.append,
+        ):
+            root_path = Path(root)
+            paths.extend(root_path / name for name in directories)
+            paths.extend(root_path / name for name in files)
     binding_path = directory.parent / "bindings.json"
     if binding_path.exists() or binding_path.is_symlink():
         paths.append(binding_path)
@@ -177,13 +183,13 @@ def run(args) -> int:
         break_stale=args.break_stale_lock,
     ):
         if command == "enable":
-            directory = enable_overlay(project_id)
+            directory = enable_overlay(project_root, project_id)
             print(f"Local overlay enabled for project_id {project_id}.")
             print(f"State directory: {directory}")
             print("Run `memory-custodian local link` before local content can load.")
             return 0
         if command == "link":
-            enable_overlay(project_id)
+            enable_overlay(project_root, project_id)
             roots = link_root(project_root, project_id)
             print("Local overlay linked to this normalized project root.")
             if len(roots) > 1:
