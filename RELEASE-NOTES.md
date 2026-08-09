@@ -12,9 +12,8 @@
   entry-level budget omissions, and `COMPLETE/INCOMPLETE/AMBIGUOUS/INVALID` diagnostics.
 - Invalid routing now remains inside the shared result/disposition model, ordinary non-strict `INCOMPLETE` reads use
   the documented successful inspection exit, and explain exposes inbox/archive policy exclusions.
-- Made `AMBIGUOUS` reachable through explicit manifest `exclusive-group` policy for path-activated areas. Group
-  resolution considers both path and explicit activations, loads at most one member, and rejects multiple explicit
-  selections while keeping default manifests unambiguous.
+- Reserved `AMBIGUOUS` for a future versioned policy; routing schema 1 accepts only the four planned optional-module
+  keys and rejects the unversioned `exclusive-group` extension as unknown metadata.
 - Added routing, reachability, and Evidence/relation freshness checks. They report bounded structural facts and never
   claim automatic semantic retrieval or factual correctness.
 
@@ -68,6 +67,11 @@
   unbound, bound, and multi-root review states, hashes private bytes without following symlinks, and binds the local
   content it would eventually remove. Migration reads all operands before creating preview seeds and derives missing
   task routes from the initialization template's single authority.
+- Tightened the finite manifest lexer for code spans, standalone HTML comments, and backtick/tilde fences; ambiguous
+  or unclosed constructs fail closed. Optional/task subsection topology is canonical and contradictory sentinels are
+  invalid. Migration reads only contained normalized declarations. Local overlay access rejects a symlinked
+  project-id ancestor, and reset inventory binds directories, reports traversal failures, and reads files through
+  no-follow descriptors.
 - Added matched-context conflict gates and optional read-only merge-base review for cross-branch structural collisions
   and concurrent hard-memory changes requiring human reconciliation.
 - Subject names, timestamps, Evidence counts, file order, and prose similarity never choose a winner. This release

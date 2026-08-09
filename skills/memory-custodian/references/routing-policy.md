@@ -16,15 +16,9 @@ reads touched-file content to infer an area.
 
 `COMPLETE` means the enabled routing dimensions received enough explicit input. `INCOMPLETE` means scope may change
 the pack—for example, a substantial task has enabled path-routed areas but no paths or explicit areas. `AMBIGUOUS`
-means a valid declared exclusivity cannot be resolved. `INVALID` means manifest grammar, metadata, or input violates
-the protocol.
-
-Default Protocol 0.7 manifests do not declare mutually exclusive routes. A customized manifest may assign the same
-`exclusive-group` token to two or more path-activated areas. Resolve the group across every activation source:
-exactly one explicit member selects it and suppresses other path activations; multiple explicit members, or multiple
-path members without an explicit selection, emit `MC-ROUTE-AMBIGUOUS`. Load at most one group member and retain the
-safe baseline on ambiguity. `exclusive-group` is invalid on rules, profiles, or explicit-only areas and is never
-inferred.
+is reserved for a future versioned exclusivity policy or documented compatibility mapping. Routing schema 1 defines
+neither; `exclusive-group` is an unknown key and therefore `INVALID`. `INVALID` means manifest grammar, metadata, or
+input violates the protocol.
 
 Use `--strict-routing` before substantial planning, implementation, debugging, or review. An incomplete inspection
 may show the shared safety baseline, but it is not an approved context pack.

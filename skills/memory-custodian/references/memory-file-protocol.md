@@ -293,13 +293,18 @@ Public Subject, supersede, forget, compact, promotion, replacement, local-overla
 consume this same contract before operand lookup or Plan construction. Recovery syntax validation precedes pending
 identity creation, so malformed input cannot leave a project or Entry seed behind.
 Current-project preflight also validates all canonical routes. Fenced Markdown examples do not count as headings;
-HTML comments are ignored, while Setext, attached-hash, and four-space indented Protocol lookalikes are malformed
-traces, not metadata sections. Canonical task H3 routes must be direct content of exactly one `Load by task` H2, and
-the Optional module index is unique. Local overlay selection requires the resulting validated project identity.
+standalone HTML comments and valid closed fences are ignored, while code spans cannot open comment state and invalid
+or unclosed fence/comment constructs fail closed. Setext, attached-hash, and four-space indented Protocol lookalikes
+are malformed traces, not metadata sections. Canonical task H3 routes must be direct content of exactly one
+`Load by task` H2. The Optional module index is unique; canonical subsections cannot repeat, declarations cannot
+precede them, sentinels cannot coexist with declarations, and routing schema 1 accepts only `activation`, `tasks`,
+`paths`, and `description`. Local overlay selection requires the resulting validated project identity.
 Promotion and Subject merge reuse structural operand checks, and their Plan IDs bind the exact candidate, registry,
-and referenced Entry state used by the preview. Local reset inventories private state with `lstat`, refuses symlink
-nodes without reading their targets, and hashes regular-file bytes. Migration reads every operand before creating
-pending identity state and renders missing routes from the same authority used by initialization.
+and referenced Entry state used by the preview. Local overlay selection validates the project-id state ancestor.
+Local reset records directories/traversal failures, refuses symlink nodes without reading targets, and hashes regular
+files through no-follow descriptors. Migration accepts operands only from normalized declarations contained in the
+managed memory directory, reads every operand before creating pending identity state, and renders missing routes from
+the same authority used by initialization.
 
 ## Local Overlay
 

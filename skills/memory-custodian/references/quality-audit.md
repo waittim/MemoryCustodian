@@ -83,6 +83,10 @@ memory-custodian check --conflicts --merge-base origin/main  # when Git/ref is a
   comment examples are inert, protocol metadata cannot be indented code, task H3 routes require exactly one canonical
   parent, and duplicate Optional module indexes fail closed. Private-state tests must include symlinks and non-UTF-8
   files, while recovery tests assert that operand failures precede all pending seed creation.
+- Include code-span comment markers, backtick and tilde fence-info asymmetry, unknown task H3s, repeated optional
+  subsections, sentinel/declaration conflicts, and declarations before a canonical subsection. Assert migration reads
+  only normalized memory-contained operands. For local state, test project-id ancestor symlinks, empty/unreadable
+  directories, traversal errors, and no-follow descriptor reads. Treat `exclusive-group` as unknown in schema 1.
 
 ## Scope And Portability
 

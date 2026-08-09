@@ -271,23 +271,9 @@ the pack for substantial work. Ordinary `INCOMPLETE` inspection exits successful
 strict `INCOMPLETE` exits nonzero. `AMBIGUOUS` and `INVALID` fail rather than falling back to natural-language
 guessing, and invalid inputs are rendered through the same disposition/reason model instead of bypassing it with
 an unstructured parser error. Explain also makes the normal-context exclusion of inbox candidates and archives
-explicit. Default Protocol 0.7 manifests do not declare mutually exclusive routes. A customized manifest may place
-path-activated areas in one `exclusive-group`. With no explicit selection, multiple path-activated members are
-`AMBIGUOUS`; one explicit member selects that member and suppresses the other automatic activations; multiple
-explicit members are `AMBIGUOUS`. At most one member of an exclusive group is loaded:
-
-```markdown
-- `areas/client.md`
-  - activation: path-or-explicit
-  - paths: `src/**`
-  - exclusive-group: runtime
-- `areas/server.md`
-  - activation: path-or-explicit
-  - paths: `src/**`
-  - exclusive-group: runtime
-```
-
-`exclusive-group` is valid only for path-activated areas. It is never inferred from names, paths, or task prose.
+explicit. Protocol 0.7 routing schema 1 defines no exclusivity metadata. `AMBIGUOUS` remains a reserved result for a
+future versioned policy or documented compatibility mapping; `exclusive-group` and every other unknown
+optional-module key are `INVALID` in Protocol 0.7.
 
 Record durable memory when a decision, constraint, preference, or rejected approach should survive the current chat:
 
@@ -445,15 +431,19 @@ run the same contract preflight before reading business operands, creating local
 Malformed migration input is rejected before pending project or Entry identity is persisted.
 The current-project preflight combines strict Protocol metadata with deterministic route validation. Unsafe or
 malformed routes therefore block ordinary writers, focused diagnostics, and recovery candidates. Protocol heading
-recognition follows Markdown boundaries: fenced examples and HTML comments are ignored, while Setext, attached-hash,
-and indented-code lookalikes cannot act as the canonical H2. Canonical task H3 routes must live under exactly one
-`Load by task` H2, and the Optional module index may appear at most once. Repo-external overlay reads require the
-same validated project identity.
+recognition uses a deliberately finite lexical contract: standalone HTML comments and valid closed fences are inert;
+code spans cannot start comment state; backtick-fence info cannot contain backticks; ambiguous or unclosed constructs
+fail closed. Setext, attached-hash, and indented-code lookalikes cannot act as the canonical H2. Canonical task H3
+routes must live under exactly one `Load by task` H2. The Optional module index is unique, its three canonical H3
+subsections cannot repeat, declarations cannot precede them, and `- None enabled.` cannot coexist with declarations.
+Repo-external overlay reads require the same validated project identity.
 Promotion and Subject-merge previews validate their structural operands and bind the exact Entry/Subject text they
 render. Local reset reports no plan for a disabled overlay, blocks unbound or multi-root state, and binds local file
 and root-binding digests when a plan is meaningful.
-Its private-state inventory uses `lstat`, never follows symlinks, and hashes regular-file bytes so corrupt UTF-8 state
-can still produce a blocker-aware review plan. Migration snapshots all text operands before persisting preview seeds.
+Its private-state inventory records directories and traversal failures, validates the project-id ancestor, and hashes
+regular-file bytes through no-follow descriptors, so symlinks and corrupt UTF-8 state produce blocker-aware plans.
+Migration derives operands only from normalized declarations, checks containment inside the memory directory, and
+snapshots all text operands before persisting preview seeds.
 
 When Git is available, `check --conflicts --merge-base <ref>` compares semantic units changed on both sides. It
 distinguishes deterministic collisions from concurrent hard-memory changes requiring semantic reconciliation.
