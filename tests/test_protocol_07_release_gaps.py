@@ -1422,6 +1422,129 @@ class RoutingAndQualityReleaseTests(unittest.TestCase):
             second_plan = re.search(r"Plan ID: ([0-9a-f]{16})", second).group(1)
             self.assertNotEqual(first_plan, second_plan)
 
+    def test_promotion_validates_resulting_entry_and_binds_target_baseline(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            memory = Path(tmp) / "docs/memory"
+            subject_id = "MC-SUBJ-20260809-33333333"
+            candidate_id = "MC-INBOX-20260809-44444444"
+            (memory / "subjects.md").write_text(
+                "# Subject Registry\n\n" + subject_unit(subject_id, "Area promotion"),
+                encoding="utf-8",
+            )
+            candidate = render_candidate_entry(
+                candidate_id, "Area decision", "decision", "Use the stable interface.",
+                "area:backend", ("user-confirmed",), None,
+                subject=subject_id, facet="interface",
+            )
+            inbox = memory / "inbox.md"
+            inbox.write_text("# Memory Inbox\n\n" + candidate + "\n", encoding="utf-8")
+            command = [
+                "promote", candidate_id, "--type", "decision",
+                "--evidence", "user-confirmed", "--project-root", tmp,
+            ]
+            code, first, error = capture(command)
+            self.assertEqual(code, 0, first + error)
+            self.assertIn("New active Entry ID: MC-AREA-", first)
+            self.assertIn("Manifest mutation: index areas/backend.md", first)
+            self.assertIn("Target files: inbox.md, areas/backend.md, manifest.md", first)
+            self.assertIn("Blockers:\n- none", first)
+            first_plan = re.search(r"Plan ID: ([0-9a-f]{16})", first).group(1)
+
+            (memory / "areas").mkdir(exist_ok=True)
+            (memory / "areas/backend.md").write_text(
+                "# Backend\n\nExisting contextual notes.\n", encoding="utf-8",
+            )
+            _code, second, _error = capture(command)
+            second_plan = re.search(r"Plan ID: ([0-9a-f]{16})", second).group(1)
+            self.assertNotEqual(first_plan, second_plan)
+
+            inbox.write_text(
+                "# Memory Inbox\n\n"
+                + candidate.replace("Candidate-Type: decision", "Candidate-Type: constraint", 1)
+                + "\n",
+                encoding="utf-8",
+            )
+            _code, mismatch, _error = capture(command)
+            self.assertIn("does not match requested promotion type", mismatch)
+            self.assertNotIn("Blockers:\n- none", mismatch)
+
+    def test_supersession_cycles_and_ambiguous_targets_fail_freshness(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            memory = Path(tmp) / "docs/memory"
+            subject_id = "MC-SUBJ-20260809-55555555"
+            (memory / "subjects.md").write_text(
+                "# Subject Registry\n\n" + subject_unit(subject_id, "Relation graph"),
+                encoding="utf-8",
+            )
+            first_id = "MC-DEC-20260809-55555555"
+            second_id = "MC-DEC-20260809-66666666"
+            first = render_active_entry(
+                "decision", first_id, "First", "First.", None, "project",
+                ("user-confirmed",), subject=subject_id, facet="interface",
+            ).replace(
+                "Status: active",
+                f"Status: superseded\nSupersedes: {second_id}\nSuperseded-By: {second_id}", 1,
+            )
+            second = render_active_entry(
+                "decision", second_id, "Second", "Second.", None, "project",
+                ("user-confirmed",), subject=subject_id, facet="interface",
+            ).replace(
+                "Status: active",
+                f"Status: superseded\nSupersedes: {first_id}\nSuperseded-By: {first_id}", 1,
+            )
+            decisions = memory / "decisions.md"
+            decisions.write_text("# Decisions\n\n" + first + "\n\n" + second + "\n", encoding="utf-8")
+            code, output, error = capture(["check", "--freshness", "--project-root", tmp])
+            self.assertEqual(code, 1, output + error)
+            self.assertIn("supersession cycle detected", output)
+
+            duplicate_id = "MC-DEC-20260809-77777777"
+            source = first.replace(second_id, duplicate_id).replace(
+                f"Supersedes: {duplicate_id}\n", "", 1,
+            )
+            duplicate = render_active_entry(
+                "decision", duplicate_id, "Duplicate", "Replacement.", None, "project",
+                ("user-confirmed",), subject=subject_id, facet="interface",
+                supersedes=first_id,
+            )
+            decisions.write_text(
+                "# Decisions\n\n" + source + "\n\n" + duplicate + "\n\n" + duplicate + "\n",
+                encoding="utf-8",
+            )
+            code, output, error = capture(["check", "--freshness", "--project-root", tmp])
+            self.assertEqual(code, 1, output + error)
+            self.assertIn("relation targets must be unique", output)
+
+    def test_add_supersedes_rejects_structurally_invalid_operand(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            memory = Path(tmp) / "docs/memory"
+            subject_id = "MC-SUBJ-20260809-88888888"
+            old_id = "MC-DEC-20260809-88888888"
+            (memory / "subjects.md").write_text(
+                "# Subject Registry\n\n" + subject_unit(subject_id, "Invalid operand"),
+                encoding="utf-8",
+            )
+            old = render_active_entry(
+                "decision", old_id, "Invalid old entry", "Old.", None, "project",
+                ("user-confirmed",), subject=subject_id, facet="interface",
+            ).replace("Scope: project", "Scope: Project", 1)
+            (memory / "decisions.md").write_text("# Decisions\n\n" + old + "\n", encoding="utf-8")
+            code, output, error = capture([
+                "add", "Replacement.", "--type", "decision",
+                "--subject", subject_id, "--facet", "interface",
+                "--supersedes", old_id, "--evidence", "user-confirmed",
+                "--project-root", tmp,
+            ])
+            self.assertEqual(code, 2, output + error)
+            self.assertIn("is structurally invalid", error)
+            self.assertNotIn("Plan ID:", output)
+
     def test_subject_merge_validates_entries_and_binds_registry_and_entry_text(self):
         with tempfile.TemporaryDirectory() as tmp:
             with redirect_stdout(StringIO()):
@@ -2124,6 +2247,35 @@ class RoutingAndQualityReleaseTests(unittest.TestCase):
             invalid = analyze_conflicts(memory)
             self.assertEqual(invalid.status.value, "INVALID")
             self.assertTrue(any(item.code == "MC-CONFLICT-006" for item in invalid.findings))
+            code, output, error = capture(["check", "--freshness", "--project-root", tmp])
+            self.assertEqual(code, 1, output + error)
+            self.assertIn("MC-FRESH-004", output)
+            self.assertIn("Exception-To", output)
+
+    def test_freshness_rejects_active_entry_using_merged_subject(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            memory = Path(tmp) / "docs/memory"
+            source_id = "MC-SUBJ-20260809-99999991"
+            target_id = "MC-SUBJ-20260809-99999992"
+            merged = (
+                f"## {source_id} — Merged source\n\nStatus: merged\nKind: concept\n"
+                f"Merged-Into: {target_id}\nEvidence:\n- user-confirmed\n\nAliases:\n- merged source\n"
+            )
+            (memory / "subjects.md").write_text(
+                "# Subject Registry\n\n" + merged + "\n" + subject_unit(target_id, "Current subject"),
+                encoding="utf-8",
+            )
+            entry = render_active_entry(
+                "decision", "MC-DEC-20260809-99999993", "Stale subject", "Body.", None,
+                "project", ("user-confirmed",), subject=source_id, facet="interface",
+            )
+            (memory / "decisions.md").write_text("# Decisions\n\n" + entry + "\n", encoding="utf-8")
+            code, output, error = capture(["check", "--freshness", "--project-root", tmp])
+            self.assertEqual(code, 1, output + error)
+            self.assertIn("MC-FRESH-005", output)
+            self.assertIn("active registry entry", output)
 
     def test_local_manifest_rejects_unknown_or_unsafe_declarations(self):
         with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as state:

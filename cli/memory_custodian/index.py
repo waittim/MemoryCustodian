@@ -11,8 +11,11 @@ import re
 from .conflicts import canonical_entries
 from .entries import (
     StructuredEntry,
+    parse_structured_entries,
+    render_active_entry,
     structured_entry_schema_issues,
     structured_entry_storage_issues,
+    structured_relation_issues,
     memory_entry_ids,
     validate_evidence,
 )
@@ -27,6 +30,7 @@ from .protocol import (
     compare_versions,
     iter_markdown_files,
     manifest_contract_metadata,
+    manifest_with_optional_module_index,
     parse_markdown_units,
     resolve_memory_dir,
     resolve_project_root,
@@ -179,7 +183,10 @@ def run_show(args) -> int:
 
 
 def _promoted_id(candidate: IndexedEntry, kind: str) -> str:
-    codes = {"decision": "DEC", "constraint": "CON", "tombstone": "DNU", "do-not-use": "DNU", "preference": "PREF"}
+    codes = {
+        "decision": "DEC", "constraint": "CON", "tombstone": "DNU",
+        "do-not-use": "DNU", "preference": "PREF", "area": "AREA",
+    }
     digest = hashlib.sha256(f"{candidate.entry_id}\0{kind}".encode("utf-8")).hexdigest()[:8]
     return f"MC-{codes[kind]}-{date.today().strftime('%Y%m%d')}-{digest}"
 
@@ -211,7 +218,8 @@ def run_promote(args) -> int:
     }[args.type]
     if candidate.scope.startswith("area:"):
         target = f"areas/{candidate.scope.removeprefix('area:')}.md"
-    new_id = _promoted_id(candidate, args.type)
+    active_kind = "area" if candidate.scope.startswith("area:") and args.type == "decision" else args.type
+    new_id = _promoted_id(candidate, active_kind)
     blockers: list[str] = []
     relative = candidate.source
     blockers.extend(structured_entry_schema_issues(candidate.structured, relative))
@@ -236,6 +244,13 @@ def run_promote(args) -> int:
         )
     except ValueError as exc:
         blockers.append(str(exc))
+    candidate_type = candidate.structured.fields.get("Candidate-Type", "").casefold()
+    requested_type = "tombstone" if args.type == "do-not-use" else args.type
+    declared_type = "tombstone" if candidate_type == "do-not-use" else candidate_type
+    if declared_type != requested_type:
+        blockers.append(
+            f"Candidate-Type {candidate_type!r} does not match requested promotion type {args.type!r}"
+        )
     if any(record.entry_id.casefold() == new_id.casefold() for record in records):
         blockers.append(f"Generated active Entry ID already exists: {new_id}")
     subject_id = candidate.structured.fields.get("Provisional-Subject", "")
@@ -257,10 +272,51 @@ def run_promote(args) -> int:
             )
     else:
         owner_records = []
+    target_path = memory_dir / target
+    target_exists = target_path.exists()
+    target_baseline = target_path.read_text(encoding="utf-8") if target_exists else ""
+    updated_manifest, manifest_changed = manifest_with_optional_module_index(manifest, target)
+
+    promoted_candidate_text = candidate.text.replace(
+        "Status: candidate",
+        f"Status: promoted\nPromoted-To: {new_id}",
+        1,
+    )
+    prospective_entry_text = render_active_entry(
+        active_kind,
+        new_id,
+        candidate.structured.title,
+        candidate.structured.field_bodies.get("Statement", ""),
+        None,
+        candidate.scope,
+        evidence,
+        subject=subject_id or None,
+        facet=facet or None,
+        promoted_from=candidate.entry_id,
+    )
+    prospective_candidate = parse_structured_entries(
+        memory_dir / candidate.source, promoted_candidate_text,
+    )
+    prospective_active = parse_structured_entries(target_path, prospective_entry_text)
+    if len(prospective_candidate) != 1:
+        blockers.append("Candidate transition does not produce exactly one structured Entry")
+    if len(prospective_active) != 1:
+        blockers.append("Promotion target does not produce exactly one structured Entry")
+    if len(prospective_candidate) == 1:
+        blockers.extend(structured_entry_schema_issues(prospective_candidate[0], candidate.source))
+        blockers.extend(structured_entry_storage_issues(prospective_candidate[0], candidate.source))
+    if len(prospective_active) == 1:
+        blockers.extend(structured_entry_schema_issues(prospective_active[0], target))
+        blockers.extend(structured_entry_storage_issues(prospective_active[0], target))
+    if len(prospective_candidate) == 1 and len(prospective_active) == 1:
+        blockers.extend(structured_relation_issues([prospective_candidate[0], prospective_active[0]]))
+    blockers = sorted(set(blockers))
     dependency_parts = [
         f"manifest:{digest_text(manifest)}",
         f"subjects:{digest_text((memory_dir / 'subjects.md').read_text(encoding='utf-8'))}",
         f"candidate:{candidate.source}:{digest_text(candidate.text)}",
+        f"target:{target}:exists={target_exists}:{digest_text(target_baseline)}",
+        f"resulting-manifest:{digest_text(updated_manifest)}",
     ]
     dependency_parts.extend(
         f"owner:{record.source}:{digest_text(record.text)}"
@@ -276,7 +332,12 @@ def run_promote(args) -> int:
     print(f"- Candidate transition: Status promoted; Promoted-To: {new_id}")
     print(f"- New entry relation: Promoted-From: {candidate.entry_id}")
     print(f"- Evidence: {', '.join(evidence)}")
-    print(f"- Target files: {candidate.source}, {target}")
+    target_files = [candidate.source, target]
+    if manifest_changed:
+        target_files.append("manifest.md")
+    print(f"- Target files: {', '.join(target_files)}")
+    if manifest_changed:
+        print(f"- Manifest mutation: index {target} as an explicit-only optional module")
     if subject_id and facet:
         print(f"- Resulting structural identity: {candidate.scope}+{subject_id}+{facet}")
     print("Blockers:")

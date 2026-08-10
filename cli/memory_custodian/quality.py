@@ -176,9 +176,15 @@ def freshness_findings(project_root: Path, memory_dir: Path) -> tuple[QualityFin
                 f"{subject.subject_id} has a broken Merged-Into relation.",
             ))
     for conflict in analyze_conflicts(memory_dir).findings:
+        freshness_code = {
+            "MC-CONFLICT-005": "MC-FRESH-005",
+            "MC-CONFLICT-006": "MC-FRESH-004",
+        }.get(conflict.code)
         if conflict.code == "MC-CONFLICT-008" and "reconciliation" in conflict.message.casefold():
+            freshness_code = "MC-FRESH-006"
+        if freshness_code:
             findings.append(QualityFinding(
-                "ERROR", "MC-FRESH-006", conflict.message,
+                "ERROR", freshness_code, conflict.message,
             ))
     if saw_revision and head is None:
         findings.append(QualityFinding(

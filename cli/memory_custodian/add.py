@@ -11,6 +11,8 @@ from .entries import (
     parse_structured_entries,
     render_active_entry,
     render_candidate_entry,
+    structured_entry_schema_issues,
+    structured_entry_storage_issues,
     supersede_entry,
     validate_evidence,
     validate_scope,
@@ -166,6 +168,7 @@ def _find_entry(memory_dir: Path, entry_id: str):
 
 def _validate_subject_and_conflict(
     args,
+    project_root: Path,
     memory_dir: Path,
     *,
     kind: str,
@@ -184,6 +187,20 @@ def _validate_subject_and_conflict(
     old = None
     if args.supersedes:
         old = _find_entry(memory_dir, args.supersedes)
+        old_relative = old.path.relative_to(memory_dir).as_posix()
+        operand_issues = [
+            *structured_entry_schema_issues(old, old_relative),
+            *structured_entry_storage_issues(old, old_relative),
+        ]
+        try:
+            validate_evidence(old.evidence, project_root, allow_internal=True)
+        except ValueError as exc:
+            operand_issues.append(str(exc))
+        if operand_issues:
+            raise ValueError(
+                f"Superseded Entry {old.entry_id} is structurally invalid: "
+                + "; ".join(sorted(set(operand_issues)))
+            )
         if old.status != "active":
             replacement = old.fields.get("Superseded-By")
             raise ValueError(
@@ -266,6 +283,7 @@ def _build_mutations(
         ids = memory_entry_ids(memory_dir)
         subject_id, facet = _validate_subject_and_conflict(
             args,
+            project_root,
             memory_dir,
             kind=kind,
             scope=scope,

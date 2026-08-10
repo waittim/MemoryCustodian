@@ -179,6 +179,7 @@ def render_active_entry(
     subject: str | None = None,
     facet: str | None = None,
     supersedes: str | None = None,
+    promoted_from: str | None = None,
 ) -> str:
     labels = {
         "decision": "Decision",
@@ -203,6 +204,8 @@ def render_active_entry(
     lines.extend(["Evidence:", *(f"- {item}" for item in evidence)])
     if supersedes:
         lines.extend([f"Supersedes: {supersedes}"])
+    if promoted_from:
+        lines.append(f"Promoted-From: {promoted_from}")
     lines.extend(["", f"{labels[kind]}:", message])
     if reason:
         lines.extend(["", "Reason:", reason])
@@ -504,9 +507,15 @@ def structured_relation_issues(entries: list[StructuredEntry]) -> list[str]:
             "Exception-To",
         ):
             target_id = entry.fields.get(relation, "")
-            if target_id and target_id.casefold() not in by_id:
+            if not target_id:
+                continue
+            matches = by_id.get(target_id.casefold(), [])
+            if not matches:
+                issues.add(f"{entry.entry_id} {relation} references missing entry {target_id}")
+            elif len(matches) != 1:
                 issues.add(
-                    f"{entry.entry_id} {relation} references missing entry {target_id}"
+                    f"{entry.entry_id} {relation} target {target_id} resolves to "
+                    f"{len(matches)} entries; relation targets must be unique"
                 )
 
         previous_id = entry.fields.get("Supersedes", "")
@@ -549,13 +558,16 @@ def structured_relation_issues(entries: list[StructuredEntry]) -> list[str]:
             }
             target_code = entry.entry_id.split("-", 2)[1].upper()
             candidate_type = source.fields.get("Candidate-Type", "").casefold()
+            expected_code = expected_codes.get(candidate_type)
+            if candidate_type == "decision" and source.scope.casefold().startswith("area:"):
+                expected_code = "AREA"
             if entry.status != "active" or source.status != "promoted":
                 issues.add(
                     f"{entry.entry_id} Promoted-From requires an active target and promoted candidate"
                 )
             if source.fields.get("Promoted-To", "").casefold() != entry.entry_id.casefold():
                 issues.add(f"{entry.entry_id} Promoted-From relation is not reciprocal")
-            if expected_codes.get(candidate_type) != target_code:
+            if expected_code != target_code:
                 issues.add(
                     f"{entry.entry_id} type does not match source Candidate-Type {candidate_type!r}"
                 )
@@ -581,6 +593,44 @@ def structured_relation_issues(entries: list[StructuredEntry]) -> list[str]:
                 )
             if target.fields.get("Promoted-From", "").casefold() != entry.entry_id.casefold():
                 issues.add(f"{entry.entry_id} Promoted-To relation is not reciprocal")
+
+    successor: dict[str, str] = {}
+    for entry in entries:
+        if entry.status != "superseded":
+            continue
+        if unique(entry.entry_id) is None:
+            continue
+        replacement_id = entry.fields.get("Superseded-By", "")
+        if not replacement_id:
+            issues.add(f"{entry.entry_id} supersession chain does not terminate at an active replacement")
+            continue
+        if unique(replacement_id) is not None:
+            successor[entry.entry_id.casefold()] = replacement_id.casefold()
+
+    checked: set[str] = set()
+    for start in sorted(successor):
+        if start in checked:
+            continue
+        order: list[str] = []
+        positions: dict[str, int] = {}
+        current = start
+        while current in successor:
+            if current in positions:
+                cycle = order[positions[current]:]
+                labels = sorted(unique(value).entry_id for value in cycle if unique(value) is not None)
+                issues.add("supersession cycle detected: " + " -> ".join(labels))
+                break
+            if current in checked:
+                break
+            positions[current] = len(order)
+            order.append(current)
+            current = successor[current]
+        terminal = unique(current)
+        if current not in successor and terminal is not None and terminal.status != "active":
+            issues.add(
+                f"{unique(start).entry_id} supersession chain does not terminate at an active replacement"
+            )
+        checked.update(order)
 
     return sorted(issues)
 
