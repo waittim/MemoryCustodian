@@ -6,8 +6,8 @@ Entries are newest first.
 - Closed manifest lexical/topology bypasses, contained migration operands including symlink loops, enforced local
   overlay path/mode/identity/scaffold boundaries, made multi-root review diagnostic-only, completed reset inventory
   dependencies, restored stale-root move recovery, completed shared promotion/supersession integrity, restricted local
-  relations and cross-store IDs, and removed the unversioned `exclusive-group` extension while recording AMBIGUOUS
-  deferral.
+  relations and cross-store IDs, validated promotion outputs/target baselines, enforced unique acyclic supersession
+  chains and freshness parity, and removed the unversioned `exclusive-group` extension while recording AMBIGUOUS deferral.
 - Unified manifest Markdown section walking, made route topology and Optional index uniqueness fail closed, hardened
   local reset against symlinks/binary state, and made migration operand validation seed-free on failure.
 

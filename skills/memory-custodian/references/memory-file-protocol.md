@@ -299,8 +299,10 @@ are malformed traces, not metadata sections. Canonical task H3 routes must be di
 `Load by task` H2. The Optional module index is unique; canonical subsections cannot repeat, declarations cannot
 precede them, sentinels cannot coexist with declarations, and routing schema 1 accepts only `activation`, `tasks`,
 `paths`, and `description`. Local overlay selection requires the resulting validated project identity.
-Promotion and Subject merge reuse structural operand checks, and their Plan IDs bind the exact candidate, registry,
-and referenced Entry state used by the preview. Local overlay selection validates both the project-id state ancestor
+Promotion renders the prospective active target and validates its schema, storage, structural identity, reciprocal
+relation, Candidate-Type, and any required Optional-index mutation. Its Plan ID binds target existence/content plus
+the candidate, registry, and manifest baselines. Subject merge reuses structural operand checks and binds the exact
+registry and referenced Entry state used by the preview. Local overlay selection validates both the project-id state ancestor
 and `local/` itself as real owner-only `0700` directories. Manifest schema/project scalars are unique, binding identity
 must match, duplicate binding JSON keys are invalid, and every loaded local file is an owner-only `0600` regular file
 read through a no-follow descriptor. The manifest, declared preferences file, and profiles directory are mandatory.
@@ -316,9 +318,11 @@ accepts operands only from normalized declarations contained in the managed memo
 failures before seed creation, preserves human prose outside declaration shapes, and renders missing routes from the
 same authority used by initialization.
 
-Shared supersession preserves exact Scope, Subject, and Facet identity. The common relation audit verifies both sides
-of supersession and promotion, including lifecycle, Candidate-Type, Scope, and provisional Subject/Facet; freshness
-uses the same audit rather than a weaker target-existence check.
+Shared supersession validates the touched source operand and preserves exact Scope, Subject, and Facet identity. The
+common relation audit requires every target ID to resolve exactly once and every supersession chain to be acyclic and
+terminate at an active replacement. It verifies both sides of supersession and promotion, including lifecycle,
+Candidate-Type, Scope, and provisional Subject/Facet; freshness uses the same audit and also reports invalid
+Exception-To and active merged-Subject references.
 
 ## Local Overlay
 

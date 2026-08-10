@@ -437,8 +437,11 @@ fail closed. Setext, attached-hash, and indented-code lookalikes cannot act as t
 routes must live under exactly one `Load by task` H2. The Optional module index is unique, its three canonical H3
 subsections cannot repeat, declarations cannot precede them, and `- None enabled.` cannot coexist with declarations.
 Repo-external overlay reads require the same validated project identity.
-Promotion and Subject-merge previews validate their structural operands and bind the exact Entry/Subject text they
-render. Local reset reports no plan for a disabled overlay, blocks unbound or multi-root state, and binds local file
+Promotion previews render and validate the prospective active Entry, including Candidate-Type, area `MC-AREA`
+identity/storage, promotion relations, and any Optional-index mutation. Their Plan IDs bind the target file's
+existence and content as well as the candidate and manifest. Subject-merge previews validate their structural
+operands and bind the exact Entry/Subject text they render. Local reset reports no plan for a disabled overlay,
+blocks unbound or multi-root state, and binds local file
 and root-binding digests when a plan is meaningful.
 Its private-state inventory records directories and traversal failures, validates the project-id and `local/`
 directories as real owner-only `0700` paths, and hashes owner-only `0600` regular files through no-follow descriptors,
@@ -453,9 +456,11 @@ Entries use the shared schema/Evidence contract plus local-only storage and Scop
 Migration derives operands only from normalized declarations, checks containment inside the memory directory, and
 snapshots all text operands before persisting preview seeds.
 
-Supersession admission and audit preserve the complete `Scope + Subject + Facet` identity. Promotion audit validates
-both directions, source/target lifecycle, Candidate-Type, Scope, and provisional Subject/Facet through the same
-relation checker used by freshness. Protocol 0.7 local Entries are active-only and cannot declare Exception-To,
+Supersession admission validates the touched source Entry before planning and preserves the complete
+`Scope + Subject + Facet` identity. The shared relation audit requires unique targets and an acyclic successor graph
+terminating at an active replacement. Promotion audit validates both directions, source/target lifecycle,
+Candidate-Type, Scope, and provisional Subject/Facet through the same relation checker used by freshness. Freshness
+also reports invalid Exception-To and active references to merged Subjects. Protocol 0.7 local Entries are active-only and cannot declare Exception-To,
 supersession, promotion, or other governance relations. Entry IDs remain unique across shared and local storage.
 
 When Git is available, `check --conflicts --merge-base <ref>` compares semantic units changed on both sides. It

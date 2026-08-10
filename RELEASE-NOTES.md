@@ -86,6 +86,10 @@
   reciprocal links, lifecycle, Candidate-Type, Scope, and provisional identity in both ordinary and freshness checks.
   Local Entries are active-only with no governance relations, and shared/local Entry ID collisions fail closed across
   status, read, check, indexing, enable/link, and local writes.
+- Promotion preview now validates the rendered active target, uses `MC-AREA` for area decisions, previews required
+  Optional-index changes, and binds target existence/content. Supersession planning rejects invalid source operands;
+  relation audit requires unique targets and acyclic chains ending at an active replacement. Freshness also promotes
+  invalid exceptions and active merged-Subject references to errors.
 - Added matched-context conflict gates and optional read-only merge-base review for cross-branch structural collisions
   and concurrent hard-memory changes requiring human reconciliation.
 - Subject names, timestamps, Evidence counts, file order, and prose similarity never choose a winner. This release

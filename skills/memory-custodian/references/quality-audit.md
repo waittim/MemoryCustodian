@@ -43,6 +43,8 @@ memory-custodian check --conflicts --merge-base origin/main  # when Git/ref is a
 - Archive historical rationale only after active invariants remain reachable.
 - Treat missing Evidence paths, broken lifecycle/exception/merge relations, and inconsistent reconciliation records
   as explicit findings. Freshness checks never rewrite Evidence or claim factual correctness.
+- Require supersession targets to resolve exactly once, reject cycles or chains without an active terminal, and make
+  focused freshness surface the same invalid Exception-To and merged-Subject references as conflict analysis.
 
 ## Structural Conflict Review
 
@@ -95,6 +97,8 @@ memory-custodian check --conflicts --merge-base origin/main  # when Git/ref is a
   formal local Entries, orphan binding-only state, and relative or non-normalized binding roots.
 - Test cross-Scope supersession in preview and hand-edited relations; broken or semantically mismatched promotion pairs
   in both ordinary/freshness checks; forbidden local lifecycle fields; and shared/local Entry ID collisions.
+- Test promotion type mismatch, area target ID/storage and Optional-index preview, target-baseline Plan drift,
+  supersession cycles, duplicate relation targets, and structurally invalid `add --supersedes` operands.
 
 ## Scope And Portability
 
