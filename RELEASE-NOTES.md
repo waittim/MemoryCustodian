@@ -93,6 +93,13 @@
 - Made Entry/body and Subject/alias rendering line-safe with parse round-trip checks, preventing raw Markdown from
   creating protocol fields, Entries, or merge state. Promotion now validates Scope/containment before target access,
   checks archive IDs, anchors Status transition, and reports cycles in real edge order.
+- Closed the remaining write-boundary cases: rendered typed bodies and Subject titles must be non-empty, legacy
+  multiline bullets remain one unit, and migration applies the shared schema/storage checks to every prospective
+  Entry while treating ambiguous legacy units as blockers before apply.
+- Soft forget now renders guards and changelog bullets through line-safe serializers, treats an identical
+  deterministic guard as an idempotent no-op, and blocks conflicting IDs. Preview and apply consume one authoritative
+  build result; the lock-held rebuild rechecks blockers and broad-match risk for both Protocol 0.7 and compatibility
+  writes before any mutation.
 - Added matched-context conflict gates and optional read-only merge-base review for cross-branch structural collisions
   and concurrent hard-memory changes requiring human reconciliation.
 - Subject names, timestamps, Evidence counts, file order, and prose similarity never choose a winner. This release

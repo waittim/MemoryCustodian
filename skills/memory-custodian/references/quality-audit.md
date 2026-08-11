@@ -102,6 +102,11 @@ memory-custodian check --conflicts --merge-base origin/main  # when Git/ref is a
 - Test protocol-shaped raw body/reason/candidate/local/migration input and multiline Subject aliases. Assert that
   unsafe promotion Scope fails before target access, archive IDs block promotion, title text cannot intercept Status
   transition, and directed cycle output names only real edges.
+- Test multiline soft-forget topics for field/heading injection and repeated deterministic-guard idempotence. Simulate
+  a blocker and broad-risk change between forget preview and lock acquisition for current and compatibility protocols.
+- Test whitespace-only active/candidate/local bodies and Subject titles, duplicate typed fields in migration
+  candidates, and Protocol 0.5 multiline bullet writes. Fail before shared mutation or private seed creation, and
+  require ambiguous migration units to remain unchanged with an apply blocker.
 
 ## Scope And Portability
 

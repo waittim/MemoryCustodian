@@ -355,6 +355,10 @@ purge plans keep raw arguments, paths, blockers, and digests in the private exec
 matching sensitive topic text from public output. Protocol 0.7 apply requires
 `--confirm-plan <PLAN_ID>` and rechecks the plan under the project mutation lock; an intervening edit refuses all
 writes. Short topics and plans matching multiple semantic units additionally require `forget --allow-broad-match`.
+The locked rebuild is the authoritative forget result for both current and compatibility protocols: newly introduced
+blockers or broad-match risk stop apply before any write. Soft-forget guards use the shared Entry serializer, are
+idempotent when the exact deterministic guard already exists, and block on any conflicting ID owner. Topic-bearing
+changelog records remain one Markdown unit even when the literal topic spans lines.
 
 Private locks and preview seeds live outside the repository in directories restricted to the current user. State
 directories are forced to mode `0700` and regular files to `0600` on POSIX; symlink or non-regular state targets are
@@ -457,8 +461,9 @@ Migration derives operands only from normalized declarations, checks containment
 snapshots all text operands before persisting preview seeds.
 
 Entry bodies are serialized so column-zero field-like lines and `##` headings remain body text rather than becoming
-protocol fields or additional Entries. Active, candidate, local, and migrated Entry output is parse-checked before
-writing. Subject titles and aliases are canonical single lines and rendered Subjects must round-trip as active,
+protocol fields or additional Entries. Active, candidate, local, and migrated Entry output requires a non-empty typed
+body and is parse-checked before writing. Protocol 0.5 bullet compatibility writes indent every continuation line so
+one CLI input remains one semantic unit. Subject titles and aliases are canonical non-empty single lines and rendered Subjects must round-trip as active,
 non-merged records, so raw CLI text cannot apply deferred governance relations.
 
 Supersession admission validates the touched source Entry before planning and preserves the complete

@@ -325,10 +325,18 @@ Candidate-Type, Scope, and provisional Subject/Facet; freshness uses the same au
 Exception-To and active merged-Subject references.
 
 Writers serialize body lines that resemble protocol fields or H2 headings as body text and parse-check rendered
-active, candidate, local, migrated, and Subject records before writing. Subject aliases and titles are canonical
+active, candidate, local, migrated, and Subject records before writing. Typed Entry bodies and Subject titles must be
+non-empty. Protocol 0.5 bullet writers indent continuation lines so one accepted input remains exactly one semantic
+unit. Migration validates each prospective structured Entry with the shared schema and storage rules; a legacy unit
+that cannot be migrated unambiguously remains unchanged and blocks apply. Subject aliases and titles are canonical
 single lines. Promotion validates Scope and resolved target containment before filesystem access, checks generated
 IDs across active and archive storage, and changes only the canonical Status field. Directed cycle diagnostics retain
 the real successor traversal.
+
+Soft-forget Tombstones use the same line-safe Entry renderer and deterministic IDs. Repeating an identical guard is
+an idempotent no-op; a same-ID non-identical owner is a blocker. Changelog continuations remain inside one bullet.
+Forget preview and lock-held apply consume one authoritative build result, and both current and compatibility paths
+must re-evaluate blockers and broad-match risk immediately before mutation.
 
 ## Local Overlay
 
