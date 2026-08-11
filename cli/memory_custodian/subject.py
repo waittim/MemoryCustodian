@@ -273,6 +273,11 @@ def _add(args) -> int:
     def build() -> MutationPlan:
         current_subjects = load_subjects(memory_dir)
         _current_by_id, current_aliases, current_refs = subject_indexes(current_subjects)
+        if any(
+            subject.subject_id.casefold() == subject_id.casefold()
+            for subject in current_subjects
+        ):
+            raise ValueError(f"Pending Subject ID collides with an existing Subject: {subject_id}")
         for alias in aliases:
             owner = current_aliases.get(normalize_alias(alias))
             if owner:

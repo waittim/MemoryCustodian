@@ -22,9 +22,11 @@ from memory_custodian.entries import (
     parse_structured_entries,
     render_active_entry,
     render_candidate_entry,
+    structured_entry_schema_issues,
 )
 from memory_custodian.main import main
 from memory_custodian.migrate import _legacy_key, _migrate_decisions
+from memory_custodian.protocol import parse_markdown_units, today
 from memory_custodian.routes import RouteReason, RoutingCompleteness
 
 
@@ -1602,6 +1604,93 @@ class RoutingAndQualityReleaseTests(unittest.TestCase):
                     self.assertEqual(code, 2, output + error)
                     self.assertIn("body must not be empty", error)
 
+    def test_candidate_requirement_falls_back_and_schema_rejects_blank(self):
+        rendered = render_candidate_entry(
+            "MC-INBOX-20260811-11111111",
+            "Candidate",
+            "decision",
+            "Candidate body.",
+            "project",
+            ("agent-observed",),
+            " \n\t",
+        )
+        parsed = parse_structured_entries(Path("inbox.md"), rendered)[0]
+        self.assertEqual(
+            parsed.field_bodies["Promotion-Requirement"],
+            "Confirm with the user or an authoritative project source.",
+        )
+        blank = rendered.replace(
+            "Confirm with the user or an authoritative project source.",
+            "   ",
+        )
+        invalid = parse_structured_entries(Path("inbox.md"), blank)[0]
+        self.assertTrue(any(
+            "empty Promotion-Requirement" in issue
+            for issue in structured_entry_schema_issues(invalid, "inbox.md")
+        ))
+
+    def test_random_subject_and_migration_ids_reject_collisions(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as state:
+            with patch.dict(os.environ, {"XDG_STATE_HOME": state}), redirect_stdout(StringIO()):
+                self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            memory = Path(tmp) / "docs/memory"
+            subject_id = "MC-SUBJ-20260811-deadbeef"
+            registry = memory / "subjects.md"
+            registry.write_text(
+                registry.read_text(encoding="utf-8")
+                + "\n"
+                + subject_unit(subject_id, "Existing subject"),
+                encoding="utf-8",
+            )
+            with patch(
+                "memory_custodian.subject._pending_subject_id",
+                return_value=(subject_id, Path(state) / "unused-subject-seed"),
+            ), patch.dict(os.environ, {"XDG_STATE_HOME": state}):
+                code, output, error = capture([
+                    "subject", "add", "New subject", "--kind", "concept",
+                    "--evidence", "user-confirmed", "--project-root", tmp,
+                ])
+            self.assertEqual(code, 2, output + error)
+            self.assertIn("collides with an existing Subject", error)
+
+            manifest = memory / "manifest.md"
+            manifest.write_text(
+                manifest.read_text(encoding="utf-8").replace(
+                    "- protocol_version: 0.7", "- protocol_version: 0.5", 1,
+                ),
+                encoding="utf-8",
+            )
+            decisions = memory / "decisions.md"
+            decisions.write_text(
+                "# Decisions\n\n"
+                "## MC-DEC-20200101-deadbeef — Existing\n\n"
+                "Status: active\nScope: project\nEvidence:\n- user-confirmed\n\n"
+                "Decision:\nExisting body.\n\n"
+                "## 2020-01-01 - Legacy\n\nDecision:\nLegacy body.\n",
+                encoding="utf-8",
+            )
+
+            def colliding_suffixes(_command, _root, _digest, keys):
+                return ({key: "deadbeef" for key in keys}, None)
+
+            with patch(
+                "memory_custodian.migrate.pending_entry_suffixes",
+                side_effect=colliding_suffixes,
+            ), patch.dict(os.environ, {"XDG_STATE_HOME": state}):
+                code, output, error = capture(["migrate", "--project-root", tmp])
+            self.assertEqual(code, 0, output + error)
+            self.assertIn("Manual migration required", output)
+
+        first = "## 2020-01-01 - First\nDecision:\nFirst."
+        second = "## 2020-01-01 - Second\nDecision:\nSecond."
+        legacy = "# Decisions\n\n" + first + "\n\n" + second + "\n"
+        suffixes = {
+            _legacy_key("decisions.md", first, 0): "abcdef12",
+            _legacy_key("decisions.md", second, 1): "abcdef12",
+        }
+        _updated, changed, manual, _generated = _migrate_decisions(legacy, suffixes)
+        self.assertEqual((changed, manual), (1, 1))
+
     def test_migration_blocks_duplicate_typed_body_candidate(self):
         with tempfile.TemporaryDirectory() as tmp:
             with redirect_stdout(StringIO()):
@@ -2603,6 +2692,129 @@ class RoutingAndQualityReleaseTests(unittest.TestCase):
 
 
 class ForgetAndHistoryReleaseTests(unittest.TestCase):
+    def test_mixed_h2_and_bullet_forget_preserves_unmatched_entry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            memory = Path(tmp) / "docs/memory"
+            constraints = memory / "constraints.md"
+            unrelated_id = "MC-CON-20260811-22222222"
+            constraints.write_text(
+                "# Constraints\n\n"
+                f"## {unrelated_id} — Unrelated\n\n"
+                "Status: active\nScope: project\nEvidence:\n- user-confirmed\n\n"
+                "Constraint:\nKeep this unrelated Entry.\n\n"
+                "- Remove MixedLegacyTarget.\n",
+                encoding="utf-8",
+            )
+            document = parse_markdown_units(constraints.read_text(encoding="utf-8"))
+            self.assertEqual([unit.kind for unit in document.units], ["h2", "bullet"])
+            self.assertIn("- user-confirmed", document.units[0].text)
+            structured = parse_structured_entries(
+                constraints, constraints.read_text(encoding="utf-8"),
+            )
+            self.assertEqual(len(structured), 1)
+            self.assertNotIn("MixedLegacyTarget", structured[0].text)
+
+            command = [
+                "forget", "MixedLegacyTarget", "--mode", "soft",
+                "--project-root", tmp,
+            ]
+            code, preview, error = capture(command)
+            self.assertEqual(code, 0, preview + error)
+            plan_id = re.search(r"Plan ID: ([0-9a-f]{16})", preview).group(1)
+            code, output, error = capture([
+                *command, "--apply", "--confirm-plan", plan_id,
+            ])
+            self.assertEqual(code, 0, output + error)
+            final = constraints.read_text(encoding="utf-8")
+            self.assertIn(unrelated_id, final)
+            self.assertNotIn("MixedLegacyTarget", final)
+
+    def test_new_guard_precedes_existing_legacy_bullet(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            tombstones = Path(tmp) / "docs/memory/do-not-use.md"
+            tombstones.write_text(
+                "# Do Not Use / Tombstones\n\nTombstones are newest first.\n\n"
+                "- Older legacy guard.\n",
+                encoding="utf-8",
+            )
+            command = ["forget", "New Guard", "--mode", "soft", "--project-root", tmp]
+            code, preview, error = capture(command)
+            self.assertEqual(code, 0, preview + error)
+            plan_id = re.search(r"Plan ID: ([0-9a-f]{16})", preview).group(1)
+            code, output, error = capture([
+                *command, "--apply", "--confirm-plan", plan_id,
+            ])
+            self.assertEqual(code, 0, output + error)
+            final = tombstones.read_text(encoding="utf-8")
+            self.assertLess(final.index("## MC-TOMB-"), final.index("- Older legacy guard."))
+
+    def test_soft_forget_case_identity_noop_and_duplicate_owner_blocker(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            memory = Path(tmp) / "docs/memory"
+
+            def apply(topic: str) -> str:
+                command = ["forget", topic, "--mode", "soft", "--project-root", tmp]
+                code, preview, error = capture(command)
+                self.assertEqual(code, 0, preview + error)
+                plan_id = re.search(r"Plan ID: ([0-9a-f]{16})", preview).group(1)
+                code, output, error = capture([
+                    *command, "--apply", "--confirm-plan", plan_id,
+                ])
+                self.assertEqual(code, 0, output + error)
+                return output
+
+            apply("Case Topic")
+            noop = apply("case topic")
+            self.assertIn("No changes applied", noop)
+            self.assertNotIn("Removed from the selected managed memory scope", noop)
+            tombstones = memory / "do-not-use.md"
+            entries = parse_structured_entries(
+                tombstones, tombstones.read_text(encoding="utf-8"),
+            )
+            self.assertEqual(len(entries), 1)
+            self.assertIn("Case Topic", entries[0].field_bodies["Rejected"])
+
+            archive = memory / "archive"
+            archive.mkdir()
+            (archive / "duplicate.md").write_text(
+                "# Duplicate\n\n" + entries[0].text + "\n",
+                encoding="utf-8",
+            )
+            code, preview, error = capture([
+                "forget", "CASE TOPIC", "--mode", "soft", "--project-root", tmp,
+            ])
+            self.assertEqual(code, 0, preview + error)
+            self.assertIn("Generated Tombstone Entry ID already exists", preview)
+
+    def test_hard_forget_seed_collision_is_a_blocker(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as state:
+            with patch.dict(os.environ, {"XDG_STATE_HOME": state}), redirect_stdout(StringIO()):
+                self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            memory = Path(tmp) / "docs/memory"
+            archive = memory / "archive"
+            archive.mkdir()
+            collision_id = f"MC-TOMB-{today().replace('-', '')}-deadbeef"
+            (archive / "collision.md").write_text(
+                f"# Collision\n\n## {collision_id} — Existing owner\n",
+                encoding="utf-8",
+            )
+            with patch(
+                "memory_custodian.forget.pending_entry_suffixes",
+                return_value=({"hard-tombstone": "deadbeef"}, None),
+            ), patch.dict(os.environ, {"XDG_STATE_HOME": state}):
+                code, preview, error = capture([
+                    "forget", "Hard collision topic", "--mode", "hard",
+                    "--project-root", tmp,
+                ])
+            self.assertEqual(code, 0, preview + error)
+            self.assertIn(f"Generated Tombstone Entry ID already exists: {collision_id}", preview)
+
     def test_soft_forget_is_line_safe_and_idempotent(self):
         with tempfile.TemporaryDirectory() as tmp:
             with redirect_stdout(StringIO()):

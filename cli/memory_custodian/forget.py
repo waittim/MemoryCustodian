@@ -11,7 +11,7 @@ import uuid
 
 from .entries import (
     ENTRY_ID_RE,
-    memory_entry_ids,
+    memory_entry_id_counts,
     parse_structured_entries,
     render_active_entry,
     render_markdown_bullet,
@@ -143,7 +143,11 @@ def _prepend_entry(text: str, entry: str) -> str:
     document = parse_markdown_units(text)
     units = list(document.units)
     insertion = next(
-        (index for index, unit in enumerate(units) if unit.kind == "h2"),
+        (
+            index
+            for index, unit in enumerate(units)
+            if unit.kind in {"h2", "bullet"}
+        ),
         len(units),
     )
     units.insert(
@@ -175,7 +179,10 @@ def _tombstone(
                 raise ValueError("Hard forget requires a random pending Tombstone ID seed.")
             suffix = tombstone_suffix
         else:
-            suffix = hashlib.sha256(f"{project_id}\0{mode}\0{topic}".encode()).hexdigest()[:8]
+            normalized_topic = topic.casefold()
+            suffix = hashlib.sha256(
+                f"{project_id}\0{mode}\0{normalized_topic}".encode()
+            ).hexdigest()[:8]
         entry_id = f"MC-TOMB-{stamp}-{suffix}"
         title = "Redacted user-requested removal" if mode == "hard" else topic
         statement = (
@@ -250,7 +257,18 @@ def _update_existing_tombstones(
             for unit in kept
         )
         if generic is not None and not has_generic_guard:
-            kept.insert(0, MarkdownUnit("h2", generic.strip(), generic.splitlines()[0][3:].strip()))
+            insertion = next(
+                (
+                    index
+                    for index, unit in enumerate(kept)
+                    if unit.kind in {"h2", "bullet"}
+                ),
+                len(kept),
+            )
+            kept.insert(
+                insertion,
+                MarkdownUnit("h2", generic.strip(), generic.splitlines()[0][3:].strip()),
+            )
     return render_markdown_document(document, kept), matches, blockers
 
 
@@ -398,7 +416,7 @@ def _build_forget_mutation_plan(
     extra_blockers: list[str] = []
     soft_guard_exists = False
     if args.mode == "soft" and tombstone:
-        existing_ids = {value.casefold() for value in memory_entry_ids(memory_dir)}
+        existing_counts = memory_entry_id_counts(memory_dir)
         rendered = parse_structured_entries(tombstone_path, tombstone)
         tombstone_id = rendered[0].entry_id if len(rendered) == 1 else None
         expected_guard = rendered[0] if len(rendered) == 1 else None
@@ -407,15 +425,34 @@ def _build_forget_mutation_plan(
             for entry in parse_structured_entries(tombstone_path, read_text(tombstone_path))
             if tombstone_id and entry.entry_id.casefold() == tombstone_id.casefold()
         ]
-        if tombstone_id and tombstone_id.casefold() in existing_ids:
-            if (
-                len(existing_guards) == 1
+        global_owner_count = (
+            existing_counts.get(tombstone_id.casefold(), 0)
+            if tombstone_id
+            else 0
+        )
+        if tombstone_id and global_owner_count:
+            existing_guard = existing_guards[0] if len(existing_guards) == 1 else None
+            bodies_match = bool(
+                existing_guard is not None
                 and expected_guard is not None
-                and existing_guards[0].title == expected_guard.title
-                and existing_guards[0].fields == expected_guard.fields
-                and existing_guards[0].field_counts == expected_guard.field_counts
-                and existing_guards[0].field_bodies == expected_guard.field_bodies
-                and existing_guards[0].evidence == expected_guard.evidence
+                and {
+                    name: value.casefold() if name == "Rejected" else value
+                    for name, value in existing_guard.field_bodies.items()
+                }
+                == {
+                    name: value.casefold() if name == "Rejected" else value
+                    for name, value in expected_guard.field_bodies.items()
+                }
+            )
+            if (
+                global_owner_count == 1
+                and existing_guard is not None
+                and expected_guard is not None
+                and existing_guard.title.casefold() == expected_guard.title.casefold()
+                and existing_guard.fields == expected_guard.fields
+                and existing_guard.field_counts == expected_guard.field_counts
+                and bodies_match
+                and existing_guard.evidence == expected_guard.evidence
             ):
                 soft_guard_exists = True
             else:
@@ -424,6 +461,15 @@ def _build_forget_mutation_plan(
                 )
         else:
             tombstone_updated = _prepend_entry(read_text(tombstone_path), tombstone)
+    elif args.mode == "hard" and tombstone and tombstone_updated is not None:
+        rendered = parse_structured_entries(tombstone_path, tombstone)
+        tombstone_id = rendered[0].entry_id if len(rendered) == 1 else None
+        if tombstone_id and memory_entry_id_counts(memory_dir).get(
+            tombstone_id.casefold(), 0
+        ):
+            extra_blockers.append(
+                f"Generated Tombstone Entry ID already exists: {tombstone_id}"
+            )
 
     changelog_path = memory_dir / "changelog.md"
     changelog_plan = next((plan for plan in plans if plan.path == changelog_path), None)
@@ -770,6 +816,12 @@ def run(args) -> int:
             _require_locked_plan_is_applicable(current_build, args.allow_broad_match)
         completed_paths = apply_mutations(list(current_plan.mutations))
     completed = [path.relative_to(memory_dir).as_posix() for path in completed_paths]
+
+    if not completed:
+        print("No changes applied; the forget guard is already present or no managed unit changed.")
+        discard_pending_seed(tombstone_seed_path)
+        discard_pending_seed(privacy_seed_path)
+        return 0
 
     print(f"Applied forgetting plan. Written files: {len(completed)}")
     for name in completed:

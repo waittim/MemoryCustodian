@@ -9,6 +9,7 @@ import re
 from .entries import (
     ENTRY_ID_RE,
     line_safe_markdown_body,
+    memory_entry_ids,
     parse_structured_entries,
     split_h2,
     structured_entry_schema_issues,
@@ -63,7 +64,9 @@ def _migrate_decisions(
     *,
     scope: str = "project",
     code: str = "DEC",
+    used_ids: set[str] | None = None,
 ) -> tuple[str, int, int, tuple[str, ...]]:
+    occupied_ids = used_ids if used_ids is not None else set()
     preamble, sections = split_h2(text)
     changed = 0
     manual = 0
@@ -78,6 +81,10 @@ def _migrate_decisions(
             updated.append(section)
             continue
         entry_id = _legacy_id(relative, section, index, code, suffixes)
+        if entry_id.casefold() in occupied_ids:
+            manual += 1
+            updated.append(section)
+            continue
         lines = section.splitlines()
         title = re.sub(r"^##\s+(?:\d{4}-\d{2}-\d{2}\s+-\s+)?", "", lines[0]).strip()
         safe_body = [
@@ -112,6 +119,7 @@ def _migrate_decisions(
             updated.append(section)
             continue
         generated_ids.append(entry_id)
+        occupied_ids.add(entry_id.casefold())
         updated.append(migrated)
         changed += 1
     parts = [preamble, *updated] if preamble else updated
@@ -268,9 +276,14 @@ def _build_plan(project_root: Path, memory_dir: Path) -> tuple[MutationPlan, lis
     decisions_path = memory_dir / "decisions.md"
     manual_reports: list[str] = []
     migrated_count = 0
+    used_entry_ids = {entry_id.casefold() for entry_id in memory_entry_ids(memory_dir)}
     if "decisions.md" in sources:
         decisions = sources["decisions.md"]
-        migrated, migrated_count, manual, generated = _migrate_decisions(decisions, suffixes)
+        migrated, migrated_count, manual, generated = _migrate_decisions(
+            decisions,
+            suffixes,
+            used_ids=used_entry_ids,
+        )
         if migrated != decisions:
             mutations.append(TextMutation(decisions_path, migrated))
             changes.append(f"decisions.md: add stable IDs and legacy-unverified Evidence to {migrated_count} structured entries")
@@ -292,6 +305,7 @@ def _build_plan(project_root: Path, memory_dir: Path) -> tuple[MutationPlan, lis
             relative,
             scope=f"area:{slug}",
             code="AREA",
+            used_ids=used_entry_ids,
         )
         if area_updated != area_original:
             mutations.append(TextMutation(area_path, area_updated))

@@ -96,6 +96,19 @@ def memory_entry_ids(memory_dir: Path) -> set[str]:
     return found
 
 
+def memory_entry_id_counts(memory_dir: Path) -> dict[str, int]:
+    """Count canonical heading IDs across all shared managed-memory storage."""
+
+    counts: dict[str, int] = {}
+    if not memory_dir.exists():
+        return counts
+    for path in memory_dir.rglob("*.md"):
+        for value in heading_entry_ids(path.read_text(encoding="utf-8")):
+            key = value.casefold()
+            counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
 def _safe_source_path(value: str) -> tuple[str, str | None]:
     raw_path, separator, revision = value.partition("@")
     normalized = raw_path.replace("\\", "/")
@@ -172,7 +185,7 @@ def line_safe_markdown_body(value: str) -> str:
 
     safe: list[str] = []
     for line in value.splitlines():
-        if FIELD_RE.match(line) or line.startswith("## "):
+        if FIELD_RE.match(line) or line.startswith(("## ", "- ", "* ", "+ ")):
             safe.append("    " + line)
         else:
             safe.append(line)
@@ -287,6 +300,11 @@ def render_candidate_entry(
     normalized_title = " ".join(title.split())
     if not normalized_title:
         raise ValueError("Rendered Entry title must not be empty.")
+    promotion_requirement = (
+        note.strip()
+        if note is not None and note.strip()
+        else "Confirm with the user or an authoritative project source."
+    )
     lines = [
         f"## {entry_id} — {normalized_title}",
         "",
@@ -306,15 +324,13 @@ def render_candidate_entry(
         line_safe_markdown_body(message),
         "",
         "Promotion-Requirement:",
-        line_safe_markdown_body(
-            note or "Confirm with the user or an authoritative project source."
-        ),
+        line_safe_markdown_body(promotion_requirement),
     ])
     rendered = "\n".join(lines)
     _validate_rendered_entry(
         rendered, entry_id, "Statement", message,
         "Promotion-Requirement",
-        note or "Confirm with the user or an authoritative project source.",
+        promotion_requirement,
     )
     return rendered
 
@@ -332,7 +348,13 @@ def split_h2(text: str) -> tuple[str, list[str]]:
 
 
 def parse_structured_entries(path: Path, text: str) -> list[StructuredEntry]:
-    _preamble, sections = split_h2(text)
+    from .protocol import parse_markdown_units
+
+    sections = [
+        unit.text
+        for unit in parse_markdown_units(text).units
+        if unit.kind == "h2"
+    ]
     parsed: list[StructuredEntry] = []
     for section in sections:
         lines = section.splitlines()
@@ -475,6 +497,14 @@ def structured_entry_schema_issues(
                 f"{prefix} must declare exactly one Candidate-Type field "
                 f"(found {candidate_type_count})"
             )
+        requirement_count = entry.field_counts.get("Promotion-Requirement", 0)
+        if requirement_count != 1:
+            issues.append(
+                f"{prefix} must declare exactly one Promotion-Requirement field "
+                f"(found {requirement_count})"
+            )
+        elif not entry.field_bodies.get("Promotion-Requirement", "").strip():
+            issues.append(f"{prefix} has an empty Promotion-Requirement body")
     elif entry.field_counts.get("Candidate-Type", 0):
         issues.append(
             f"{prefix} non-candidate lifecycle cannot declare Candidate-Type"

@@ -675,47 +675,24 @@ def iter_markdown_files(memory_dir: Path, include_archive: bool = False) -> Iter
 
 
 def split_top_level_bullet_units(text: str) -> list[tuple[str, str]]:
-    """Split complete column-zero Markdown bullets from surrounding content."""
+    """Split bullets through the same mixed-unit grammar used by all readers."""
 
+    document = parse_markdown_units(text)
     chunks: list[tuple[str, str]] = []
-    kind = "other"
-    lines: list[str] = []
-    fence: str | None = None
+    other: list[str] = [document.title] if document.title else []
 
-    def flush() -> None:
-        nonlocal lines
-        if lines:
-            chunks.append((kind, "\n".join(lines)))
-            lines = []
+    def flush_other() -> None:
+        if other:
+            chunks.append(("other", "\n\n".join(other)))
+            other.clear()
 
-    for line in text.splitlines():
-        fence_marker = line[:3] if line.startswith(("```", "~~~")) else None
-        if fence is not None:
-            lines.append(line)
-            if fence_marker == fence:
-                fence = None
-            continue
-        if fence_marker is not None:
-            if kind == "bullet":
-                flush()
-                kind = "other"
-            lines.append(line)
-            fence = fence_marker
-            continue
-
-        top_level_bullet = line.startswith(("- ", "* ", "+ "))
-        column_zero_content = bool(line) and not line[0].isspace()
-        if top_level_bullet:
-            flush()
-            kind = "bullet"
-            lines = [line]
-        elif kind == "bullet" and column_zero_content:
-            flush()
-            kind = "other"
-            lines = [line]
+    for unit in document.units:
+        if unit.kind == "bullet":
+            flush_other()
+            chunks.append(("bullet", unit.text))
         else:
-            lines.append(line)
-    flush()
+            other.append(unit.text)
+    flush_other()
     return chunks
 
 
@@ -788,33 +765,80 @@ class MarkdownDocument:
     units: tuple[MarkdownUnit, ...]
 
 
+_UNIT_LIST_FIELDS = frozenset({"Aliases", "Entries", "Evidence", "Merged-From"})
+
+
+def _semantic_unit_starts(lines: list[str], start: int) -> list[tuple[int, str]]:
+    """Return ordered H2, top-level bullet, and post-bullet body boundaries."""
+
+    starts: list[tuple[int, str]] = []
+    current_kind: str | None = None
+    list_field = False
+    fence_character: str | None = None
+    fence_length = 0
+    for index in range(start, len(lines)):
+        line = lines[index]
+        if fence_character is not None:
+            closing = re.fullmatch(
+                rf" {{0,3}}{re.escape(fence_character)}{{{fence_length},}}[ \t]*",
+                line,
+            )
+            if closing:
+                fence_character = None
+                fence_length = 0
+            continue
+        opening = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", line)
+        if opening:
+            fence_character = opening.group(1)[0]
+            fence_length = len(opening.group(1))
+            continue
+
+        if line.startswith("## "):
+            starts.append((index, "h2"))
+            current_kind = "h2"
+            list_field = False
+            continue
+
+        if current_kind == "h2":
+            field = re.fullmatch(r"([A-Za-z][A-Za-z-]*):[ \t]*", line)
+            if field:
+                list_field = field.group(1) in _UNIT_LIST_FIELDS
+                continue
+            if list_field:
+                if line.startswith(("- ", "* ", "+ ")) or (
+                    line and line[0].isspace()
+                ):
+                    continue
+                list_field = False
+
+        if line.startswith(("- ", "* ", "+ ")):
+            starts.append((index, "bullet"))
+            current_kind = "bullet"
+            list_field = False
+            continue
+        if current_kind == "bullet" and line and not line[0].isspace():
+            starts.append((index, "body"))
+            current_kind = "body"
+    return starts
+
+
 def parse_markdown_units(text: str) -> MarkdownDocument:
-    """Parse the narrow Markdown structures managed by MemoryCustodian."""
+    """Parse ordered H2 and legacy-bullet units without merging mixed formats."""
 
     lines = text.rstrip().splitlines()
     title = lines[0] if lines and lines[0].startswith("# ") else ""
     start = 1 if title else 0
-    h2_starts = [index for index in range(start, len(lines)) if lines[index].startswith("## ")]
+    starts = _semantic_unit_starts(lines, start)
     units: list[MarkdownUnit] = []
-    if h2_starts:
-        preamble = "\n".join(lines[start:h2_starts[0]]).strip()
+    if starts:
+        preamble = "\n".join(lines[start:starts[0][0]]).strip()
         if preamble:
             units.append(MarkdownUnit("preamble", preamble))
-        for position, unit_start in enumerate(h2_starts):
-            unit_end = h2_starts[position + 1] if position + 1 < len(h2_starts) else len(lines)
+        for position, (unit_start, kind) in enumerate(starts):
+            unit_end = starts[position + 1][0] if position + 1 < len(starts) else len(lines)
             unit_text = "\n".join(lines[unit_start:unit_end]).strip()
-            units.append(MarkdownUnit("h2", unit_text, lines[unit_start][3:].strip()))
-        return MarkdownDocument(title, tuple(units))
-
-    bullet_starts = [index for index in range(start, len(lines)) if lines[index].startswith(('- ', '* ', '+ '))]
-    if bullet_starts:
-        preamble = "\n".join(lines[start:bullet_starts[0]]).strip()
-        if preamble:
-            units.append(MarkdownUnit("preamble", preamble))
-        for position, unit_start in enumerate(bullet_starts):
-            unit_end = bullet_starts[position + 1] if position + 1 < len(bullet_starts) else len(lines)
-            unit_text = "\n".join(lines[unit_start:unit_end]).strip()
-            units.append(MarkdownUnit("bullet", unit_text))
+            heading = lines[unit_start][3:].strip() if kind == "h2" else None
+            units.append(MarkdownUnit(kind, unit_text, heading))
         return MarkdownDocument(title, tuple(units))
 
     body = "\n".join(lines[start:]).strip()
