@@ -179,6 +179,15 @@ def line_safe_markdown_body(value: str) -> str:
     return "\n".join(safe)
 
 
+def render_markdown_bullet(value: str) -> str:
+    """Render one top-level bullet while keeping every later line inside it."""
+
+    lines = value.splitlines()
+    if not any(line.strip() for line in lines):
+        raise ValueError("Memory body must not be empty.")
+    return "- " + lines[0] + "".join(f"\n  {line}" for line in lines[1:])
+
+
 def _normalized_body(value: str) -> str:
     return "\n".join(line.strip() for line in value.splitlines() if line.strip())
 
@@ -191,6 +200,8 @@ def _validate_rendered_entry(
     extra_body_field: str | None = None,
     extra_body: str | None = None,
 ) -> None:
+    if not _normalized_body(body):
+        raise ValueError(f"Rendered Entry {body_field} body must not be empty.")
     parsed = parse_structured_entries(Path("__rendered_entry__.md"), text)
     if len(parsed) != 1 or parsed[0].entry_id.casefold() != entry_id.casefold():
         raise ValueError("Rendered Entry did not round-trip as exactly one structured Entry.")
@@ -221,6 +232,9 @@ def render_active_entry(
     supersedes: str | None = None,
     promoted_from: str | None = None,
 ) -> str:
+    normalized_title = " ".join(title.split())
+    if not normalized_title:
+        raise ValueError("Rendered Entry title must not be empty.")
     labels = {
         "decision": "Decision",
         "constraint": "Constraint",
@@ -232,7 +246,7 @@ def render_active_entry(
         "profile": "Profile",
     }
     lines = [
-        f"## {entry_id} — {'Tombstone: ' if kind in {'tombstone', 'do-not-use'} else ''}{title}",
+        f"## {entry_id} — {'Tombstone: ' if kind in {'tombstone', 'do-not-use'} else ''}{normalized_title}",
         "",
         "Status: active",
         f"Scope: {scope}",
@@ -270,8 +284,11 @@ def render_candidate_entry(
     subject: str | None = None,
     facet: str | None = None,
 ) -> str:
+    normalized_title = " ".join(title.split())
+    if not normalized_title:
+        raise ValueError("Rendered Entry title must not be empty.")
     lines = [
-        f"## {entry_id} — {title}",
+        f"## {entry_id} — {normalized_title}",
         "",
         "Status: candidate",
         f"Candidate-Type: {candidate_type}",

@@ -12,6 +12,7 @@ from .entries import (
     parse_structured_entries,
     render_active_entry,
     render_candidate_entry,
+    render_markdown_bullet,
     structured_entry_schema_issues,
     structured_entry_storage_issues,
     supersede_entry,
@@ -80,7 +81,7 @@ def _legacy_entry(kind: str, message: str, reason: str | None) -> str:
         body = f"## {today()} - {_title(message)}\nDecision:\n{safe_message}"
         return body + (f"\nReason:\n{safe_reason}" if safe_reason else "")
     if kind in {"constraint", "preference", "rule", "profile", "area"}:
-        return f"- {safe_message}"
+        return render_markdown_bullet(safe_message)
     if kind in {"tombstone", "do-not-use"}:
         return f"## Tombstone: {_title(message)}\n{safe_message}" + (f"\nReason:\n{safe_reason}" if safe_reason else "")
     return f"## {today()}\n- {safe_message}"

@@ -11,6 +11,8 @@ from .entries import (
     line_safe_markdown_body,
     parse_structured_entries,
     split_h2,
+    structured_entry_schema_issues,
+    structured_entry_storage_issues,
 )
 from .locking import project_mutation_guard
 from .mutations import TextMutation, apply_mutations
@@ -76,7 +78,6 @@ def _migrate_decisions(
             updated.append(section)
             continue
         entry_id = _legacy_id(relative, section, index, code, suffixes)
-        generated_ids.append(entry_id)
         lines = section.splitlines()
         title = re.sub(r"^##\s+(?:\d{4}-\d{2}-\d{2}\s+-\s+)?", "", lines[0]).strip()
         safe_body = [
@@ -98,13 +99,19 @@ def _migrate_decisions(
             ]
         )
         parsed = parse_structured_entries(Path(relative), migrated)
-        allowed_fields = {"Status", "Scope", "Evidence", "Decision", "Reason"}
-        if (
-            len(parsed) != 1
-            or parsed[0].entry_id.casefold() != entry_id.casefold()
-            or set(parsed[0].fields) - allowed_fields
-        ):
-            raise ValueError(f"Migrated Entry {entry_id} did not round-trip safely.")
+        if len(parsed) != 1 or parsed[0].entry_id.casefold() != entry_id.casefold():
+            manual += 1
+            updated.append(section)
+            continue
+        validation_issues = [
+            *structured_entry_schema_issues(parsed[0], relative),
+            *structured_entry_storage_issues(parsed[0], relative),
+        ]
+        if validation_issues:
+            manual += 1
+            updated.append(section)
+            continue
+        generated_ids.append(entry_id)
         updated.append(migrated)
         changed += 1
     parts = [preamble, *updated] if preamble else updated
@@ -324,6 +331,7 @@ def _build_plan(project_root: Path, memory_dir: Path) -> tuple[MutationPlan, lis
             CURRENT_PROTOCOL_VERSION,
             tuple(mutations),
             tuple(warnings),
+            tuple(f"Manual migration required for {report}." for report in manual_reports),
             project_root=project_root,
         ),
         changes,
@@ -349,8 +357,14 @@ def run(args) -> int:
         print(f"- {change}")
     print_plan(plan)
     if not args.apply:
-        print("Dry run only. Re-run with --apply --confirm-plan <PLAN_ID>.")
+        if plan.blockers:
+            print("Dry run only. Resolve the migration blockers, then preview again.")
+        else:
+            print("Dry run only. Re-run with --apply --confirm-plan <PLAN_ID>.")
         return 0
+    if plan.blockers:
+        print("Refusing migration apply while blockers remain.")
+        return 1
     if not args.confirm_plan:
         raise ValueError("Protocol 0.7 migration apply requires --confirm-plan <PLAN_ID>.")
 
@@ -364,6 +378,9 @@ def run(args) -> int:
         allow_metadata_repair=True,
     ) as guard:
         current, _changes, current_seed_paths = _build_plan(project_root, memory_dir)
+        if current.blockers:
+            print_plan(current)
+            raise ValueError("Migration plan gained blockers before apply. No files written.")
         if guard.project_id != current.project_id:
             print_plan(current)
             raise ValueError(

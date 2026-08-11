@@ -245,9 +245,12 @@ def _add(args) -> int:
     project_root, memory_dir, project_id = _project(args)
     registry = _registry(memory_dir)
     kind = validate_subject_kind(args.kind)
+    normalized_title = " ".join(args.title.split())
+    if not normalized_title:
+        raise ValueError("Subject title must not be empty.")
     canonical_ref = normalize_canonical_ref(args.canonical_ref) if args.canonical_ref else None
     aliases = tuple(dict.fromkeys(
-        " ".join(alias.split()) for alias in [args.title, *args.alias] if alias.split()
+        " ".join(alias.split()) for alias in [normalized_title, *args.alias] if alias.split()
     ))
     evidence = validate_evidence(args.evidence, project_root)
     subjects = load_subjects(memory_dir)
@@ -264,7 +267,7 @@ def _add(args) -> int:
         raise ValueError(
             "Exact Subject identity collision; use the existing Subject: " + ", ".join(sorted(collisions))
         )
-    normalized_args = "\0".join([args.title, kind, canonical_ref or "", *aliases, *evidence])
+    normalized_args = "\0".join([normalized_title, kind, canonical_ref or "", *aliases, *evidence])
     subject_id, seed_path = _pending_subject_id(project_id, registry, normalized_args)
 
     def build() -> MutationPlan:
@@ -278,7 +281,7 @@ def _add(args) -> int:
             raise ValueError(
                 f"Exact Canonical-Ref collision with {current_refs[canonical_ref].subject_id}: {canonical_ref}"
             )
-        entry = render_subject(subject_id, args.title, kind, canonical_ref, aliases, evidence)
+        entry = render_subject(subject_id, normalized_title, kind, canonical_ref, aliases, evidence)
         updated = prepended_text(registry.read_text(encoding="utf-8"), entry)
         return MutationPlan(
             "subject add",

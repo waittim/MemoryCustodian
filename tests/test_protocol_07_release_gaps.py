@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from io import StringIO
 import json
 import os
@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -1575,6 +1576,98 @@ class RoutingAndQualityReleaseTests(unittest.TestCase):
             self.assertEqual(len(entries), 1)
             self.assertNotIn("Exception-To", entries[0].fields)
 
+    def test_empty_entry_bodies_are_rejected_before_shared_or_local_writes(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as state:
+            with patch.dict(os.environ, {"XDG_STATE_HOME": state}), redirect_stdout(StringIO()):
+                self.assertEqual(main(["init", "--project-root", tmp]), 0)
+                self.assertEqual(main(["local", "enable", "--project-root", tmp]), 0)
+                self.assertEqual(main(["local", "link", "--project-root", tmp]), 0)
+            commands = (
+                [
+                    "add", " \n\t", "--type", "preference",
+                    "--evidence", "user-confirmed", "--project-root", tmp,
+                ],
+                [
+                    "add", " \n\t", "--type", "decision", "--candidate",
+                    "--evidence", "agent-observed", "--project-root", tmp,
+                ],
+                [
+                    "local", "add", " \n\t", "--type", "preference",
+                    "--evidence", "user-confirmed", "--project-root", tmp,
+                ],
+            )
+            with patch.dict(os.environ, {"XDG_STATE_HOME": state}):
+                for command in commands:
+                    code, output, error = capture(command)
+                    self.assertEqual(code, 2, output + error)
+                    self.assertIn("body must not be empty", error)
+
+    def test_migration_blocks_duplicate_typed_body_candidate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            memory = Path(tmp) / "docs/memory"
+            manifest = memory / "manifest.md"
+            manifest.write_text(
+                manifest.read_text(encoding="utf-8").replace(
+                    "- protocol_version: 0.7", "- protocol_version: 0.5", 1,
+                ),
+                encoding="utf-8",
+            )
+            decisions = memory / "decisions.md"
+            original = (
+                "# Decisions\n\n## 2026-08-11 - Ambiguous\n\n"
+                "Decision:\nFirst.\n\nDecision:\nSecond.\n"
+            )
+            decisions.write_text(original, encoding="utf-8")
+            command = ["migrate", "--project-root", tmp]
+            code, preview, error = capture(command)
+            self.assertEqual(code, 0, preview + error)
+            self.assertIn("Manual migration required", preview)
+            self.assertNotIn("Blockers:\n- none", preview)
+            plan_id = re.search(r"Plan ID: ([0-9a-f]{16})", preview).group(1)
+            code, output, error = capture([
+                *command, "--apply", "--confirm-plan", plan_id,
+            ])
+            self.assertEqual(code, 1, output + error)
+            self.assertEqual(decisions.read_text(encoding="utf-8"), original)
+            self.assertIn("- protocol_version: 0.5", manifest.read_text(encoding="utf-8"))
+
+    def test_legacy_multiline_bullet_add_remains_one_semantic_unit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            manifest = Path(tmp) / "docs/memory/manifest.md"
+            manifest.write_text(
+                manifest.read_text(encoding="utf-8").replace(
+                    "- protocol_version: 0.7", "- protocol_version: 0.5", 1,
+                ),
+                encoding="utf-8",
+            )
+            code, output, error = capture([
+                "add", "first preference\n- injected second preference",
+                "--type", "preference", "--project-root", tmp,
+            ])
+            self.assertEqual(code, 0, output + error)
+            preferences = Path(tmp) / "docs/memory/preferences.md"
+            text = preferences.read_text(encoding="utf-8")
+            self.assertEqual(len(re.findall(r"(?m)^- ", text)), 1)
+            self.assertIn("\n  - injected second preference", text)
+
+    def test_empty_subject_title_fails_before_pending_seed(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as state:
+            with patch.dict(os.environ, {"XDG_STATE_HOME": state}), redirect_stdout(StringIO()):
+                self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            with patch.dict(os.environ, {"XDG_STATE_HOME": state}):
+                code, output, error = capture([
+                    "subject", "add", " \n\t", "--kind", "concept",
+                    "--evidence", "user-confirmed", "--project-root", tmp,
+                ])
+            self.assertEqual(code, 2, output + error)
+            self.assertIn("Subject title must not be empty", error)
+            plans = Path(state) / "memory-custodian/plans"
+            self.assertFalse(plans.exists() and any(plans.glob("subject-*.id")))
+
     def test_promotion_rejects_unsafe_scope_before_target_access(self):
         with tempfile.TemporaryDirectory() as tmp:
             with redirect_stdout(StringIO()):
@@ -2510,6 +2603,90 @@ class RoutingAndQualityReleaseTests(unittest.TestCase):
 
 
 class ForgetAndHistoryReleaseTests(unittest.TestCase):
+    def test_soft_forget_is_line_safe_and_idempotent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            memory = Path(tmp) / "docs/memory"
+            injected_id = "MC-DEC-20260811-deadbeef"
+            topic = (
+                "Safe guard\nException-To: MC-CON-20260811-deadbeef\n"
+                f"## {injected_id} — Injected"
+            )
+            command = ["forget", topic, "--mode", "soft", "--project-root", tmp]
+            code, preview, error = capture(command)
+            self.assertEqual(code, 0, preview + error)
+            plan_id = re.search(r"Plan ID: ([0-9a-f]{16})", preview).group(1)
+            code, output, error = capture([
+                *command, "--apply", "--confirm-plan", plan_id,
+            ])
+            self.assertEqual(code, 0, output + error)
+            tombstones = memory / "do-not-use.md"
+            entries = parse_structured_entries(
+                tombstones, tombstones.read_text(encoding="utf-8"),
+            )
+            self.assertEqual(len(entries), 1)
+            self.assertNotIn("Exception-To", entries[0].fields)
+            self.assertNotEqual(entries[0].entry_id, injected_id)
+            guard_id = entries[0].entry_id
+
+            code, repeated, error = capture(command)
+            self.assertEqual(code, 0, repeated + error)
+            repeated_plan = re.search(r"Plan ID: ([0-9a-f]{16})", repeated).group(1)
+            code, output, error = capture([
+                *command, "--apply", "--confirm-plan", repeated_plan,
+            ])
+            self.assertEqual(code, 0, output + error)
+            final_entries = parse_structured_entries(
+                tombstones, tombstones.read_text(encoding="utf-8"),
+            )
+            self.assertEqual([entry.entry_id for entry in final_entries].count(guard_id), 1)
+
+    def test_legacy_forget_rechecks_locked_plan_blockers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            memory = Path(tmp) / "docs/memory"
+            manifest = memory / "manifest.md"
+            manifest.write_text(
+                manifest.read_text(encoding="utf-8").replace(
+                    "- protocol_version: 0.7", "- protocol_version: 0.5", 1,
+                ),
+                encoding="utf-8",
+            )
+            topic = "LockedRaceMarker"
+            constraints = memory / "constraints.md"
+            constraints.write_text(f"# Constraints\n\n- Remove {topic}.\n", encoding="utf-8")
+            tombstones = memory / "do-not-use.md"
+            constraints_before = constraints.read_text(encoding="utf-8")
+            tombstones_before = tombstones.read_text(encoding="utf-8")
+            locked_constraints = (
+                f"# Constraints\n\nNon-removable preamble mentions {topic}.\n\n"
+                f"- Remove {topic}.\n"
+            )
+
+            @contextmanager
+            def mutate_before_lock_yield(*_args, **_kwargs):
+                constraints.write_text(locked_constraints, encoding="utf-8")
+                yield SimpleNamespace(
+                    manifest_text=manifest.read_text(encoding="utf-8"),
+                    project_id=None,
+                )
+
+            with patch(
+                "memory_custodian.forget.project_mutation_guard",
+                mutate_before_lock_yield,
+            ):
+                code, output, error = capture([
+                    "forget", topic, "--mode", "soft", "--apply",
+                    "--project-root", tmp,
+                ])
+            self.assertEqual(code, 2, output + error)
+            self.assertIn("gained blockers", error)
+            self.assertNotEqual(locked_constraints, constraints_before)
+            self.assertEqual(constraints.read_text(encoding="utf-8"), locked_constraints)
+            self.assertEqual(tombstones.read_text(encoding="utf-8"), tombstones_before)
+
     def test_hard_forget_apply_preserves_clear_conflicts_and_strict_read(self):
         with tempfile.TemporaryDirectory() as tmp:
             with redirect_stdout(StringIO()):

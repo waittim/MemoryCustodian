@@ -9,7 +9,14 @@ import re
 import subprocess
 import uuid
 
-from .entries import ENTRY_ID_RE, parse_structured_entries
+from .entries import (
+    ENTRY_ID_RE,
+    memory_entry_ids,
+    parse_structured_entries,
+    render_active_entry,
+    render_markdown_bullet,
+    line_safe_markdown_body,
+)
 from .locking import project_mutation_guard
 from .erasure import ErasureScope, render_apply_boundary, render_scope, scope_for_forget
 from .mutations import TextMutation, apply_mutations
@@ -45,6 +52,17 @@ class FilePlan:
     updated: str
     matches: tuple[MarkdownUnit, ...]
     blockers: tuple[MarkdownUnit, ...]
+
+
+@dataclass(frozen=True)
+class ForgetBuild:
+    plan: MutationPlan
+    targets: tuple[Path, ...]
+    file_plans: tuple[FilePlan, ...]
+    tombstone_matches: tuple[MarkdownUnit, ...]
+    tombstone_blockers: tuple[MarkdownUnit, ...]
+    broad_reasons: tuple[str, ...]
+    changelog_written: bool
 
 
 def _target_files(memory_dir: Path, mode: str, *, include_do_not_use: bool = False) -> list[Path]:
@@ -123,12 +141,20 @@ def _remove_units(
 
 def _prepend_entry(text: str, entry: str) -> str:
     document = parse_markdown_units(text)
-    units = [MarkdownUnit("h2", entry.strip(), entry.splitlines()[0][3:].strip()), *document.units]
+    units = list(document.units)
+    insertion = next(
+        (index for index, unit in enumerate(units) if unit.kind == "h2"),
+        len(units),
+    )
+    units.insert(
+        insertion,
+        MarkdownUnit("h2", entry.strip(), entry.splitlines()[0][3:].strip()),
+    )
     return render_markdown_document(document, units)
 
 
 def _append_changelog_entry(text: str, message: str) -> str:
-    entry = f"## {today()}\n- {message}"
+    entry = f"## {today()}\n{render_markdown_bullet(message)}"
     if not text.strip():
         return f"# Memory Changelog\n\n{entry}\n"
     return _prepend_entry(text, entry)
@@ -157,10 +183,14 @@ def _tombstone(
             if mode == "hard"
             else f"Do not reintroduce {topic} unless the user explicitly reverses this request."
         )
-        return (
-            f"## {entry_id} — Tombstone: {title}\n\n"
-            "Status: active\nScope: project\nEvidence:\n- user-confirmed\n\n"
-            f"Rejected:\n{statement}\n\nReason:\nUser-requested forgetting guard."
+        return render_active_entry(
+            "tombstone",
+            entry_id,
+            title,
+            statement,
+            "User-requested forgetting guard.",
+            "project",
+            ("user-confirmed",),
         )
     if mode == "hard":
         return (
@@ -168,11 +198,12 @@ def _tombstone(
             "A user-requested topic was removed in hard mode. Do not reconstruct removed content from prior context "
             "unless the user explicitly reverses this request."
         )
-    return (
-        f"## Tombstone: {topic}\n"
+    title = " ".join(topic.split())
+    statement = (
         "Do not reintroduce unless the user explicitly reverses this. "
         f"Reason: the user asked MemoryCustodian to forget this topic. Mode: soft. Date: {today()}."
     )
+    return f"## Tombstone: {title}\n{line_safe_markdown_body(statement)}"
 
 
 def _update_existing_tombstones(
@@ -335,7 +366,7 @@ def _build_forget_mutation_plan(
     protocol_version: str,
     tombstone_suffix: str | None = None,
     privacy_nonce: str | None = None,
-) -> MutationPlan:
+) -> ForgetBuild:
     topic = args.topic.strip()
     targets = _target_files(memory_dir, args.mode, include_do_not_use=bool(getattr(args, "entry_id", None)))
     plans: list[FilePlan] = []
@@ -351,9 +382,10 @@ def _build_forget_mutation_plan(
 
     tombstone_path = memory_dir / "do-not-use.md"
     tombstone_updated: str | None = None
+    tombstone_matches: tuple[MarkdownUnit, ...] = ()
     tombstone_blockers: tuple[MarkdownUnit, ...] = ()
     if args.mode in {"hard", "purge"}:
-        candidate, _matches, tombstone_blockers = _update_existing_tombstones(
+        candidate, tombstone_matches, tombstone_blockers = _update_existing_tombstones(
             read_text(tombstone_path),
             topic,
             args.mode,
@@ -363,8 +395,35 @@ def _build_forget_mutation_plan(
         if candidate != ensure_newline(read_text(tombstone_path)):
             tombstone_updated = candidate
     tombstone = _tombstone(topic, args.mode, project_id, tombstone_suffix)
+    extra_blockers: list[str] = []
+    soft_guard_exists = False
     if args.mode == "soft" and tombstone:
-        tombstone_updated = _prepend_entry(read_text(tombstone_path), tombstone)
+        existing_ids = {value.casefold() for value in memory_entry_ids(memory_dir)}
+        rendered = parse_structured_entries(tombstone_path, tombstone)
+        tombstone_id = rendered[0].entry_id if len(rendered) == 1 else None
+        expected_guard = rendered[0] if len(rendered) == 1 else None
+        existing_guards = [
+            entry
+            for entry in parse_structured_entries(tombstone_path, read_text(tombstone_path))
+            if tombstone_id and entry.entry_id.casefold() == tombstone_id.casefold()
+        ]
+        if tombstone_id and tombstone_id.casefold() in existing_ids:
+            if (
+                len(existing_guards) == 1
+                and expected_guard is not None
+                and existing_guards[0].title == expected_guard.title
+                and existing_guards[0].fields == expected_guard.fields
+                and existing_guards[0].field_counts == expected_guard.field_counts
+                and existing_guards[0].field_bodies == expected_guard.field_bodies
+                and existing_guards[0].evidence == expected_guard.evidence
+            ):
+                soft_guard_exists = True
+            else:
+                extra_blockers.append(
+                    f"Generated Tombstone Entry ID already exists: {tombstone_id}"
+                )
+        else:
+            tombstone_updated = _prepend_entry(read_text(tombstone_path), tombstone)
 
     changelog_path = memory_dir / "changelog.md"
     changelog_plan = next((plan for plan in plans if plan.path == changelog_path), None)
@@ -378,9 +437,10 @@ def _build_forget_mutation_plan(
         if args.mode == "soft"
         else f"Completed {args.mode} forget operation."
     )
+    soft_noop = args.mode == "soft" and soft_guard_exists and not matched_plans
     changelog_updated = (
         _append_changelog_entry(changelog_base, changelog_message)
-        if changelog_path.exists()
+        if changelog_path.exists() and not soft_noop
         else None
     )
     writes: list[tuple[Path, str]] = [
@@ -404,6 +464,14 @@ def _build_forget_mutation_plan(
     )
     blockers.extend(_subject_reference_blockers(memory_dir, plans, tombstone_updated))
     blockers.extend(_entry_reference_blockers(memory_dir, getattr(args, "entry_id", None)))
+    blockers.extend(extra_blockers)
+    total_matches = sum(len(plan.matches) for plan in plans)
+    manual_blockers = sum(len(plan.blockers) for plan in plans) + len(tombstone_blockers)
+    broad_reasons: list[str] = []
+    if len("".join(topic.split())) < 4:
+        broad_reasons.append("topic has fewer than four non-whitespace characters")
+    if total_matches + len(tombstone_matches) + manual_blockers > 1:
+        broad_reasons.append("plan matches more than one semantic unit")
     active_matches = any(
         plan.matches and not plan.path.relative_to(memory_dir).as_posix().startswith("archive/")
         for plan in plans
@@ -419,7 +487,7 @@ def _build_forget_mutation_plan(
         has_mutations=bool(writes),
         history_check_status=getattr(args, "history_check_status", "not-requested"),
     )
-    return MutationPlan(
+    mutation_plan = MutationPlan(
         "forget",
         {"topic": topic, "mode": args.mode, "allow_broad_match": args.allow_broad_match},
         project_id or "legacy-protocol-0.5",
@@ -451,6 +519,30 @@ def _build_forget_mutation_plan(
         if args.mode in {"hard", "purge"} and not getattr(args, "entry_id", None)
         else (),
     )
+    return ForgetBuild(
+        mutation_plan,
+        tuple(targets),
+        tuple(plans),
+        tombstone_matches,
+        tombstone_blockers,
+        tuple(broad_reasons),
+        changelog_updated is not None,
+    )
+
+
+def _require_locked_plan_is_applicable(build: ForgetBuild, allow_broad_match: bool) -> None:
+    if build.plan.blockers:
+        print_plan(build.plan)
+        raise ValueError(
+            "Forget plan gained blockers while acquiring the mutation lock. No files written."
+        )
+    if build.broad_reasons and not allow_broad_match:
+        print_plan(build.plan)
+        raise ValueError(
+            "Forget plan became broad-risk while acquiring the mutation lock: "
+            + "; ".join(build.broad_reasons)
+            + ". No files written."
+        )
 
 
 def run(args) -> int:
@@ -520,50 +612,26 @@ def run(args) -> int:
         else:
             privacy_nonce = uuid.uuid4().hex
 
-    targets = _target_files(memory_dir, args.mode, include_do_not_use=bool(getattr(args, "entry_id", None)))
-    plans: list[FilePlan] = []
-    for path in targets:
-        original = read_text(path)
-        updated, matches, blockers = _remove_units(
-            original,
-            topic,
-            exact_entry_id=getattr(args, "entry_id", None),
-        )
-        plans.append(FilePlan(path, updated, matches, blockers))
-
+    build = _build_forget_mutation_plan(
+        args,
+        project_root,
+        memory_dir,
+        project_id,
+        metadata.get("protocol_version", "0.5"),
+        tombstone_suffix,
+        privacy_nonce,
+    )
+    mutation_plan = build.plan
+    targets = list(build.targets)
+    plans = list(build.file_plans)
     matched_plans = [plan for plan in plans if plan.matches]
     total_matches = sum(len(plan.matches) for plan in plans)
     blocker_plans = [plan for plan in plans if plan.blockers]
-    tombstone_matches: tuple[MarkdownUnit, ...] = ()
-    tombstone_blockers: tuple[MarkdownUnit, ...] = ()
-    tombstone_updated: str | None = None
-    tombstone_path = memory_dir / "do-not-use.md"
-    if args.mode in {"hard", "purge"}:
-        tombstone_original = read_text(tombstone_path)
-        candidate, tombstone_matches, tombstone_blockers = _update_existing_tombstones(
-            tombstone_original,
-            topic,
-            args.mode,
-            project_id,
-            tombstone_suffix,
-        )
-        if candidate != ensure_newline(tombstone_original):
-            tombstone_updated = candidate
+    tombstone_matches = build.tombstone_matches
+    tombstone_blockers = build.tombstone_blockers
     manual_blockers = sum(len(plan.blockers) for plan in plans) + len(tombstone_blockers)
-    broad_reasons: list[str] = []
-    if len("".join(topic.split())) < 4:
-        broad_reasons.append("topic has fewer than four non-whitespace characters")
-    if total_matches + len(tombstone_matches) + manual_blockers > 1:
-        broad_reasons.append("plan matches more than one semantic unit")
-
-    tombstone = _tombstone(topic, args.mode, project_id, tombstone_suffix)
-    changelog_path = memory_dir / "changelog.md"
-    if args.mode == "soft" and tombstone:
-        tombstone_updated = _prepend_entry(read_text(tombstone_path), tombstone)
-    changelog_message = f"Forgot topic '{topic}' with mode soft." if args.mode == "soft" else f"Completed {args.mode} forget operation."
-    changelog_plan = next((plan for plan in plans if plan.path == changelog_path), None)
-    changelog_base = changelog_plan.updated if changelog_plan else (read_text(changelog_path) if changelog_path.exists() else "")
-    changelog_updated = _append_changelog_entry(changelog_base, changelog_message) if changelog_path.exists() else None
+    broad_reasons = list(build.broad_reasons)
+    changelog_updated = build.changelog_written
 
     print(f"Mode: {args.mode}")
     print(f"Searched files: {len(targets)}")
@@ -602,22 +670,6 @@ def run(args) -> int:
             print(f"- do-not-use.md: {unit.kind} contains matching content")
     if args.mode == "purge":
         print("Warning: Git history, backups, caches, and external copies are outside this command's scope.")
-    writes: list[tuple[Path, str]] = [
-        (plan.path, plan.updated) for plan in matched_plans if plan.path != changelog_path
-    ]
-    if tombstone_updated is not None:
-        writes.append((tombstone_path, tombstone_updated))
-    if changelog_updated is not None:
-        writes.append((changelog_path, changelog_updated))
-    mutation_plan = _build_forget_mutation_plan(
-        args,
-        project_root,
-        memory_dir,
-        project_id,
-        metadata.get("protocol_version", "0.5"),
-        tombstone_suffix,
-        privacy_nonce,
-    )
     scope = ErasureScope(**mutation_plan.context["erasure_scope"])
     public_blockers = mutation_plan.canonical()["blockers"]
     structural_blockers = [
@@ -673,7 +725,7 @@ def run(args) -> int:
                 raise ValueError(
                     "Project identity changed before forget apply; preview again."
                 )
-            current_plan = _build_forget_mutation_plan(
+            current_build = _build_forget_mutation_plan(
                 args,
                 project_root,
                 memory_dir,
@@ -682,6 +734,8 @@ def run(args) -> int:
                 tombstone_suffix,
                 privacy_nonce,
             )
+            current_plan = current_build.plan
+            _require_locked_plan_is_applicable(current_build, args.allow_broad_match)
             if current_plan.plan_id != args.confirm_plan:
                 print_plan(current_plan)
                 raise ValueError(
@@ -703,7 +757,7 @@ def run(args) -> int:
                 "Migration available: Protocol 0.5 apply keeps legacy confirmation "
                 "behavior under the bootstrap mutation guard."
             )
-            current_plan = _build_forget_mutation_plan(
+            current_build = _build_forget_mutation_plan(
                 args,
                 project_root,
                 memory_dir,
@@ -712,6 +766,8 @@ def run(args) -> int:
                 tombstone_suffix,
                 privacy_nonce,
             )
+            current_plan = current_build.plan
+            _require_locked_plan_is_applicable(current_build, args.allow_broad_match)
         completed_paths = apply_mutations(list(current_plan.mutations))
     completed = [path.relative_to(memory_dir).as_posix() for path in completed_paths]
 
