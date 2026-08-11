@@ -333,10 +333,19 @@ single lines. Promotion validates Scope and resolved target containment before f
 IDs across active and archive storage, and changes only the canonical Status field. Directed cycle diagnostics retain
 the real successor traversal.
 
-Soft-forget Tombstones use the same line-safe Entry renderer and deterministic IDs. Repeating an identical guard is
-an idempotent no-op; a same-ID non-identical owner is a blocker. Changelog continuations remain inside one bullet.
+H2 Entries and column-zero legacy bullets are ordered peer semantic units in mixed compatibility files. Evidence,
+Aliases, Entries, and Merged-From list bullets remain attached to their declaring H2; generated typed-body bullets are
+indented. Forget, compaction, indexing, and budget packing use this one boundary grammar. New structured units are
+inserted after file preamble and before the first H2 or legacy bullet. Candidate and promoted records require exactly
+one non-empty Promotion-Requirement.
+
+Soft-forget Tombstones use the same line-safe Entry renderer and deterministic IDs. Repeating the same canonical-topic
+guard is an idempotent no-op, including a case-only spelling change; zero-write apply reports no change. Idempotence
+requires exactly one global owner, and any additional or non-equivalent same-ID owner is a blocker. Changelog continuations remain inside one bullet.
 Forget preview and lock-held apply consume one authoritative build result, and both current and compatibility paths
 must re-evaluate blockers and broad-match risk immediately before mutation.
+Pending Subject, hard-forget Tombstone, and migration Entry IDs are checked against all current owners and IDs already
+created by the plan on every build, including the lock-held rebuild.
 
 ## Local Overlay
 

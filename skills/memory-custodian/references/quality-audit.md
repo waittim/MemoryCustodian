@@ -107,6 +107,11 @@ memory-custodian check --conflicts --merge-base origin/main  # when Git/ref is a
 - Test whitespace-only active/candidate/local bodies and Subject titles, duplicate typed fields in migration
   candidates, and Protocol 0.5 multiline bullet writes. Fail before shared mutation or private seed creation, and
   require ambiguous migration units to remain unchanged with an apply blocker.
+- Test mixed H2/legacy-bullet ordering through forget, compaction, indexing, and budget packing; protocol list bullets
+  must stay attached to their H2 owner. Assert newest-first insertion ahead of legacy bullets.
+- Inject valid colliding pending Subject, hard-Tombstone, and migration suffix seeds, including two IDs created by one
+  migration plan. Test case-only soft-forget repeats, duplicate owners outside do-not-use.md, explicit zero-write
+  output, and blank or duplicate Promotion-Requirement fields.
 
 ## Scope And Portability
 

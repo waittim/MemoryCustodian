@@ -357,7 +357,8 @@ matching sensitive topic text from public output. Protocol 0.7 apply requires
 writes. Short topics and plans matching multiple semantic units additionally require `forget --allow-broad-match`.
 The locked rebuild is the authoritative forget result for both current and compatibility protocols: newly introduced
 blockers or broad-match risk stop apply before any write. Soft-forget guards use the shared Entry serializer, are
-idempotent when the exact deterministic guard already exists, and block on any conflicting ID owner. Topic-bearing
+idempotent when the single existing guard has the same case-insensitive topic identity, and block on duplicate or
+conflicting ID owners anywhere in shared storage. A zero-write repeat reports a no-op rather than removal. Topic-bearing
 changelog records remain one Markdown unit even when the literal topic spans lines.
 
 Private locks and preview seeds live outside the repository in directories restricted to the current user. State
@@ -465,6 +466,12 @@ protocol fields or additional Entries. Active, candidate, local, and migrated En
 body and is parse-checked before writing. Protocol 0.5 bullet compatibility writes indent every continuation line so
 one CLI input remains one semantic unit. Subject titles and aliases are canonical non-empty single lines and rendered Subjects must round-trip as active,
 non-merged records, so raw CLI text cannot apply deferred governance relations.
+Mixed compatibility files use one ordered semantic-unit grammar: H2 Entries and top-level legacy bullets remain
+separate, while protocol list fields such as Evidence remain inside their owner. Forget, compaction, indexing, and
+budget packing consume those same boundaries. New structured units are inserted before the first existing semantic
+unit, after file-level explanatory prose. Candidate Promotion-Requirement bodies are unique and non-empty.
+Subject, hard-forget Tombstone, and migration-generated IDs are rechecked against current and same-plan owners every
+time their plan is built, including the build performed under the mutation lock.
 
 Supersession admission validates the touched source Entry before planning and preserves the complete
 `Scope + Subject + Facet` identity. The shared relation audit requires unique targets and an acyclic successor graph

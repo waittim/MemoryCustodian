@@ -96,10 +96,15 @@
 - Closed the remaining write-boundary cases: rendered typed bodies and Subject titles must be non-empty, legacy
   multiline bullets remain one unit, and migration applies the shared schema/storage checks to every prospective
   Entry while treating ambiguous legacy units as blockers before apply.
-- Soft forget now renders guards and changelog bullets through line-safe serializers, treats an identical
+- Soft forget now renders guards and changelog bullets through line-safe serializers, treats a case-equivalent
   deterministic guard as an idempotent no-op, and blocks conflicting IDs. Preview and apply consume one authoritative
   build result; the lock-held rebuild rechecks blockers and broad-match risk for both Protocol 0.7 and compatibility
   writes before any mutation.
+- Unified mixed H2/legacy-bullet walking across forget, compaction, indexing, and budget packing, without detaching
+  Evidence or other protocol lists from their owner. New guards retain newest-first ordering ahead of legacy bullets.
+- Random Subject, hard-forget Tombstone, and migration Entry IDs are checked against existing and same-plan owners on
+  every build. Soft guard identity now follows case-insensitive matching, duplicate owners block idempotence, zero-write
+  apply reports a no-op, and candidate Promotion-Requirement is unique and non-empty.
 - Added matched-context conflict gates and optional read-only merge-base review for cross-branch structural collisions
   and concurrent hard-memory changes requiring human reconciliation.
 - Subject names, timestamps, Evidence counts, file order, and prose similarity never choose a winner. This release
