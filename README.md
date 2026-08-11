@@ -456,12 +456,20 @@ Entries use the shared schema/Evidence contract plus local-only storage and Scop
 Migration derives operands only from normalized declarations, checks containment inside the memory directory, and
 snapshots all text operands before persisting preview seeds.
 
+Entry bodies are serialized so column-zero field-like lines and `##` headings remain body text rather than becoming
+protocol fields or additional Entries. Active, candidate, local, and migrated Entry output is parse-checked before
+writing. Subject titles and aliases are canonical single lines and rendered Subjects must round-trip as active,
+non-merged records, so raw CLI text cannot apply deferred governance relations.
+
 Supersession admission validates the touched source Entry before planning and preserves the complete
 `Scope + Subject + Facet` identity. The shared relation audit requires unique targets and an acyclic successor graph
 terminating at an active replacement. Promotion audit validates both directions, source/target lifecycle,
 Candidate-Type, Scope, and provisional Subject/Facet through the same relation checker used by freshness. Freshness
 also reports invalid Exception-To and active references to merged Subjects. Protocol 0.7 local Entries are active-only and cannot declare Exception-To,
 supersession, promotion, or other governance relations. Entry IDs remain unique across shared and local storage.
+Promotion validates Scope and target containment before target filesystem access, checks generated IDs against
+archive as well as active storage, and performs an anchored lifecycle transition. Cycle diagnostics retain actual
+successor edge order.
 
 When Git is available, `check --conflicts --merge-base <ref>` compares semantic units changed on both sides. It
 distinguishes deterministic collisions from concurrent hard-memory changes requiring semantic reconciliation.

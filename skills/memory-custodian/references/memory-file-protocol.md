@@ -324,6 +324,12 @@ terminate at an active replacement. It verifies both sides of supersession and p
 Candidate-Type, Scope, and provisional Subject/Facet; freshness uses the same audit and also reports invalid
 Exception-To and active merged-Subject references.
 
+Writers serialize body lines that resemble protocol fields or H2 headings as body text and parse-check rendered
+active, candidate, local, migrated, and Subject records before writing. Subject aliases and titles are canonical
+single lines. Promotion validates Scope and resolved target containment before filesystem access, checks generated
+IDs across active and archive storage, and changes only the canonical Status field. Directed cycle diagnostics retain
+the real successor traversal.
+
 ## Local Overlay
 
 Repo-external local modules use `Scope: local-user` or `Scope: local-machine`, require explicit normalized-root

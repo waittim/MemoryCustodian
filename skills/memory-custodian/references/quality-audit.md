@@ -99,6 +99,9 @@ memory-custodian check --conflicts --merge-base origin/main  # when Git/ref is a
   in both ordinary/freshness checks; forbidden local lifecycle fields; and shared/local Entry ID collisions.
 - Test promotion type mismatch, area target ID/storage and Optional-index preview, target-baseline Plan drift,
   supersession cycles, duplicate relation targets, and structurally invalid `add --supersedes` operands.
+- Test protocol-shaped raw body/reason/candidate/local/migration input and multiline Subject aliases. Assert that
+  unsafe promotion Scope fails before target access, archive IDs block promotion, title text cannot intercept Status
+  transition, and directed cycle output names only real edges.
 
 ## Scope And Portability
 

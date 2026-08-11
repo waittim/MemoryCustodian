@@ -90,6 +90,9 @@
   Optional-index changes, and binds target existence/content. Supersession planning rejects invalid source operands;
   relation audit requires unique targets and acyclic chains ending at an active replacement. Freshness also promotes
   invalid exceptions and active merged-Subject references to errors.
+- Made Entry/body and Subject/alias rendering line-safe with parse round-trip checks, preventing raw Markdown from
+  creating protocol fields, Entries, or merge state. Promotion now validates Scope/containment before target access,
+  checks archive IDs, anchors Status transition, and reports cycles in real edge order.
 - Added matched-context conflict gates and optional read-only merge-base review for cross-branch structural collisions
   and concurrent hard-memory changes requiring human reconciliation.
 - Subject names, timestamps, Evidence counts, file order, and prose similarity never choose a winner. This release
