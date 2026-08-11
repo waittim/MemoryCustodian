@@ -205,8 +205,12 @@ def render_subject(
     aliases: tuple[str, ...],
     evidence: tuple[str, ...],
 ) -> str:
+    normalized_title = " ".join(title.split())
+    normalized_aliases = tuple(
+        dict.fromkeys(" ".join(item.split()) for item in aliases if item.split())
+    )
     lines = [
-        f"## {subject_id} — {' '.join(title.split())}",
+        f"## {subject_id} — {normalized_title}",
         "",
         "Status: active",
         f"Kind: {kind}",
@@ -214,8 +218,19 @@ def render_subject(
     if canonical_ref:
         lines.append(f"Canonical-Ref: {canonical_ref}")
     lines.extend(["Evidence:", *(f"- {item}" for item in evidence), "", "Aliases:"])
-    lines.extend(f"- {item}" for item in aliases)
-    return "\n".join(lines)
+    lines.extend(f"- {item}" for item in normalized_aliases)
+    rendered = "\n".join(lines)
+    parsed = parse_subjects(Path("__rendered_subject__.md"), rendered)
+    if (
+        len(parsed) != 1
+        or parsed[0].subject_id.casefold() != subject_id.casefold()
+        or parsed[0].status != "active"
+        or parsed[0].merged_into is not None
+        or parsed[0].title != normalized_title
+        or parsed[0].aliases != normalized_aliases
+    ):
+        raise ValueError("Rendered Subject did not round-trip safely.")
+    return rendered
 
 
 def subject_indexes(subjects: list[Subject]) -> tuple[dict[str, Subject], dict[str, Subject], dict[str, Subject]]:

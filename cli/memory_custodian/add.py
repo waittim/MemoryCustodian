@@ -7,6 +7,7 @@ import hashlib
 
 from .entries import (
     generate_entry_id,
+    line_safe_markdown_body,
     memory_entry_ids,
     parse_structured_entries,
     render_active_entry,
@@ -73,14 +74,16 @@ def _title(message: str) -> str:
 
 
 def _legacy_entry(kind: str, message: str, reason: str | None) -> str:
+    safe_message = line_safe_markdown_body(message)
+    safe_reason = line_safe_markdown_body(reason) if reason else None
     if kind == "decision":
-        body = f"## {today()} - {_title(message)}\nDecision:\n{message}"
-        return body + (f"\nReason:\n{reason}" if reason else "")
+        body = f"## {today()} - {_title(message)}\nDecision:\n{safe_message}"
+        return body + (f"\nReason:\n{safe_reason}" if safe_reason else "")
     if kind in {"constraint", "preference", "rule", "profile", "area"}:
-        return f"- {message}"
+        return f"- {safe_message}"
     if kind in {"tombstone", "do-not-use"}:
-        return f"## Tombstone: {_title(message)}\n{message}" + (f"\nReason:\n{reason}" if reason else "")
-    return f"## {today()}\n- {message}"
+        return f"## Tombstone: {_title(message)}\n{safe_message}" + (f"\nReason:\n{safe_reason}" if safe_reason else "")
+    return f"## {today()}\n- {safe_message}"
 
 
 def _initial_target_text(path: Path, kind: str, name: str | None, area: str | None = None) -> str:

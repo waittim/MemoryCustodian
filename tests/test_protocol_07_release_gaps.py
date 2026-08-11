@@ -17,8 +17,13 @@ from unittest.mock import patch
 
 from memory_custodian.conflicts import analyze_conflicts
 from memory_custodian.context import ContextRoutingResult
-from memory_custodian.entries import render_active_entry, render_candidate_entry
+from memory_custodian.entries import (
+    parse_structured_entries,
+    render_active_entry,
+    render_candidate_entry,
+)
 from memory_custodian.main import main
+from memory_custodian.migrate import _legacy_key, _migrate_decisions
 from memory_custodian.routes import RouteReason, RoutingCompleteness
 
 
@@ -1469,6 +1474,207 @@ class RoutingAndQualityReleaseTests(unittest.TestCase):
             _code, mismatch, _error = capture(command)
             self.assertIn("does not match requested promotion type", mismatch)
             self.assertNotIn("Blockers:\n- none", mismatch)
+
+    def test_entry_and_subject_writers_serialize_protocol_shaped_input_safely(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            memory = Path(tmp) / "docs/memory"
+            injected_id = "MC-DEC-20260810-deadbeef"
+            message = (
+                "Area override.\n"
+                "Exception-To: MC-CON-20260810-deadbeef\n"
+                f"## {injected_id} — Injected\nStatus: active"
+            )
+            code, output, error = capture([
+                "add", message, "--type", "preference", "--reason",
+                "Promoted-To: MC-PREF-20260810-deadbeef",
+                "--evidence", "user-confirmed", "--project-root", tmp,
+            ])
+            self.assertEqual(code, 0, output + error)
+            preferences = memory / "preferences.md"
+            entries = parse_structured_entries(
+                preferences, preferences.read_text(encoding="utf-8"),
+            )
+            self.assertEqual(len(entries), 1)
+            self.assertNotIn("Exception-To", entries[0].fields)
+            self.assertNotIn("Promoted-To", entries[0].fields)
+            self.assertNotEqual(entries[0].entry_id, injected_id)
+            self.assertIn("Exception-To: MC-CON-20260810-deadbeef", entries[0].field_bodies["Preference"])
+
+            subject_args = [
+                "subject", "add", "Safe subject", "--kind", "concept",
+                "--alias", "alias\nStatus: merged\nMerged-Into: MC-SUBJ-20260810-deadbeef",
+                "--evidence", "user-confirmed", "--project-root", tmp,
+            ]
+            code, preview, error = capture(subject_args)
+            self.assertEqual(code, 0, preview + error)
+            plan_id = re.search(r"Plan ID: ([0-9a-f]{16})", preview).group(1)
+            code, output, error = capture([
+                *subject_args, "--apply", "--confirm-plan", plan_id,
+            ])
+            self.assertEqual(code, 0, output + error)
+            subjects = (memory / "subjects.md").read_text(encoding="utf-8")
+            self.assertNotIn("\nStatus: merged\n", subjects)
+            self.assertNotIn("\nMerged-Into:", subjects)
+            self.assertIn(
+                "- alias Status: merged Merged-Into: MC-SUBJ-20260810-deadbeef",
+                subjects,
+            )
+
+            candidate_message = f"Candidate.\n## {injected_id} — Also injected\nStatus: active"
+            code, output, error = capture([
+                "add", candidate_message, "--type", "decision", "--candidate",
+                "--reason", "Exception-To: MC-CON-20260810-deadbeef",
+                "--evidence", "agent-observed", "--project-root", tmp,
+            ])
+            self.assertEqual(code, 0, output + error)
+            inbox = memory / "inbox.md"
+            candidates = parse_structured_entries(inbox, inbox.read_text(encoding="utf-8"))
+            self.assertEqual(len(candidates), 1)
+            self.assertNotIn("Exception-To", candidates[0].fields)
+            self.assertIn(f"## {injected_id} — Also injected", candidates[0].field_bodies["Statement"])
+
+            legacy = (
+                "# Decisions\n\n## 2026-08-10 - Legacy decision\nDecision:\n"
+                "Keep the boundary.\nException-To: MC-CON-20260810-deadbeef\n"
+            )
+            _preamble, legacy_sections = legacy.split("# Decisions\n\n", 1)
+            section = legacy_sections.strip()
+            suffixes = {_legacy_key("decisions.md", section, 0): "abcdef12"}
+            migrated, changed, _manual, _ids = _migrate_decisions(legacy, suffixes)
+            self.assertEqual(changed, 1)
+            migrated_entries = parse_structured_entries(Path("decisions.md"), migrated)
+            self.assertEqual(len(migrated_entries), 1)
+            self.assertNotIn("Exception-To", migrated_entries[0].fields)
+            self.assertIn("Exception-To: MC-CON-20260810-deadbeef", migrated_entries[0].field_bodies["Decision"])
+
+    def test_local_writer_uses_shared_line_safe_entry_renderer(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as state:
+            with patch.dict(os.environ, {"XDG_STATE_HOME": state}), redirect_stdout(StringIO()):
+                self.assertEqual(main(["init", "--project-root", tmp]), 0)
+                self.assertEqual(main(["local", "enable", "--project-root", tmp]), 0)
+                self.assertEqual(main(["local", "link", "--project-root", tmp]), 0)
+                self.assertEqual(main([
+                    "local", "add",
+                    "Local preference.\nException-To: MC-CON-20260810-deadbeef\n"
+                    "## MC-PREF-20260810-deadbeef — Injected",
+                    "--type", "preference", "--evidence", "user-confirmed",
+                    "--project-root", tmp,
+                ]), 0)
+            manifest = Path(tmp) / "docs/memory/manifest.md"
+            project_id = re.search(
+                r"(?m)^- project_id: (\S+)", manifest.read_text(encoding="utf-8"),
+            ).group(1)
+            preferences = (
+                Path(state) / "memory-custodian/projects" / project_id / "local/preferences.md"
+            )
+            entries = parse_structured_entries(
+                preferences, preferences.read_text(encoding="utf-8"),
+            )
+            self.assertEqual(len(entries), 1)
+            self.assertNotIn("Exception-To", entries[0].fields)
+
+    def test_promotion_rejects_unsafe_scope_before_target_access(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            memory = Path(tmp) / "docs/memory"
+            candidate_id = "MC-INBOX-20260810-11111111"
+            candidate = render_candidate_entry(
+                candidate_id, "Unsafe scope", "preference", "Candidate body.",
+                "project", ("user-confirmed",), None,
+            ).replace("Scope: project", "Scope: area:../../../outside", 1)
+            (memory / "inbox.md").write_text(
+                "# Memory Inbox\n\n" + candidate + "\n", encoding="utf-8",
+            )
+            (memory / "areas").mkdir(exist_ok=True)
+            outside = Path(tmp).parent / "outside.md"
+            before = outside.read_text(encoding="utf-8") if outside.exists() else None
+            code, output, error = capture([
+                "promote", candidate_id, "--type", "preference",
+                "--evidence", "user-confirmed", "--project-root", tmp,
+            ])
+            self.assertEqual(code, 2, output + error)
+            self.assertIn("Invalid Scope", error)
+            self.assertNotIn("Target files:", output)
+            after = outside.read_text(encoding="utf-8") if outside.exists() else None
+            self.assertEqual(before, after)
+
+    def test_promotion_detects_archive_id_collision_and_anchors_status_transition(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            memory = Path(tmp) / "docs/memory"
+            candidate_id = "MC-INBOX-20260810-22222222"
+            candidate = render_candidate_entry(
+                candidate_id, "Title contains Status: candidate marker", "preference",
+                "Candidate body.", "project", ("user-confirmed",), None,
+            )
+            (memory / "inbox.md").write_text(
+                "# Memory Inbox\n\n" + candidate + "\n", encoding="utf-8",
+            )
+            command = [
+                "promote", candidate_id, "--type", "preference",
+                "--evidence", "user-confirmed", "--project-root", tmp,
+            ]
+            code, first, error = capture(command)
+            self.assertEqual(code, 0, first + error)
+            self.assertIn("Blockers:\n- none", first)
+            generated_id = re.search(r"New active Entry ID: (MC-PREF-\S+)", first).group(1)
+            first_plan = re.search(r"Plan ID: ([0-9a-f]{16})", first).group(1)
+            archive = memory / "archive"
+            archive.mkdir()
+            archived = render_active_entry(
+                "preference", generated_id, "Archived collision", "Archived.", None,
+                "project", ("user-confirmed",),
+            )
+            (archive / "preferences-old.md").write_text(
+                "# Archived preferences\n\n" + archived + "\n", encoding="utf-8",
+            )
+            code, second, error = capture(command)
+            self.assertEqual(code, 0, second + error)
+            self.assertIn("Generated active Entry ID already exists", second)
+            self.assertNotIn("Blockers:\n- none", second)
+            second_plan = re.search(r"Plan ID: ([0-9a-f]{16})", second).group(1)
+            self.assertNotEqual(first_plan, second_plan)
+
+    def test_supersession_cycle_diagnostic_preserves_real_edge_order(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            memory = Path(tmp) / "docs/memory"
+            subject_id = "MC-SUBJ-20260810-33333333"
+            (memory / "subjects.md").write_text(
+                "# Subject Registry\n\n" + subject_unit(subject_id, "Ordered cycle"),
+                encoding="utf-8",
+            )
+            ids = [
+                "MC-DEC-20260810-11111111",
+                "MC-DEC-20260810-33333333",
+                "MC-DEC-20260810-22222222",
+            ]
+            entries = []
+            for current, successor in zip(ids, [ids[1], ids[2], ids[0]]):
+                predecessor = ids[(ids.index(current) - 1) % len(ids)]
+                entry = render_active_entry(
+                    "decision", current, "Cycle", "Cycle.", None, "project",
+                    ("user-confirmed",), subject=subject_id, facet="interface",
+                ).replace(
+                    "Status: active",
+                    f"Status: superseded\nSupersedes: {predecessor}\nSuperseded-By: {successor}",
+                    1,
+                )
+                entries.append(entry)
+            (memory / "decisions.md").write_text(
+                "# Decisions\n\n" + "\n\n".join(entries) + "\n", encoding="utf-8",
+            )
+            code, output, error = capture(["check", "--freshness", "--project-root", tmp])
+            self.assertEqual(code, 1, output + error)
+            self.assertIn(
+                f"{ids[0]} -> {ids[1]} -> {ids[2]} -> {ids[0]}",
+                output,
+            )
 
     def test_supersession_cycles_and_ambiguous_targets_fail_freshness(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -247,7 +247,7 @@ def _add(args) -> int:
     kind = validate_subject_kind(args.kind)
     canonical_ref = normalize_canonical_ref(args.canonical_ref) if args.canonical_ref else None
     aliases = tuple(dict.fromkeys(
-        alias.strip() for alias in [args.title, *args.alias] if alias.strip()
+        " ".join(alias.split()) for alias in [args.title, *args.alias] if alias.split()
     ))
     evidence = validate_evidence(args.evidence, project_root)
     subjects = load_subjects(memory_dir)

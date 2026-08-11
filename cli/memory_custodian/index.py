@@ -18,6 +18,7 @@ from .entries import (
     structured_relation_issues,
     memory_entry_ids,
     validate_evidence,
+    validate_scope,
 )
 from .local_overlay import (
     LocalStatus,
@@ -204,6 +205,7 @@ def run_promote(args) -> int:
     candidate = find_entry(records, args.entry_id)
     if candidate.status != "candidate" or not candidate.structured:
         raise ValueError(f"{candidate.entry_id} is not a promotable candidate.")
+    scope = validate_scope(candidate.scope)
     evidence = validate_evidence(args.evidence, project_root)
     if args.type in {"decision", "constraint", "tombstone", "do-not-use"} and not (
         candidate.structured.fields.get("Provisional-Subject")
@@ -216,9 +218,16 @@ def run_promote(args) -> int:
         "decision": "decisions.md", "constraint": "constraints.md",
         "preference": "preferences.md", "tombstone": "do-not-use.md", "do-not-use": "do-not-use.md",
     }[args.type]
-    if candidate.scope.startswith("area:"):
-        target = f"areas/{candidate.scope.removeprefix('area:')}.md"
-    active_kind = "area" if candidate.scope.startswith("area:") and args.type == "decision" else args.type
+    if scope.startswith("area:"):
+        target = f"areas/{scope.removeprefix('area:')}.md"
+    active_kind = (
+        "area" if scope.startswith("area:") and args.type == "decision" else args.type
+    )
+    target_path = memory_dir.joinpath(*Path(target).parts)
+    try:
+        target_path.resolve().relative_to(memory_dir.resolve())
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise ValueError("Promotion target escapes the managed memory directory.") from exc
     new_id = _promoted_id(candidate, active_kind)
     blockers: list[str] = []
     relative = candidate.source
@@ -251,7 +260,7 @@ def run_promote(args) -> int:
         blockers.append(
             f"Candidate-Type {candidate_type!r} does not match requested promotion type {args.type!r}"
         )
-    if any(record.entry_id.casefold() == new_id.casefold() for record in records):
+    if new_id.casefold() in {entry_id.casefold() for entry_id in memory_entry_ids(memory_dir)}:
         blockers.append(f"Generated active Entry ID already exists: {new_id}")
     subject_id = candidate.structured.fields.get("Provisional-Subject", "")
     facet = candidate.structured.fields.get("Provisional-Facet", "")
@@ -272,16 +281,18 @@ def run_promote(args) -> int:
             )
     else:
         owner_records = []
-    target_path = memory_dir / target
     target_exists = target_path.exists()
     target_baseline = target_path.read_text(encoding="utf-8") if target_exists else ""
     updated_manifest, manifest_changed = manifest_with_optional_module_index(manifest, target)
 
-    promoted_candidate_text = candidate.text.replace(
-        "Status: candidate",
+    promoted_candidate_text, transition_count = re.subn(
+        r"(?m)^Status:[ \t]*candidate[ \t]*$",
         f"Status: promoted\nPromoted-To: {new_id}",
-        1,
+        candidate.text,
+        count=1,
     )
+    if transition_count != 1:
+        blockers.append("Candidate transition requires exactly one canonical Status: candidate field")
     prospective_entry_text = render_active_entry(
         active_kind,
         new_id,

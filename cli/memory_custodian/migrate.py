@@ -6,7 +6,12 @@ import hashlib
 from pathlib import Path
 import re
 
-from .entries import ENTRY_ID_RE, split_h2
+from .entries import (
+    ENTRY_ID_RE,
+    line_safe_markdown_body,
+    parse_structured_entries,
+    split_h2,
+)
 from .locking import project_mutation_guard
 from .mutations import TextMutation, apply_mutations
 from .plans import (
@@ -74,6 +79,12 @@ def _migrate_decisions(
         generated_ids.append(entry_id)
         lines = section.splitlines()
         title = re.sub(r"^##\s+(?:\d{4}-\d{2}-\d{2}\s+-\s+)?", "", lines[0]).strip()
+        safe_body = [
+            line
+            if line in {"Decision:", "Reason:"}
+            else line_safe_markdown_body(line)
+            for line in lines[1:]
+        ]
         migrated = "\n".join(
             [
                 f"## {entry_id} — {title}",
@@ -83,9 +94,17 @@ def _migrate_decisions(
                 "Evidence:",
                 "- legacy-unverified",
                 "",
-                *lines[1:],
+                *safe_body,
             ]
         )
+        parsed = parse_structured_entries(Path(relative), migrated)
+        allowed_fields = {"Status", "Scope", "Evidence", "Decision", "Reason"}
+        if (
+            len(parsed) != 1
+            or parsed[0].entry_id.casefold() != entry_id.casefold()
+            or set(parsed[0].fields) - allowed_fields
+        ):
+            raise ValueError(f"Migrated Entry {entry_id} did not round-trip safely.")
         updated.append(migrated)
         changed += 1
     parts = [preamble, *updated] if preamble else updated

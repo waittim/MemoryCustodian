@@ -167,6 +167,46 @@ def validate_scope(scope: str) -> str:
     return scope
 
 
+def line_safe_markdown_body(value: str) -> str:
+    """Serialize body text without creating column-zero protocol structure."""
+
+    safe: list[str] = []
+    for line in value.splitlines():
+        if FIELD_RE.match(line) or line.startswith("## "):
+            safe.append("    " + line)
+        else:
+            safe.append(line)
+    return "\n".join(safe)
+
+
+def _normalized_body(value: str) -> str:
+    return "\n".join(line.strip() for line in value.splitlines() if line.strip())
+
+
+def _validate_rendered_entry(
+    text: str,
+    entry_id: str,
+    body_field: str,
+    body: str,
+    extra_body_field: str | None = None,
+    extra_body: str | None = None,
+) -> None:
+    parsed = parse_structured_entries(Path("__rendered_entry__.md"), text)
+    if len(parsed) != 1 or parsed[0].entry_id.casefold() != entry_id.casefold():
+        raise ValueError("Rendered Entry did not round-trip as exactly one structured Entry.")
+    entry = parsed[0]
+    if (
+        entry.field_counts.get(body_field) != 1
+        or entry.field_bodies.get(body_field, "") != _normalized_body(body)
+    ):
+        raise ValueError(f"Rendered Entry {body_field} body did not round-trip safely.")
+    if extra_body_field is not None and (
+        entry.field_counts.get(extra_body_field) != 1
+        or entry.field_bodies.get(extra_body_field, "") != _normalized_body(extra_body or "")
+    ):
+        raise ValueError(f"Rendered Entry {extra_body_field} body did not round-trip safely.")
+
+
 def render_active_entry(
     kind: str,
     entry_id: str,
@@ -206,10 +246,16 @@ def render_active_entry(
         lines.extend([f"Supersedes: {supersedes}"])
     if promoted_from:
         lines.append(f"Promoted-From: {promoted_from}")
-    lines.extend(["", f"{labels[kind]}:", message])
+    body_field = labels[kind]
+    lines.extend(["", f"{body_field}:", line_safe_markdown_body(message)])
     if reason:
-        lines.extend(["", "Reason:", reason])
-    return "\n".join(lines)
+        lines.extend(["", "Reason:", line_safe_markdown_body(reason)])
+    rendered = "\n".join(lines)
+    _validate_rendered_entry(
+        rendered, entry_id, body_field, message,
+        "Reason" if reason else None, reason,
+    )
+    return rendered
 
 
 def render_candidate_entry(
@@ -240,12 +286,20 @@ def render_candidate_entry(
         *(f"- {item}" for item in evidence),
         "",
         "Statement:",
-        message,
+        line_safe_markdown_body(message),
         "",
         "Promotion-Requirement:",
-        note or "Confirm with the user or an authoritative project source.",
+        line_safe_markdown_body(
+            note or "Confirm with the user or an authoritative project source."
+        ),
     ])
-    return "\n".join(lines)
+    rendered = "\n".join(lines)
+    _validate_rendered_entry(
+        rendered, entry_id, "Statement", message,
+        "Promotion-Requirement",
+        note or "Confirm with the user or an authoritative project source.",
+    )
+    return rendered
 
 
 def split_h2(text: str) -> tuple[str, list[str]]:
@@ -617,8 +671,10 @@ def structured_relation_issues(entries: list[StructuredEntry]) -> list[str]:
         while current in successor:
             if current in positions:
                 cycle = order[positions[current]:]
-                labels = sorted(unique(value).entry_id for value in cycle if unique(value) is not None)
-                issues.add("supersession cycle detected: " + " -> ".join(labels))
+                labels = [unique(value).entry_id for value in cycle]
+                start_at = min(range(len(labels)), key=lambda index: labels[index].casefold())
+                labels = labels[start_at:] + labels[:start_at]
+                issues.add("supersession cycle detected: " + " -> ".join([*labels, labels[0]]))
                 break
             if current in checked:
                 break
