@@ -7,12 +7,15 @@ from pathlib import Path
 import subprocess
 
 from .conflicts import analyze_conflicts, canonical_entries
-from .entries import structured_relation_issues
+from .entries import parse_structured_entries, structured_relation_issues
 from .protocol import (
     manifest_contract_metadata,
+    canonical_memory_files,
+    managed_markdown_files,
     parse_manifest_task_file_specs,
     protocol_metadata,
     protocol_contract_metadata,
+    read_managed_text,
     validate_manifest_routes,
 )
 from .routes import CANONICAL_TASKS, SUBSTANTIAL_TASKS, parse_optional_module_index
@@ -29,7 +32,7 @@ def routing_findings(memory_dir: Path) -> tuple[QualityFinding, ...]:
     manifest_path = memory_dir / "manifest.md"
     if not manifest_path.exists():
         return (QualityFinding("ERROR", "MC-ROUTING-001", "manifest.md is missing."),)
-    manifest = manifest_path.read_text(encoding="utf-8")
+    manifest = read_managed_text(memory_dir, manifest_path)
     findings = [
         QualityFinding("ERROR", "MC-ROUTING-002", issue)
         for issue in validate_manifest_routes(manifest)
@@ -73,7 +76,7 @@ def routing_findings(memory_dir: Path) -> tuple[QualityFinding, ...]:
 
 
 def reachability_findings(memory_dir: Path) -> tuple[QualityFinding, ...]:
-    manifest = (memory_dir / "manifest.md").read_text(encoding="utf-8")
+    manifest = read_managed_text(memory_dir, memory_dir / "manifest.md")
     try:
         metadata = manifest_contract_metadata(
             manifest,
@@ -92,6 +95,19 @@ def reachability_findings(memory_dir: Path) -> tuple[QualityFinding, ...]:
     reachable.update(item.module_id for item in declarations)
     declarations_by_path = {item.module_id: item for item in declarations}
     findings: list[QualityFinding] = []
+    canonical_paths = set(canonical_memory_files(memory_dir))
+    for path in managed_markdown_files(memory_dir):
+        if path in canonical_paths or path.name == "README.md":
+            continue
+        if path.relative_to(memory_dir).as_posix().startswith("archive/"):
+            continue
+        for entry in parse_structured_entries(path, read_managed_text(memory_dir, path)):
+            if entry.status == "active":
+                findings.append(QualityFinding(
+                    "ERROR", "MC-REACH-001",
+                    f"{entry.entry_id} in {path.relative_to(memory_dir).as_posix()} "
+                    "is outside canonical manifest-authorized storage.",
+                ))
     for entry in canonical_entries(memory_dir):
         if entry.status != "active":
             continue
@@ -130,7 +146,7 @@ def freshness_findings(project_root: Path, memory_dir: Path) -> tuple[QualityFin
         return (QualityFinding("ERROR", "MC-ROUTING-007", "manifest.md is missing."),)
     try:
         manifest_contract_metadata(
-            manifest_path.read_text(encoding="utf-8"),
+            read_managed_text(memory_dir, manifest_path),
             allow_missing_section=True,
         )
     except ValueError as exc:

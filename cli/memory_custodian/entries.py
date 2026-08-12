@@ -22,9 +22,8 @@ TYPE_CODES = {
     "candidate": "INBOX",
 }
 ENTRY_ID_RE = re.compile(r"\bMC-(DEC|CON|DNU|PREF|AREA|INBOX|TOMB)-(\d{8})-([0-9a-f]{8})\b", re.I)
-ENTRY_HEADING_RE = re.compile(
-    r"^## (MC-(?:DEC|CON|DNU|PREF|AREA|INBOX|TOMB)-\d{8}-[0-9a-f]{8}) — (\S(?:.*\S)?)$",
-    re.I,
+ENTRY_HEADING_ID_RE = re.compile(
+    r"MC-(?:DEC|CON|DNU|PREF|AREA|INBOX|TOMB)-\d{8}-[0-9a-f]{8}", re.I
 )
 ACTIVE_EVIDENCE_RE = re.compile(
     r"^(?:user-confirmed|(?:repo|doc|test):[^@\s]+(?:@[A-Za-z0-9._-]+)?|issue:#\d+|pr:#\d+)$"
@@ -81,29 +80,31 @@ def entry_ids(text: str) -> list[str]:
 
 
 def heading_entry_ids(text: str) -> list[str]:
+    from .markdown import canonical_h2_parts
     from .protocol import parse_markdown_units
 
     found: list[str] = []
     for unit in parse_markdown_units(text).units:
         if unit.kind != "h2" or unit.heading is None:
             continue
-        match = ENTRY_HEADING_RE.fullmatch("## " + unit.heading)
-        if match:
-            found.append(match.group(1))
+        parsed = canonical_h2_parts(unit.text.splitlines()[0], ENTRY_HEADING_ID_RE)
+        if parsed:
+            found.append(parsed[0])
     return found
 
 
 def entry_unit_issues(text: str, relative_path: str) -> list[str]:
     """Return canonical-heading and ambiguous formal-unit findings."""
 
+    from .markdown import canonical_h2_parts
     from .protocol import parse_markdown_units
 
     issues: list[str] = []
     for unit in parse_markdown_units(text).units:
         if unit.kind == "h2" and unit.heading and ENTRY_ID_RE.search(unit.heading):
-            if ENTRY_HEADING_RE.fullmatch("## " + unit.heading) is None:
+            if canonical_h2_parts(unit.text.splitlines()[0], ENTRY_HEADING_ID_RE) is None:
                 issues.append(
-                    f"{relative_path}: malformed Entry heading {('## ' + unit.heading)!r}; "
+                    f"{relative_path}: malformed Entry heading {unit.text.splitlines()[0]!r}; "
                     "expected `## <ENTRY_ID> — <title>`"
                 )
         elif unit.kind == "ambiguous-bullet":
@@ -115,13 +116,13 @@ def entry_unit_issues(text: str, relative_path: str) -> list[str]:
 
 
 def memory_entry_ids(memory_dir: Path) -> set[str]:
-    from .protocol import managed_markdown_files
+    from .protocol import managed_markdown_files, read_managed_text
 
     found: set[str] = set()
     if not memory_dir.exists():
         return found
     for path in managed_markdown_files(memory_dir):
-        for value in heading_entry_ids(path.read_text(encoding="utf-8")):
+        for value in heading_entry_ids(read_managed_text(memory_dir, path)):
             found.add(value)
     return found
 
@@ -129,13 +130,13 @@ def memory_entry_ids(memory_dir: Path) -> set[str]:
 def memory_entry_id_counts(memory_dir: Path) -> dict[str, int]:
     """Count canonical heading IDs across all shared managed-memory storage."""
 
-    from .protocol import managed_markdown_files
+    from .protocol import managed_markdown_files, read_managed_text
 
     counts: dict[str, int] = {}
     if not memory_dir.exists():
         return counts
     for path in managed_markdown_files(memory_dir):
-        for value in heading_entry_ids(path.read_text(encoding="utf-8")):
+        for value in heading_entry_ids(read_managed_text(memory_dir, path)):
             key = value.casefold()
             counts[key] = counts.get(key, 0) + 1
     return counts
@@ -277,6 +278,8 @@ def render_active_entry(
     supersedes: str | None = None,
     promoted_from: str | None = None,
 ) -> str:
+    from .markdown import render_canonical_h2
+
     normalized_title = " ".join(title.split())
     if not normalized_title:
         raise ValueError("Rendered Entry title must not be empty.")
@@ -290,8 +293,13 @@ def render_active_entry(
         "rule": "Rule",
         "profile": "Profile",
     }
+    heading_title = (
+        f"Tombstone: {normalized_title}"
+        if kind in {"tombstone", "do-not-use"}
+        else normalized_title
+    )
     lines = [
-        f"## {entry_id} — {'Tombstone: ' if kind in {'tombstone', 'do-not-use'} else ''}{normalized_title}",
+        render_canonical_h2(entry_id, heading_title),
         "",
         "Status: active",
         f"Scope: {scope}",
@@ -329,6 +337,8 @@ def render_candidate_entry(
     subject: str | None = None,
     facet: str | None = None,
 ) -> str:
+    from .markdown import render_canonical_h2
+
     normalized_title = " ".join(title.split())
     if not normalized_title:
         raise ValueError("Rendered Entry title must not be empty.")
@@ -338,7 +348,7 @@ def render_candidate_entry(
         else "Confirm with the user or an authoritative project source."
     )
     lines = [
-        f"## {entry_id} — {normalized_title}",
+        render_canonical_h2(entry_id, normalized_title),
         "",
         "Status: candidate",
         f"Candidate-Type: {candidate_type}",
@@ -369,7 +379,7 @@ def render_candidate_entry(
 
 def parse_structured_entries(path: Path, text: str) -> list[StructuredEntry]:
     from .protocol import parse_markdown_units
-    from .markdown import visible_lines
+    from .markdown import canonical_h2_parts, visible_lines
 
     sections = [
         unit.text
@@ -379,7 +389,7 @@ def parse_structured_entries(path: Path, text: str) -> list[StructuredEntry]:
     parsed: list[StructuredEntry] = []
     for section in sections:
         lines = section.splitlines()
-        heading = ENTRY_HEADING_RE.fullmatch(lines[0])
+        heading = canonical_h2_parts(lines[0], ENTRY_HEADING_ID_RE)
         if not heading:
             continue
         fields: dict[str, str] = {}
@@ -396,8 +406,14 @@ def parse_structured_entries(path: Path, text: str) -> list[StructuredEntry]:
             current_field = None
             current_body = []
 
-        for visible in visible_lines(section):
-            if visible.index == 0:
+        visible_by_index = {line.index: line for line in visible_lines(section)}
+        for line_index, raw_line in enumerate(lines):
+            if line_index == 0:
+                continue
+            visible = visible_by_index.get(line_index)
+            if visible is None:
+                if current_field is not None:
+                    current_body.append(raw_line)
                 continue
             line = visible.text
             matched_field = FIELD_RE.match(line)
@@ -424,10 +440,10 @@ def parse_structured_entries(path: Path, text: str) -> list[StructuredEntry]:
             ).strip()
             for key, occurrences in occurrence_bodies.items()
         }
-        title = heading.group(2)
+        title = heading[1]
         parsed.append(
             StructuredEntry(
-                heading.group(1),
+                heading[0],
                 title,
                 fields.get("Status", ""),
                 fields.get("Scope", ""),
@@ -763,6 +779,7 @@ def structured_relation_issues(entries: list[StructuredEntry]) -> list[str]:
 
 
 def supersede_entry(text: str, old_id: str, new_id: str) -> str:
+    from .markdown import visible_lines
     from .protocol import MarkdownUnit, parse_markdown_units, render_markdown_document
 
     document = parse_markdown_units(text)
@@ -773,21 +790,36 @@ def supersede_entry(text: str, old_id: str, new_id: str) -> str:
             updated.append(unit)
             continue
         section = unit.text
-        match = ENTRY_ID_RE.search(section.splitlines()[0])
-        if not match or match.group(0).casefold() != old_id.casefold():
+        parsed = parse_structured_entries(Path("__supersession__.md"), section)
+        if len(parsed) != 1 or parsed[0].entry_id.casefold() != old_id.casefold():
             updated.append(unit)
             continue
-        if re.search(r"(?m)^Status:\s*superseded\s*$", section, re.I):
-            existing = re.search(r"(?m)^Superseded-By:\s*(\S+)", section)
-            suffix = f" by {existing.group(1)}" if existing else ""
+        entry = parsed[0]
+        if entry.status == "superseded":
+            existing = entry.fields.get("Superseded-By", "")
+            suffix = f" by {existing}" if existing else ""
             raise ValueError(f"{old_id} is already superseded{suffix}.")
-        if not re.search(r"(?m)^Status:\s*active\s*$", section, re.I):
+        if entry.status != "active" or entry.field_counts.get("Status") != 1:
             raise ValueError(f"{old_id} is not an active entry.")
-        section = re.sub(r"(?m)^Status:\s*active\s*$", "Status: superseded", section, count=1)
-        status_line = re.search(r"(?m)^Status:\s*superseded\s*$", section)
-        assert status_line is not None
-        insert = status_line.end()
-        section = section[:insert] + f"\nSuperseded-By: {new_id}" + section[insert:]
+        lines = section.splitlines()
+        status_indices = [
+            line.index
+            for line in visible_lines(section)
+            if re.fullmatch(r"Status:\s*active\s*", line.text, re.I)
+        ]
+        if len(status_indices) != 1:
+            raise ValueError(f"{old_id} has no unique visible active Status field.")
+        status_index = status_indices[0]
+        lines[status_index:status_index + 1] = [
+            "Status: superseded",
+            f"Superseded-By: {new_id}",
+        ]
+        section = "\n".join(lines)
+        resulting = parse_structured_entries(Path("__supersession__.md"), section)
+        if len(resulting) != 1 or structured_entry_schema_issues(
+            resulting[0], "__supersession__.md"
+        ):
+            raise ValueError(f"Supersession would make {old_id} structurally invalid.")
         updated.append(MarkdownUnit("h2", section, section.splitlines()[0][3:].strip()))
         changed = True
     if not changed:

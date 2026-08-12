@@ -7,8 +7,8 @@ from itertools import combinations
 from pathlib import Path
 import re
 
-from .entries import ENTRY_ID_RE, StructuredEntry, VALID_SCOPES_RE
-from .markdown import visible_lines
+from .entries import ENTRY_ID_RE, StructuredEntry, VALID_SCOPES_RE, validate_evidence
+from .markdown import canonical_h2_parts, visible_lines
 from .protocol import parse_markdown_units
 from .structural import (
     active_structural_operand_issues,
@@ -18,7 +18,7 @@ from .structural import (
 from .subjects import FACETS, Subject
 
 
-REC_ID_RE = re.compile(r"^## (MC-REC-\d{8}-[0-9a-f]{8})\s+—\s+(.+)$", re.I)
+REC_ID_RE = re.compile(r"MC-REC-\d{8}-[0-9a-f]{8}", re.I)
 RESOLUTIONS = frozenset({"distinct", "superseded", "exception", "subject-merged"})
 
 
@@ -94,13 +94,6 @@ def _subject_merged_pair_valid(
     )
 
 
-def _admissible_evidence(value: str) -> bool:
-    if value in {"user-confirmed", "legacy-unverified"}:
-        return True
-    prefix, separator, remainder = value.partition(":")
-    return bool(separator and remainder and prefix in {"repo", "doc", "test", "issue", "pr", "migration"})
-
-
 def parse_reconciliations(
     path: Path,
     text: str,
@@ -114,12 +107,12 @@ def parse_reconciliations(
             continue
         section = unit.text
         section_lines = [line.text for line in visible_lines(section)]
-        heading = REC_ID_RE.fullmatch(section_lines[0])
+        heading = canonical_h2_parts(section_lines[0], REC_ID_RE)
         if not heading:
             issues.append(f"{path.name}: malformed reconciliation heading {section_lines[0]!r}")
             continue
 
-        record_id, title = heading.groups()
+        record_id, title = heading
         scalars: dict[str, str] = {}
         blocks: dict[str, list[str]] = {"Entries": [], "Evidence": []}
         seen_blocks: set[str] = set()
@@ -164,7 +157,9 @@ def parse_reconciliations(
             record_issues.append("Entries must be unique and canonically sorted")
         if any(ENTRY_ID_RE.fullmatch(value) is None for value in entries):
             record_issues.append("Entries contains an invalid Entry ID")
-        if "Evidence" not in seen_blocks or not evidence or not all(_admissible_evidence(item) for item in evidence):
+        try:
+            validate_evidence(evidence, Path.cwd(), allow_missing=True)
+        except ValueError:
             record_issues.append("Evidence is missing or invalid")
         if record_issues:
             issues.append(f"{record_id}: " + "; ".join(dict.fromkeys(record_issues)))

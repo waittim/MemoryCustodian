@@ -31,6 +31,7 @@ from .protocol import (
     manifest_contract_metadata,
     managed_markdown_files,
     prepended_text,
+    read_managed_text,
     resolve_memory_dir,
     resolve_project_root,
 )
@@ -41,9 +42,12 @@ from .subjects import (
     load_subjects,
     normalize_alias,
     normalize_canonical_ref,
+    parse_subject_registry,
     render_subject,
     subject_indexes,
+    subject_registry_issues,
     validate_subject_kind,
+    validate_subject_registry,
 )
 from .structural import (
     active_structural_operand_issues,
@@ -65,7 +69,7 @@ def _project(args) -> tuple[Path, Path, str]:
     manifest = memory_dir / "manifest.md"
     if not manifest.exists():
         raise ValueError("manifest.md is missing; Subject operations require Protocol 0.7 metadata.")
-    manifest_text = manifest.read_text(encoding="utf-8")
+    manifest_text = read_managed_text(memory_dir, manifest)
     metadata = manifest_contract_metadata(manifest_text)
     comparison = compare_versions(
         metadata.get("protocol_version", "0.5"),
@@ -77,6 +81,11 @@ def _project(args) -> tuple[Path, Path, str]:
         raise ValueError("Subject operations require Protocol 0.7.")
     if metadata.get("subject_schema_version") != "1":
         raise ValueError("Subject schema is not initialized; run `memory-custodian migrate`.")
+    registry_issues = validate_subject_registry(memory_dir, project_root)
+    if registry_issues:
+        raise ValueError(
+            "Subject registry is invalid: " + "; ".join(registry_issues[:5])
+        )
     return project_root, memory_dir, metadata["project_id"]
 
 
@@ -103,9 +112,37 @@ def _pending_subject_id(project_id: str, registry: Path, normalized_args: str) -
 
 
 def _replace_subject(text: str, subject: Subject, replacement: str) -> str:
-    if subject.text not in text:
+    lines = text.rstrip("\n").splitlines()
+    if subject.start_line < 0 or subject.end_line > len(lines):
         raise ValueError(f"Subject changed while building mutation: {subject.subject_id}")
-    return text.replace(subject.text, replacement.strip(), 1).rstrip() + "\n"
+    source_lines = lines[subject.start_line:subject.end_line]
+    current = "\n".join(source_lines).strip("\n")
+    if current != subject.text:
+        raise ValueError(f"Subject changed while building mutation: {subject.subject_id}")
+    trailing_blanks = len(source_lines) - len(list(_trimmed_trailing(source_lines)))
+    replacement_lines = [
+        *replacement.strip("\n").splitlines(),
+        *([""] * trailing_blanks),
+    ]
+    return "\n".join([
+        *lines[:subject.start_line],
+        *replacement_lines,
+        *lines[subject.end_line:],
+    ]).rstrip() + "\n"
+
+
+def _trimmed_trailing(lines: list[str]):
+    end = len(lines)
+    while end and not lines[end - 1].strip():
+        end -= 1
+    return lines[:end]
+
+
+def _validate_registry_text(project_root: Path, registry: Path, text: str) -> None:
+    subjects, parse_issues = parse_subject_registry(registry, text)
+    issues = subject_registry_issues(subjects, parse_issues, project_root)
+    if issues:
+        raise ValueError("Resulting Subject registry is invalid: " + "; ".join(issues[:5]))
 
 
 def _print_preflight(
@@ -228,7 +265,7 @@ def _show(args) -> int:
     for path in managed_markdown_files(memory_dir):
         if path.name == "subjects.md":
             continue
-        for entry in parse_structured_entries(path, path.read_text(encoding="utf-8")):
+        for entry in parse_structured_entries(path, read_managed_text(memory_dir, path)):
             if any(
                 entry.fields.get(field, "").casefold() == subject.subject_id.casefold()
                 for field in ("Subject", "Provisional-Subject")
@@ -243,12 +280,15 @@ def _show(args) -> int:
 
 
 def _add(args) -> int:
+    from .markdown import render_canonical_h2
+
     project_root, memory_dir, project_id = _project(args)
     registry = _registry(memory_dir)
     kind = validate_subject_kind(args.kind)
     normalized_title = " ".join(args.title.split())
     if not normalized_title:
         raise ValueError("Subject title must not be empty.")
+    render_canonical_h2("MC-SUBJ-20000101-00000000", normalized_title)
     canonical_ref = normalize_canonical_ref(args.canonical_ref) if args.canonical_ref else None
     aliases = tuple(dict.fromkeys(
         " ".join(alias.split()) for alias in [normalized_title, *args.alias] if alias.split()
@@ -288,7 +328,8 @@ def _add(args) -> int:
                 f"Exact Canonical-Ref collision with {current_refs[canonical_ref].subject_id}: {canonical_ref}"
             )
         entry = render_subject(subject_id, normalized_title, kind, canonical_ref, aliases, evidence)
-        updated = prepended_text(registry.read_text(encoding="utf-8"), entry)
+        updated = prepended_text(read_managed_text(memory_dir, registry), entry)
+        _validate_registry_text(project_root, registry, updated)
         return MutationPlan(
             "subject add",
             {
@@ -315,11 +356,14 @@ def _add(args) -> int:
 
 
 def _rename(args) -> int:
+    from .markdown import render_canonical_h2
+
     project_root, memory_dir, project_id = _project(args)
     registry = _registry(memory_dir)
     new_title = " ".join(args.title.split())
     if not new_title:
         raise ValueError("Subject title must not be empty.")
+    render_canonical_h2("MC-SUBJ-20000101-00000000", new_title)
 
     def build() -> MutationPlan:
         subjects = load_subjects(memory_dir)
@@ -336,8 +380,10 @@ def _rename(args) -> int:
             subject.aliases,
             subject.evidence,
         )
-        updated = _replace_subject(registry.read_text(encoding="utf-8"), subject, updated_entry)
-        mutations = () if updated == registry.read_text(encoding="utf-8") else (TextMutation(registry, updated),)
+        original = read_managed_text(memory_dir, registry)
+        updated = _replace_subject(original, subject, updated_entry)
+        _validate_registry_text(project_root, registry, updated)
+        mutations = () if updated == original else (TextMutation(registry, updated),)
         return MutationPlan(
             "subject rename",
             {"subject_id": subject.subject_id, "title": new_title},
@@ -379,8 +425,9 @@ def _add_alias(args) -> int:
             aliases,
             subject.evidence,
         )
-        original = registry.read_text(encoding="utf-8")
+        original = read_managed_text(memory_dir, registry)
         updated = _replace_subject(original, subject, updated_entry)
+        _validate_registry_text(project_root, registry, updated)
         mutations = () if updated == original else (TextMutation(registry, updated),)
         return MutationPlan(
             "subject add-alias",

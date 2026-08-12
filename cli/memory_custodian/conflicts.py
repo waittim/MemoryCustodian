@@ -10,8 +10,11 @@ from pathlib import Path
 from .entries import StructuredEntry, parse_structured_entries
 from .reconciliations import parse_reconciliations, validate_reconciliations
 from .structural import active_structural_operand_issues, subject_index
-from .subjects import Subject, load_subjects, normalize_alias, normalize_canonical_ref
-from .protocol import managed_markdown_files
+from .subjects import (
+    Subject, load_subjects, normalize_alias, normalize_canonical_ref,
+    validate_subject_registry,
+)
+from .protocol import canonical_memory_files, managed_markdown_files, read_managed_text
 
 
 class ConflictStatus(str, Enum):
@@ -49,11 +52,9 @@ def canonical_entries(memory_dir: Path, *, include_archive: bool = False) -> tup
     entries: list[StructuredEntry] = []
     if not memory_dir.exists():
         return ()
-    for path in managed_markdown_files(memory_dir):
+    for path in canonical_memory_files(memory_dir, include_archive=include_archive):
         relative = path.relative_to(memory_dir).as_posix()
-        if relative == "subjects.md" or (relative.startswith("archive/") and not include_archive):
-            continue
-        entries.extend(parse_structured_entries(path, path.read_text(encoding="utf-8")))
+        entries.extend(parse_structured_entries(path, read_managed_text(memory_dir, path)))
     return tuple(entries)
 
 
@@ -107,10 +108,31 @@ def analyze_conflicts(
     matched_areas: tuple[str, ...] = (),
     included_modules: tuple[str, ...] | None = None,
 ) -> ConflictResult:
+    project_root = next(
+        (parent.parent for parent in (memory_dir, *memory_dir.parents) if parent.name == "docs"),
+        memory_dir.parent.parent,
+    )
     subject_records = load_subjects(memory_dir)
-    findings = _subject_findings(subject_records)
+    findings = [
+        ConflictFinding("MC-CONFLICT-003", ConflictStatus.INVALID, issue)
+        for issue in validate_subject_registry(memory_dir, project_root)
+    ]
+    findings.extend(_subject_findings(subject_records))
     structural_subjects = subject_index(subject_records)
     entries = canonical_entries(memory_dir)
+    canonical_paths = set(canonical_memory_files(memory_dir))
+    for path in managed_markdown_files(memory_dir):
+        if path in canonical_paths or path.name == "README.md":
+            continue
+        if path.relative_to(memory_dir).as_posix().startswith("archive/"):
+            continue
+        for entry in parse_structured_entries(path, read_managed_text(memory_dir, path)):
+            if entry.status == "active":
+                findings.append(ConflictFinding(
+                    "MC-CONFLICT-007", ConflictStatus.INVALID,
+                    "Active Entry is outside canonical manifest-authorized storage.",
+                    (entry.entry_id,),
+                ))
     selected_modules = set(included_modules) if included_modules is not None else None
     by_id = _entry_index(entries)
     for matches in by_id.values():
@@ -229,7 +251,9 @@ def _reconciliation_findings(
     path = memory_dir / "reconciliations.md"
     if not path.exists():
         return []
-    records, parse_issues = parse_reconciliations(path, path.read_text(encoding="utf-8"))
+    records, parse_issues = parse_reconciliations(
+        path, read_managed_text(memory_dir, path)
+    )
     all_entries = tuple(entry for matches in entries.values() for entry in matches)
     _valid, issues = validate_reconciliations(
         records, parse_issues, all_entries, load_subjects(memory_dir),

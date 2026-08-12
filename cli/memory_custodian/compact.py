@@ -15,6 +15,7 @@ from .protocol import (
     estimate_tokens,
     long_decision_entries,
     parse_markdown_units,
+    read_managed_text,
     resolve_memory_dir,
     resolve_project_root,
     split_top_level_bullet_units,
@@ -45,7 +46,7 @@ def _compact_plan(
     memory_dir: Path,
     mutations: list[TextMutation],
 ) -> MutationPlan:
-    manifest = (memory_dir / "manifest.md").read_text(encoding="utf-8")
+    manifest = read_managed_text(memory_dir, memory_dir / "manifest.md")
     metadata = manifest_contract_metadata(
         manifest,
         allow_missing_section=True,
@@ -144,7 +145,7 @@ def _execute_plan(
 
 
 def _dedupe_mutations(memory_dir: Path, target: str, path: Path) -> list[TextMutation]:
-    original = path.read_text(encoding="utf-8")
+    original = read_managed_text(memory_dir, path)
     deduped, removed = _dedupe_bullets(original)
     if not removed:
         return []
@@ -155,7 +156,7 @@ def _dedupe_mutations(memory_dir: Path, target: str, path: Path) -> list[TextMut
             TextMutation(
                 changelog,
                 changelog_text(
-                    changelog.read_text(encoding="utf-8"),
+                    read_managed_text(memory_dir, changelog),
                     f"Compacted {target}: removed {removed} duplicate bullet(s).",
                 ),
             )
@@ -165,7 +166,7 @@ def _dedupe_mutations(memory_dir: Path, target: str, path: Path) -> list[TextMut
 
 def _planned_archive_mutations(memory_dir: Path, target: str, budget: int) -> list[TextMutation]:
     path = memory_dir.joinpath(*PurePosixPath(target).parts)
-    original = path.read_text(encoding="utf-8")
+    original = read_managed_text(memory_dir, path)
     plan = _plan_h2_archive(original, budget, target)
     if plan is None:
         return []
@@ -177,7 +178,7 @@ def _planned_archive_mutations(memory_dir: Path, target: str, budget: int) -> li
             TextMutation(
                 changelog,
                 changelog_text(
-                    changelog.read_text(encoding="utf-8"),
+                    read_managed_text(memory_dir, changelog),
                     f"Compacted {target}: archived {len(plan['archived'])} old entries.",
                 ),
             )
@@ -187,9 +188,9 @@ def _planned_archive_mutations(memory_dir: Path, target: str, budget: int) -> li
 
 def _inbox_cleanup_mutations(memory_dir: Path) -> list[TextMutation]:
     inbox = memory_dir / "inbox.md"
-    original = inbox.read_text(encoding="utf-8")
+    original = read_managed_text(memory_dir, inbox)
     tombstone_path = memory_dir / "do-not-use.md"
-    tombstones = tombstone_path.read_text(encoding="utf-8") if tombstone_path.exists() else ""
+    tombstones = read_managed_text(memory_dir, tombstone_path, required=False)
     cleaned, _candidates, duplicates, tombstone_matches = _clean_inbox(original, tombstones)
     if cleaned == original:
         return []
@@ -203,7 +204,7 @@ def _inbox_cleanup_mutations(memory_dir: Path) -> list[TextMutation]:
         mutations.append(
             TextMutation(
                 changelog,
-                changelog_text(changelog.read_text(encoding="utf-8"), message),
+                changelog_text(read_managed_text(memory_dir, changelog), message),
             )
         )
     return mutations
@@ -455,9 +456,45 @@ def _render_archive_document(
         for section in existing_sections
         if not _is_legacy_archive_wrapper(section, target)
     ]
+    if target != "changelog.md":
+        wrapper_ranges = [
+            unit_range
+            for unit_range, section in zip(grouped_ranges, existing_sections)
+            if _is_legacy_archive_wrapper(section, target)
+        ]
+        removed = {
+            index
+            for unit_range in wrapper_ranges
+            for index in range(unit_range.start, unit_range.end)
+        }
+        base_lines = [
+            line for index, line in enumerate(existing_lines) if index not in removed
+        ]
+        retained_ranges = [
+            unit_range
+            for unit_range, section in zip(grouped_ranges, existing_sections)
+            if not _is_legacy_archive_wrapper(section, target)
+        ]
+        first_h2 = retained_ranges[0].start if retained_ranges else len(existing_lines)
+        insertion = sum(1 for index in range(first_h2) if index not in removed)
+        new_lines = _join_h2_sections([], archived_sections).rstrip().splitlines()
+        if new_lines:
+            before = base_lines[:insertion]
+            after = base_lines[insertion:]
+            if before and before[-1].strip():
+                before.append("")
+            if after and new_lines[-1].strip():
+                new_lines.append("")
+            body = "\n".join([*before, *new_lines, *after]).strip()
+        else:
+            body = "\n".join(base_lines).strip()
+        rendered = _archive_preamble(target).rstrip()
+        if body:
+            rendered += "\n\n" + body
+        return rendered.rstrip() + "\n"
+
     sections = [*archived_sections, *retained]
-    if target == "changelog.md":
-        sections = _merge_changelog_sections(sections)
+    sections = _merge_changelog_sections(sections)
     covered = {
         index
         for unit_range in grouped_ranges
@@ -491,7 +528,7 @@ def _archive_mutations(memory_dir: Path, target: str, archived_sections: list[li
         mutations.append(TextMutation(readme, render_template("archive/README.md", today())))
 
     archive_path = _archive_target_path(memory_dir, target)
-    existing = archive_path.read_text(encoding="utf-8") if archive_path.exists() else ""
+    existing = read_managed_text(memory_dir, archive_path, required=False)
     archive_text = _render_archive_document(target, existing, archived_sections)
     mutations.append(TextMutation(archive_path, archive_text))
     return mutations
@@ -513,7 +550,7 @@ def _run_target_compaction(args, project_root: Path, memory_dir: Path) -> int:
         raise FileNotFoundError(f"Target not found: {path}")
 
     budget = budget_for(target)
-    original = path.read_text(encoding="utf-8")
+    original = read_managed_text(memory_dir, path)
     tokens = estimate_tokens(original)
     long_entries = long_decision_entries(original)
 
@@ -643,7 +680,7 @@ def run(args) -> int:
     if not (memory_dir / "manifest.md").exists():
         raise ValueError("manifest.md is missing; the MemoryCustodian setup is incomplete or corrupted")
     manifest_contract_metadata(
-        (memory_dir / "manifest.md").read_text(encoding="utf-8"),
+        read_managed_text(memory_dir, memory_dir / "manifest.md"),
         allow_missing_section=True,
     )
     if args.target:
@@ -653,9 +690,9 @@ def run(args) -> int:
     if not inbox.exists():
         raise FileNotFoundError(f"Inbox not found: {inbox}")
 
-    original = inbox.read_text(encoding="utf-8")
+    original = read_managed_text(memory_dir, inbox)
     tombstone_path = memory_dir / "do-not-use.md"
-    tombstones = tombstone_path.read_text(encoding="utf-8") if tombstone_path.exists() else ""
+    tombstones = read_managed_text(memory_dir, tombstone_path, required=False)
     structured_candidates = [
         entry for entry in parse_structured_entries(inbox, original)
         if entry.status == "candidate"

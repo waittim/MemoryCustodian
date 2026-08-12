@@ -30,6 +30,7 @@ from .protocol import (
     compare_versions,
     manifest_contract_metadata,
     project_id_from_manifest,
+    read_managed_text,
 )
 from .scanning import scan_text
 
@@ -453,13 +454,13 @@ def inspect_overlay(
 
 def project_identity(memory_dir: Path) -> str:
     return project_id_from_manifest(
-        (memory_dir / "manifest.md").read_text(encoding="utf-8"), required=False
+        read_managed_text(memory_dir, memory_dir / "manifest.md"), required=False
     ) or ""
 
 
 def validated_project_identity(memory_dir: Path) -> str:
     metadata = manifest_contract_metadata(
-        (memory_dir / "manifest.md").read_text(encoding="utf-8")
+        read_managed_text(memory_dir, memory_dir / "manifest.md")
     )
     if compare_versions(
         metadata.get("protocol_version", "0.5"),

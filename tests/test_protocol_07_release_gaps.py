@@ -19,12 +19,14 @@ from unittest.mock import patch
 from memory_custodian.conflicts import analyze_conflicts
 from memory_custodian.context import ContextRoutingResult
 from memory_custodian.entries import (
+    entry_unit_issues,
     heading_entry_ids,
     memory_entry_ids,
     parse_structured_entries,
     render_active_entry,
     render_candidate_entry,
     structured_entry_schema_issues,
+    supersede_entry,
 )
 from memory_custodian.compact import (
     _clean_inbox,
@@ -47,7 +49,12 @@ from memory_custodian.protocol import (
     today,
 )
 from memory_custodian.routes import RouteReason, RoutingCompleteness
-from memory_custodian.subjects import parse_subjects, validate_subject_registry
+from memory_custodian.reconciliations import parse_reconciliations
+from memory_custodian.subjects import (
+    parse_subject_registry,
+    parse_subjects,
+    validate_subject_registry,
+)
 
 
 def capture(argv: list[str]) -> tuple[int, str, str]:
@@ -2637,7 +2644,8 @@ class RoutingAndQualityReleaseTests(unittest.TestCase):
             (memory / "constraints.md").write_text(
                 "# Constraints\n\n" + project_entry + "\n", encoding="utf-8",
             )
-            (memory / "areas").mkdir()
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main(["enable", "area/backend", "--project-root", tmp]), 0)
             area_path = memory / "areas/backend.md"
             area_path.write_text("# Backend\n\n" + area_entry + "\n", encoding="utf-8")
             review = analyze_conflicts(memory)
@@ -3094,7 +3102,8 @@ class MergeAndDeterminismReleaseTests(unittest.TestCase):
                 "area:backend", ("user-confirmed",), subject=subject_id, facet="behavior",
             )
             (memory / "constraints.md").write_text("# Constraints\n\n" + project_entry + "\n", encoding="utf-8")
-            (memory / "areas").mkdir()
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main(["enable", "area/backend", "--project-root", tmp]), 0)
             area_path = memory / "areas/backend.md"
             area_path.write_text("# Backend\n\n" + area_entry + "\n", encoding="utf-8")
 
@@ -3259,7 +3268,8 @@ class MergeAndDeterminismReleaseTests(unittest.TestCase):
             (memory / "constraints.md").write_text(
                 "# Constraints\n\n" + project_entry + "\n", encoding="utf-8",
             )
-            (memory / "areas").mkdir()
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main(["enable", "area/backend", "--project-root", tmp]), 0)
             area_path = memory / "areas/backend.md"
             area_path.write_text("# Backend\n\n" + area_entry + "\n", encoding="utf-8")
 
@@ -3670,6 +3680,36 @@ class MergeAndDeterminismReleaseTests(unittest.TestCase):
             self.assertIn("Merge review status: CLEAR", output)
             self.assertNotIn("both branches created", output)
 
+    def test_merge_review_rejects_invalid_subject_registry_revision(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = initialize_git_project(tmp)
+            subject_id = "MC-SUBJ-20260801-aaaaaaaa"
+            (memory / "subjects.md").write_text(
+                "# Subject Registry\n\n" + subject_unit(subject_id, "Base"),
+                encoding="utf-8",
+            )
+            git(tmp, "add", ".")
+            git(tmp, "commit", "-qm", "valid subject")
+            base = git(tmp, "rev-parse", "HEAD")
+            git(tmp, "checkout", "-qb", "right")
+            registry = memory / "subjects.md"
+            registry.write_text(
+                registry.read_text(encoding="utf-8").replace(
+                    "Status: active", "Status: active\nStatus: active", 1
+                ),
+                encoding="utf-8",
+            )
+            git(tmp, "add", ".")
+            git(tmp, "commit", "-qm", "invalid subject")
+            git(tmp, "checkout", "-qb", "left", base)
+            code, output, error = capture([
+                "check", "--conflicts", "--merge-base", "right", "--project-root", tmp,
+            ])
+            self.assertEqual(code, 1, output + error)
+            self.assertIn("Merge review status: CONFLICT", output)
+            self.assertIn("MC-MERGE-006", output)
+            self.assertIn("duplicate Status", output)
+
     def test_merge_review_detects_registry_collision_and_two_sided_custom_review(self):
         for canonical_ref, expected_status, expected_code in (
             ("feature:shared", "CONFLICT", "MC-MERGE-001"),
@@ -3991,6 +4031,217 @@ class MarkdownUnitBoundaryAuditTests(unittest.TestCase):
         self.assertEqual(blockers, ())
         self.assertIn("## 2020-01-01", updated)
         self.assertNotIn("## 2020-01-02", updated)
+
+    def test_fenced_typed_body_round_trips_as_source_content(self):
+        message = '```python\nprint("visible memory")\n```'
+        rendered = render_active_entry(
+            "decision", "MC-DEC-20200101-aaaaaaaa", "Code invariant",
+            message, None, "project", ("user-confirmed",),
+        )
+        parsed = parse_structured_entries(Path("decisions.md"), rendered)
+        self.assertEqual(len(parsed), 1)
+        self.assertEqual(parsed[0].field_bodies["Decision"], message)
+        self.assertFalse(structured_entry_schema_issues(parsed[0], "decisions.md"))
+
+    def test_supersession_and_subject_rename_only_replace_visible_source_ranges(self):
+        old_id = "MC-DEC-20200101-aaaaaaaa"
+        new_id = "MC-DEC-20200101-bbbbbbbb"
+        entry = render_active_entry(
+            "decision", old_id, "Old", "Body.", None, "project",
+            ("user-confirmed",),
+        ).replace("Status: active", "```text\nStatus: active\n```\nStatus: active", 1)
+        updated = supersede_entry("# Decisions\n\n" + entry + "\n", old_id, new_id)
+        self.assertIn("```text\nStatus: active\n```", updated)
+        parsed = parse_structured_entries(Path("decisions.md"), updated)
+        self.assertEqual(parsed[0].status, "superseded")
+        self.assertEqual(parsed[0].fields["Superseded-By"], new_id)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            registry = Path(tmp) / "docs/memory/subjects.md"
+            subject_id = "MC-SUBJ-20200101-cccccccc"
+            unit = subject_unit(subject_id, "Original")
+            registry.write_text(
+                "# Subject Registry\n\n```markdown\n" + unit + "```\n\n" + unit,
+                encoding="utf-8",
+            )
+            command = [
+                "subject", "rename", subject_id, "Renamed", "--project-root", tmp,
+            ]
+            code, preview, error = capture(command)
+            self.assertEqual(code, 0, preview + error)
+            plan_id = re.search(r"Plan ID: ([0-9a-f]{16})", preview).group(1)
+            code, output, error = capture([
+                *command, "--apply", "--confirm-plan", plan_id,
+            ])
+            self.assertEqual(code, 0, output + error)
+            result = registry.read_text(encoding="utf-8")
+            self.assertIn("```markdown\n" + unit + "```", result)
+            self.assertIn(f"## {subject_id} — Renamed", result)
+
+    def test_canonical_record_headings_reject_indent_and_closing_hash_titles(self):
+        entry_id = "MC-DEC-20200101-aaaaaaaa"
+        invalid = (
+            f"   ## {entry_id} — Indented\n\nStatus: active\nScope: project\n"
+            "Evidence:\n- user-confirmed\n\nDecision:\nBody.\n"
+            f"\n## {entry_id} — ##\n\nStatus: active\nScope: project\n"
+            "Evidence:\n- user-confirmed\n\nDecision:\nBody.\n"
+        )
+        self.assertEqual(parse_structured_entries(Path("decisions.md"), invalid), [])
+        issues = entry_unit_issues(invalid, "decisions.md")
+        self.assertGreaterEqual(len(issues), 2)
+        with self.assertRaises(ValueError):
+            render_active_entry(
+                "decision", entry_id, "##", "Body.", None, "project",
+                ("user-confirmed",),
+            )
+        with tempfile.TemporaryDirectory() as tmp:
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            for command in (
+                ["subject", "add", "##", "--kind", "concept", "--evidence", "user-confirmed"],
+                [
+                    "reconcile", "preview", "--entry", entry_id,
+                    "--entry", "MC-DEC-20200101-bbbbbbbb", "--resolution", "distinct",
+                    "--title", "##", "--evidence", "user-confirmed",
+                ],
+            ):
+                code, _output, _error = capture([*command, "--project-root", tmp])
+                self.assertEqual(code, 2)
+
+    def test_subject_registry_reports_complete_grammar_issues(self):
+        subject_id = "MC-SUBJ-20200101-aaaaaaaa"
+        cases = {
+            "malformed": f"# Subjects\n\n## Prefix {subject_id} — Ghost\n",
+            "unknown": "# Subjects\n\n" + subject_unit(subject_id, "Unknown").replace(
+                "Kind: concept", "Kind: concept\nMystery-Policy: enabled"
+            ),
+            "active-relation": "# Subjects\n\n" + subject_unit(subject_id, "Active").replace(
+                "Kind: concept", "Kind: concept\nMerged-Into: MC-SUBJ-20200101-bbbbbbbb"
+            ),
+            "bad-list": "# Subjects\n\n" + subject_unit(subject_id, "List").replace(
+                "- list", "* list"
+            ),
+        }
+        for label, text in cases.items():
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as tmp:
+                memory = Path(tmp) / "docs/memory"
+                memory.mkdir(parents=True)
+                (memory / "subjects.md").write_text(text, encoding="utf-8")
+                self.assertTrue(validate_subject_registry(memory, Path(tmp)))
+
+    def test_subject_schema_invalidates_conflicts_strict_read_and_writers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            registry = Path(tmp) / "docs/memory/subjects.md"
+            subject_id = "MC-SUBJ-20200101-aaaaaaaa"
+            registry.write_text(
+                "# Subject Registry\n\n" + subject_unit(subject_id, "Duplicate").replace(
+                    "Status: active", "Status: active\nStatus: active"
+                ),
+                encoding="utf-8",
+            )
+            code, output, _error = capture(["check", "--conflicts", "--project-root", tmp])
+            self.assertEqual(code, 1)
+            self.assertIn("INVALID", output)
+            code, _output, _error = capture([
+                "read", "--task", "implementation", "--strict-routing", "--names-only",
+                "--path", "cli", "--project-root", tmp,
+            ])
+            self.assertEqual(code, 2)
+            code, output, error = capture([
+                "subject", "add", "New", "--kind", "concept",
+                "--evidence", "user-confirmed", "--project-root", tmp,
+            ])
+            self.assertEqual(code, 2, output + error)
+            self.assertNotIn("Plan ID:", output)
+
+    def test_reconciliation_reuses_safe_active_evidence_grammar(self):
+        record_id = "MC-REC-20200101-aaaaaaaa"
+        text = (
+            f"## {record_id} — Unsafe evidence\n\nStatus: active\nEntries:\n"
+            "- MC-DEC-20200101-aaaaaaaa\n- MC-DEC-20200101-bbbbbbbb\n"
+            "Resolution: distinct\nEvidence:\n- repo:../../outside\n"
+        )
+        records, issues = parse_reconciliations(Path("reconciliations.md"), text)
+        self.assertEqual(records, ())
+        self.assertTrue(any("Evidence is missing or invalid" in issue for issue in issues))
+
+    def test_direct_operands_use_no_follow_reads(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as outside:
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            memory = Path(tmp) / "docs/memory"
+            external = Path(outside) / "external.md"
+            external.write_text("ExternalSecretToken\n", encoding="utf-8")
+            (memory / "constraints.md").unlink()
+            (memory / "constraints.md").symlink_to(external)
+            code, output, error = capture([
+                "compact", "--target", "constraints.md", "--project-root", tmp,
+            ])
+            self.assertEqual(code, 2)
+            self.assertNotIn("ExternalSecretToken", output + error)
+            (memory / "subjects.md").unlink()
+            (memory / "subjects.md").symlink_to(external)
+            code, output, error = capture(["subject", "list", "--project-root", tmp])
+            self.assertEqual(code, 2)
+            self.assertNotIn("ExternalSecretToken", output + error)
+
+    def test_archive_insertion_preserves_non_h2_source_order(self):
+        existing = (
+            "# Archived Memory: decisions.md\n\n"
+            "Complete historical entries moved from active memory after reviewed compaction.\n"
+            "This file is explicit-only and is not part of normal task context.\n\n"
+            "Custom preface.\n\n## MC-DEC-20200101-aaaaaaaa — First\n\nDecision:\nOne.\n\n"
+            "- Between marker.\n\n## MC-DEC-20200102-bbbbbbbb — Second\n\nDecision:\nTwo.\n"
+        )
+        rendered = _render_archive_document(
+            "decisions.md", existing,
+            [["## MC-DEC-20200103-cccccccc — New", "", "Decision:", "New."]],
+        )
+        self.assertLess(rendered.index("Custom preface"), rendered.index("20200103-cccccccc"))
+        self.assertLess(rendered.index("20200101-aaaaaaaa"), rendered.index("Between marker"))
+        self.assertLess(rendered.index("Between marker"), rendered.index("20200102-bbbbbbbb"))
+
+    def test_invalid_reconciliation_is_inventory_marked_invalid(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            record_id = "MC-REC-20200101-aaaaaaaa"
+            (Path(tmp) / "docs/memory/reconciliations.md").write_text(
+                f"# Reconciliations\n\n## {record_id} — Missing entries\n\n"
+                "Status: active\nEntries:\n- MC-DEC-20200101-aaaaaaaa\n"
+                "- MC-DEC-20200101-bbbbbbbb\nResolution: distinct\nEvidence:\n"
+                "- user-confirmed\n",
+                encoding="utf-8",
+            )
+            code, output, error = capture(["list", "--project-root", tmp])
+            self.assertEqual(code, 0, output + error)
+            self.assertIn(f"{record_id} [INVALID; project]", output)
+
+    def test_documentation_readmes_never_become_live_entry_authority(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main(["init", "--project-root", tmp]), 0)
+                self.assertEqual(main(["enable", "rules", "--project-root", tmp]), 0)
+            memory = Path(tmp) / "docs/memory"
+            subject_id = "MC-SUBJ-20200101-aaaaaaaa"
+            (memory / "subjects.md").write_text(
+                "# Subject Registry\n\n" + subject_unit(subject_id, "README"),
+                encoding="utf-8",
+            )
+            entry_id = "MC-AREA-20200101-bbbbbbbb"
+            entry = render_active_entry(
+                "rule", entry_id, "Documentation example", "Example.", None,
+                "project", ("user-confirmed",), subject=subject_id, facet="behavior",
+            )
+            (memory / "rules/README.md").write_text("# Rules\n\n" + entry, encoding="utf-8")
+            code, output, error = capture(["list", "--project-root", tmp])
+            self.assertEqual(code, 0, output + error)
+            self.assertNotIn(entry_id, output)
+            self.assertEqual(analyze_conflicts(memory).status.value, "CLEAR")
 
     def test_comments_and_fences_never_become_selectable_entries(self):
         text = (

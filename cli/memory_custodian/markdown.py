@@ -30,6 +30,37 @@ class MarkdownUnitRange:
     heading: str | None = None
 
 
+def canonical_h2_parts(
+    line: str,
+    identifier_pattern: re.Pattern[str],
+) -> tuple[str, str] | None:
+    """Parse one canonical record H2 without ATX closing-hash ambiguity."""
+
+    match = re.fullmatch(r"## (\S+) — (\S(?:.*\S)?)", line)
+    if match is None or identifier_pattern.fullmatch(match.group(1)) is None:
+        return None
+    # In CommonMark a whitespace-separated trailing hash run closes the ATX
+    # heading and is not title content. Protocol record titles never serialize
+    # that ambiguous form.
+    if re.search(r"[ \t]+#+[ \t]*$", line):
+        return None
+    return match.group(1), match.group(2)
+
+
+def render_canonical_h2(identifier: str, title: str) -> str:
+    """Serialize a canonical record H2 and reject semantic empty titles."""
+
+    normalized = " ".join(title.split())
+    if (
+        not normalized
+        or "\n" in title
+        or "\r" in title
+        or re.search(r"[ \t]+#+[ \t]*$", f"## {identifier} — {normalized}")
+    ):
+        raise ValueError("Record title must be non-empty and must not end as an ATX closing hash sequence.")
+    return f"## {identifier} — {normalized}"
+
+
 _LIST_FIELDS = frozenset({"Aliases", "Entries", "Evidence", "Merged-From"})
 _FORMAL_ENTRY_HEADING_RE = re.compile(
     r"^ {0,3}##[ \t]+MC-(?:DEC|CON|DNU|PREF|AREA|INBOX|TOMB)-", re.I

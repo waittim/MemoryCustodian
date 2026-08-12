@@ -16,6 +16,7 @@ from .entries import (
     render_markdown_bullet,
     structured_entry_schema_issues,
     structured_entry_storage_issues,
+    structured_relation_issues,
     supersede_entry,
     validate_evidence,
     validate_scope,
@@ -44,6 +45,7 @@ from .protocol import (
     manifest_contract_metadata,
     managed_markdown_files,
     prepended_text,
+    read_managed_text,
     resolve_memory_dir,
     resolve_project_root,
     today,
@@ -90,9 +92,11 @@ def _legacy_entry(kind: str, message: str, reason: str | None) -> str:
     return f"## {today()}\n- {safe_message}"
 
 
-def _initial_target_text(path: Path, kind: str, name: str | None, area: str | None = None) -> str:
+def _initial_target_text(
+    memory_dir: Path, path: Path, kind: str, name: str | None, area: str | None = None
+) -> str:
     if path.exists():
-        return path.read_text(encoding="utf-8")
+        return read_managed_text(memory_dir, path)
     if area:
         return render_area_template(area, today())
     if kind == "rule" and name:
@@ -126,11 +130,11 @@ def _target(args) -> tuple[str, str]:
     return TARGETS[kind], "project"
 
 
-def _report_budget(path: Path, target: str) -> None:
+def _report_budget(memory_dir: Path, path: Path, target: str) -> None:
     budget = budget_for(target)
     if budget is None:
         return
-    tokens = estimate_tokens(path.read_text(encoding="utf-8"))
+    tokens = estimate_tokens(read_managed_text(memory_dir, path))
     state = budget_state(tokens, budget)
     print(f"Budget: {target} {tokens}/{budget} tokens")
     print(f"State: {state}")
@@ -163,7 +167,7 @@ def _find_entry(memory_dir: Path, entry_id: str):
         if path.relative_to(memory_dir).as_posix().startswith("archive/"):
             continue
         matches.extend(
-            entry for entry in parse_structured_entries(path, path.read_text(encoding="utf-8"))
+            entry for entry in parse_structured_entries(path, read_managed_text(memory_dir, path))
             if entry.entry_id.casefold() == entry_id.casefold()
         )
     if not matches:
@@ -239,7 +243,7 @@ def _validate_subject_and_conflict(
         relative = path.relative_to(memory_dir).as_posix()
         if relative.startswith("archive/") or relative in {"subjects.md", "inbox.md"}:
             continue
-        for entry in parse_structured_entries(path, path.read_text(encoding="utf-8")):
+        for entry in parse_structured_entries(path, read_managed_text(memory_dir, path)):
             if (
                 entry.status == "active"
                 and entry.scope.casefold() == scope.casefold()
@@ -289,7 +293,7 @@ def _build_mutations(
         )
         ids = memory_entry_ids(memory_dir)
         metadata = manifest_contract_metadata(
-            (memory_dir / "manifest.md").read_text(encoding="utf-8")
+            read_managed_text(memory_dir, memory_dir / "manifest.md")
         )
         overlay = inspect_overlay(
             project_root,
@@ -348,7 +352,7 @@ def _build_mutations(
         )
 
     target_path = memory_dir / target
-    original = _initial_target_text(target_path, kind, args.name, args.area)
+    original = _initial_target_text(memory_dir, target_path, kind, args.name, args.area)
     updated = prepended_text(
         original, entry, remove_lines=("No unprocessed memory candidates.",) if candidate else ()
     )
@@ -359,13 +363,15 @@ def _build_mutations(
             mutations[0] = TextMutation(target_path, supersede_entry(updated, old.entry_id, new_id))
         else:
             mutations.append(
-                TextMutation(old.path, supersede_entry(old.path.read_text(encoding="utf-8"), old.entry_id, new_id))
+                TextMutation(old.path, supersede_entry(
+                    read_managed_text(memory_dir, old.path), old.entry_id, new_id
+                ))
             )
 
     manifest_path = memory_dir / "manifest.md"
     if is_indexable_optional_path(target):
         manifest_updated, indexed = manifest_with_optional_module_index(
-            manifest_path.read_text(encoding="utf-8"), target
+            read_managed_text(memory_dir, manifest_path), target
         )
         if indexed:
             mutations.append(TextMutation(manifest_path, manifest_updated))
@@ -374,9 +380,25 @@ def _build_mutations(
         mutations.append(
             TextMutation(
                 changelog,
-                changelog_text(changelog.read_text(encoding="utf-8"), f"Added {kind} memory to {target}."),
+                changelog_text(read_managed_text(memory_dir, changelog), f"Added {kind} memory to {target}."),
             )
         )
+    if args.supersedes:
+        resulting: list = []
+        for mutation in mutations:
+            if mutation.path.suffix.casefold() != ".md":
+                continue
+            resulting.extend(
+                entry
+                for entry in parse_structured_entries(mutation.path, mutation.text)
+                if entry.entry_id.casefold() in {
+                    args.supersedes.casefold(), new_id.casefold()
+                }
+            )
+        relation_issues = structured_relation_issues(resulting)
+        if len(resulting) != 2 or relation_issues:
+            detail = "; ".join(relation_issues) or "resulting pair did not resolve exactly once"
+            raise ValueError(f"Supersession result is invalid: {detail}")
     return mutations, target, new_id
 
 
@@ -411,7 +433,7 @@ def run(args) -> int:
     if not manifest_path.exists():
         raise ValueError("manifest.md is missing; the MemoryCustodian setup is incomplete or corrupted")
     metadata = manifest_contract_metadata(
-        manifest_path.read_text(encoding="utf-8"),
+        read_managed_text(memory_dir, manifest_path),
         allow_missing_section=True,
     )
     comparison = compare_versions(metadata.get("protocol_version", "0.5"), CURRENT_PROTOCOL_VERSION)
@@ -533,7 +555,7 @@ def run(args) -> int:
             print("Written files:")
             for mutation in current_mutations:
                 print(f"- {mutation.path}")
-            _report_budget(memory_dir / target, target)
+            _report_budget(memory_dir, memory_dir / target, target)
             return 0
         with project_mutation_guard(
             project_root,
@@ -553,8 +575,8 @@ def run(args) -> int:
             apply_mutations(mutations)
     print(f"Added {'candidate' if args.candidate or args.type == 'inbox' else args.type} memory {new_id} to {memory_dir / target}")
     if args.type == "decision" and args.allow_long and estimate_tokens(
-        (memory_dir / target).read_text(encoding="utf-8")
+        read_managed_text(memory_dir, memory_dir / target)
     ) > DECISION_ENTRY_BUDGET:
         print("Warning: adding an explicitly allowed long decision entry.")
-    _report_budget(memory_dir / target, target)
+    _report_budget(memory_dir, memory_dir / target, target)
     return 0

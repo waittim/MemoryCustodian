@@ -207,7 +207,8 @@ def route_context(
     manifest_path = memory_dir / "manifest.md"
     if not manifest_path.exists():
         raise ValueError("manifest.md is missing; the MemoryCustodian setup is incomplete or corrupted")
-    manifest = manifest_path.read_text(encoding="utf-8")
+    from .protocol import read_managed_text
+    manifest = read_managed_text(memory_dir, manifest_path)
     normalized_by_value = {
         item.value: item
         for item in (normalize_input_path(project_root, value) for value in supplied_paths)
@@ -277,7 +278,7 @@ def route_context(
             results.append(module.with_result(loaded=False, absent=True))
             continue
         packed, module_omissions, oversized = _pack(
-            module.module_id, path.read_text(encoding="utf-8"), budget_for(module.module_id)
+            module.module_id, read_managed_text(memory_dir, path), budget_for(module.module_id)
         )
         contents.append((module.module_id, packed))
         omissions.extend(module_omissions)

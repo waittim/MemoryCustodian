@@ -376,9 +376,11 @@ def project_mutation_guard(
         timeout=timeout,
         break_stale=break_stale,
     ) as bootstrap_path:
-        manifest_text = (
-            manifest_path.read_text(encoding="utf-8") if manifest_path.exists() else None
-        )
+        if manifest_path.exists():
+            from .protocol import read_managed_text
+            manifest_text = read_managed_text(manifest_path.parent, manifest_path)
+        else:
+            manifest_text = None
         current_project_id: str | None = None
         if manifest_text is not None:
             from .protocol import (

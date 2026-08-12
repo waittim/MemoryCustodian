@@ -29,6 +29,7 @@ from .templates import (
     TASK_ROUTE_SECTIONS,
 )
 from .routes import (
+    CANONICAL_TASKS,
     TASK_ALIASES,
     RouteReason,
     RoutedModule,
@@ -645,7 +646,7 @@ def existing_memory_files(memory_dir: Path) -> list[Path]:
 
 
 def managed_markdown_files(memory_dir: Path) -> tuple[Path, ...]:
-    """Enumerate contained regular Markdown files without following symlinks."""
+    """Inventory contained Markdown paths without treating them as authority."""
 
     if not memory_dir.exists():
         return ()
@@ -682,14 +683,92 @@ def managed_markdown_files(memory_dir: Path) -> tuple[Path, ...]:
     return tuple(sorted(found, key=lambda path: path.relative_to(memory_dir).as_posix()))
 
 
-def iter_markdown_files(memory_dir: Path, include_archive: bool = False) -> Iterable[Path]:
-    for path in managed_markdown_files(memory_dir):
+def read_managed_text(
+    memory_dir: Path,
+    path: Path,
+    *,
+    required: bool = True,
+) -> str:
+    """Read one contained regular file without following its final symlink."""
+
+    root = memory_dir.resolve()
+    candidate = path if path.is_absolute() else memory_dir / path
+    try:
+        candidate.absolute().relative_to(memory_dir.absolute())
+        candidate.parent.resolve().relative_to(root)
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise ValueError(f"Managed memory operand escapes its root: {candidate}") from exc
+    try:
+        before = candidate.lstat()
+    except FileNotFoundError:
+        if required:
+            raise
+        return ""
+    except NotADirectoryError as exc:
+        raise ValueError(
+            f"Managed memory operand has a non-directory parent: {candidate}"
+        ) from exc
+    if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode):
+        raise ValueError(
+            "Managed memory operand must be a regular non-symlink file: "
+            + candidate.relative_to(memory_dir).as_posix()
+        )
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(candidate, flags)
+    except OSError as exc:
+        raise ValueError(
+            f"Managed memory operand could not be opened safely: {candidate}"
+        ) from exc
+    try:
+        opened = os.fstat(descriptor)
+        if not stat.S_ISREG(opened.st_mode) or (
+            before.st_dev, before.st_ino
+        ) != (opened.st_dev, opened.st_ino):
+            raise ValueError(
+                "Managed memory operand changed during safe open: "
+                + candidate.relative_to(memory_dir).as_posix()
+            )
+        with os.fdopen(descriptor, "r", encoding="utf-8") as handle:
+            descriptor = -1
+            return handle.read()
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
+def canonical_memory_files(
+    memory_dir: Path,
+    *,
+    include_archive: bool = False,
+) -> tuple[Path, ...]:
+    """Select canonical shared storage from inventory and manifest authority."""
+
+    inventory = managed_markdown_files(memory_dir)
+    manifest_path = memory_dir / "manifest.md"
+    manifest = read_managed_text(memory_dir, manifest_path, required=False)
+    declared = optional_index_paths(manifest) if manifest else set()
+    root_storage = {"brief.md", "decisions.md", "constraints.md", "do-not-use.md", "inbox.md"}
+    for task in CANONICAL_TASKS:
+        try:
+            root_storage.update(
+                relative for relative, _required in parse_manifest_task_file_specs(manifest, task)
+                if "/" not in relative
+            )
+        except ValueError:
+            continue
+    selected: list[Path] = []
+    for path in inventory:
         relative = path.relative_to(memory_dir).as_posix()
-        if relative.startswith("archive/") and not include_archive:
-            continue
-        if relative in {"rules/README.md", "profiles/README.md", "archive/README.md"}:
-            continue
-        yield path
+        if relative in root_storage or relative in declared:
+            selected.append(path)
+        elif include_archive and relative.startswith("archive/") and path.name != "README.md":
+            selected.append(path)
+    return tuple(selected)
+
+
+def iter_markdown_files(memory_dir: Path, include_archive: bool = False) -> Iterable[Path]:
+    yield from canonical_memory_files(memory_dir, include_archive=include_archive)
 
 
 def split_top_level_bullet_units(text: str) -> list[tuple[str, str]]:
@@ -772,6 +851,8 @@ class MarkdownUnit:
     kind: str
     text: str
     heading: str | None = None
+    start_line: int = -1
+    end_line: int = -1
 
 
 @dataclass(frozen=True)
@@ -789,17 +870,20 @@ def parse_markdown_units(text: str) -> MarkdownDocument:
     ranges = semantic_unit_ranges("\n".join(lines), start=start)
     units: list[MarkdownUnit] = []
     if ranges:
-        preamble = "\n".join(lines[start:ranges[0].start]).strip()
-        if preamble:
-            units.append(MarkdownUnit("preamble", preamble))
+        preamble = "\n".join(lines[start:ranges[0].start]).strip("\n")
+        if preamble.strip():
+            units.append(MarkdownUnit("preamble", preamble, None, start, ranges[0].start))
         for unit_range in ranges:
-            unit_text = "\n".join(lines[unit_range.start:unit_range.end]).strip()
-            units.append(MarkdownUnit(unit_range.kind, unit_text, unit_range.heading))
+            unit_text = "\n".join(lines[unit_range.start:unit_range.end]).strip("\n")
+            units.append(MarkdownUnit(
+                unit_range.kind, unit_text, unit_range.heading,
+                unit_range.start, unit_range.end,
+            ))
         return MarkdownDocument(title, tuple(units))
 
-    body = "\n".join(lines[start:]).strip()
-    if body:
-        units.append(MarkdownUnit("body", body))
+    body = "\n".join(lines[start:]).strip("\n")
+    if body.strip():
+        units.append(MarkdownUnit("body", body, None, start, len(lines)))
     return MarkdownDocument(title, tuple(units))
 
 
@@ -1251,7 +1335,7 @@ def manifest_task_file_specs(memory_dir: Path, task: str) -> list[tuple[str, boo
         raise ValueError(
             "manifest.md is missing; restore it, apply an applicable migration, or carefully reinitialize the project"
         )
-    return parse_manifest_task_file_specs(manifest.read_text(encoding="utf-8"), task)
+    return parse_manifest_task_file_specs(read_managed_text(memory_dir, manifest), task)
 
 
 def manifest_task_modules(memory_dir: Path, task: str) -> list[RoutedModule]:
@@ -1260,7 +1344,7 @@ def manifest_task_modules(memory_dir: Path, task: str) -> list[RoutedModule]:
         raise ValueError(
             "manifest.md is missing; restore it, apply an applicable migration, or carefully reinitialize the project"
         )
-    return parse_manifest_task_modules(manifest.read_text(encoding="utf-8"), task)
+    return parse_manifest_task_modules(read_managed_text(memory_dir, manifest), task)
 
 
 def resolve_manifest_memory_path(memory_dir: Path, name: str) -> Path:

@@ -35,8 +35,9 @@ from .protocol import (
     parse_markdown_units,
     resolve_memory_dir,
     resolve_project_root,
+    read_managed_text,
 )
-from .subjects import load_subjects
+from .subjects import load_subjects, validate_subject_registry
 from .plans import digest_text
 from .structural import candidate_structural_operand_issues, subject_index
 
@@ -57,7 +58,7 @@ def _legacy_records(memory_dir: Path, *, include_archive: bool) -> list[IndexedE
         relative = path.relative_to(memory_dir).as_posix()
         if relative in {"manifest.md", "subjects.md", "brief.md", "reconciliations.md"} or path.name == "README.md":
             continue
-        document = parse_markdown_units(path.read_text(encoding="utf-8"))
+        document = parse_markdown_units(read_managed_text(memory_dir, path))
         semantic_ordinal = 0
         for unit in document.units:
             if unit.kind not in {"h2", "bullet"}:
@@ -91,19 +92,32 @@ def build_index(
     records.extend(_legacy_records(memory_dir, include_archive=include_archive))
     reconciliation = memory_dir / "reconciliations.md"
     if reconciliation.exists():
-        from .reconciliations import parse_reconciliations
+        from .reconciliations import parse_reconciliations, validate_reconciliations
 
-        text = reconciliation.read_text(encoding="utf-8")
-        reconciliation_records, _issues = parse_reconciliations(reconciliation, text)
+        text = read_managed_text(memory_dir, reconciliation)
+        reconciliation_records, parse_issues = parse_reconciliations(reconciliation, text)
+        valid_records, validation_issues = validate_reconciliations(
+            reconciliation_records,
+            parse_issues,
+            tuple(record.structured for record in records if record.structured),
+            tuple(load_subjects(memory_dir)),
+        )
+        valid_ids = {record.record_id.casefold() for record in valid_records}
+        invalid_ids = {
+            issue.record_id.casefold()
+            for issue in validation_issues
+            if issue.record_id
+        }
         records.extend(
             IndexedEntry(
                 record.record_id,
-                record.status,
+                record.status if record.record_id.casefold() in valid_ids else "INVALID",
                 "project",
                 "reconciliations.md",
                 record.text,
             )
             for record in reconciliation_records
+            if record.record_id.casefold() in valid_ids | invalid_ids
         )
     if include_local:
         overlay = inspect_overlay(
@@ -204,10 +218,13 @@ def run_promote(args) -> int:
         raise ValueError("Transactional promotion apply requires Protocol 0.8.")
     project_root = resolve_project_root(args.project_root)
     memory_dir = resolve_memory_dir(project_root, args.memory_dir)
-    manifest = (memory_dir / "manifest.md").read_text(encoding="utf-8")
+    manifest = read_managed_text(memory_dir, memory_dir / "manifest.md")
     metadata = manifest_contract_metadata(manifest)
     if compare_versions(metadata["protocol_version"], CURRENT_PROTOCOL_VERSION) != 0:
         raise ValueError("Promotion preview requires Protocol 0.7.")
+    registry_issues = validate_subject_registry(memory_dir, project_root)
+    if registry_issues:
+        raise ValueError("Subject registry is invalid: " + "; ".join(registry_issues[:5]))
     records = build_index(project_root, memory_dir)
     candidate = find_entry(records, args.entry_id)
     if candidate.status != "candidate" or not candidate.structured:
@@ -289,7 +306,7 @@ def run_promote(args) -> int:
     else:
         owner_records = []
     target_exists = target_path.exists()
-    target_baseline = target_path.read_text(encoding="utf-8") if target_exists else ""
+    target_baseline = read_managed_text(memory_dir, target_path) if target_exists else ""
     updated_manifest, manifest_changed = manifest_with_optional_module_index(manifest, target)
 
     promoted_candidate_text, transition_count = re.subn(
@@ -331,7 +348,7 @@ def run_promote(args) -> int:
     blockers = sorted(set(blockers))
     dependency_parts = [
         f"manifest:{digest_text(manifest)}",
-        f"subjects:{digest_text((memory_dir / 'subjects.md').read_text(encoding='utf-8'))}",
+        f"subjects:{digest_text(read_managed_text(memory_dir, memory_dir / 'subjects.md'))}",
         f"candidate:{candidate.source}:{digest_text(candidate.text)}",
         f"target:{target}:exists={target_exists}:{digest_text(target_baseline)}",
         f"resulting-manifest:{digest_text(updated_manifest)}",

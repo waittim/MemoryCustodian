@@ -10,14 +10,12 @@ import unicodedata
 import uuid
 
 from .entries import validate_evidence
-from .markdown import visible_lines
-from .protocol import parse_markdown_units
+from .markdown import canonical_h2_parts, render_canonical_h2, visible_lines
+from .protocol import parse_markdown_units, read_managed_text
 
 
 SUBJECT_ID_RE = re.compile(r"\bMC-SUBJ-(\d{8})-([0-9a-f]{8})\b", re.I)
-SUBJECT_HEADING_RE = re.compile(
-    r"^## (MC-SUBJ-\d{8}-[0-9a-f]{8}) — (\S(?:.*\S)?)$", re.I
-)
+SUBJECT_HEADING_ID_RE = re.compile(r"MC-SUBJ-\d{8}-[0-9a-f]{8}", re.I)
 SUBJECT_KINDS = {
     "dependency",
     "repo-path",
@@ -55,6 +53,11 @@ TYPE_FACETS = {
     "profile": FACETS,
 }
 _FIELD_RE = re.compile(r"^([A-Za-z][A-Za-z-]*):(?:\s*(.*))?$")
+_SUBJECT_FIELDS = frozenset({
+    "Status", "Kind", "Canonical-Ref", "Aliases", "Evidence",
+    "Merged-Into", "Merged-From",
+})
+_SUBJECT_LIST_FIELDS = frozenset({"Aliases", "Evidence", "Merged-From"})
 _PYPI_RUN_RE = re.compile(r"[-_.]+")
 _SIMPLE_REF_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 _NPM_REF_RE = re.compile(r"^(?:@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*$")
@@ -74,6 +77,8 @@ class Subject:
     merged_into: str | None = None
     merged_from: tuple[str, ...] = ()
     field_counts: dict[str, int] = field(default_factory=dict)
+    start_line: int = -1
+    end_line: int = -1
 
 
 def normalize_alias(value: str) -> str:
@@ -153,14 +158,20 @@ def generate_subject_id(existing_ids: set[str] | None = None, *, day: date | Non
             return value
 
 
-def parse_subjects(path: Path, text: str) -> list[Subject]:
+def parse_subject_registry(path: Path, text: str) -> tuple[list[Subject], list[str]]:
     subjects: list[Subject] = []
+    issues: list[str] = []
     for unit in parse_markdown_units(text).units:
         if unit.kind != "h2":
             continue
         section = unit.text
-        heading = SUBJECT_HEADING_RE.fullmatch(section.splitlines()[0])
+        first_line = section.splitlines()[0]
+        heading = canonical_h2_parts(first_line, SUBJECT_HEADING_ID_RE)
         if heading is None:
+            issues.append(
+                f"{path.name}: malformed Subject heading {first_line!r}; "
+                "expected `## <SUBJECT_ID> — <title>`"
+            )
             continue
         fields: dict[str, str] = {}
         field_counts: dict[str, int] = {}
@@ -175,22 +186,47 @@ def parse_subjects(path: Path, text: str) -> list[Subject]:
             field = _FIELD_RE.match(line)
             if field:
                 key, field_value = field.group(1), (field.group(2) or "").strip()
+                if key not in _SUBJECT_FIELDS:
+                    issues.append(f"{path.name}: {heading[0]} has unknown field {key}")
+                    list_field = None
+                    continue
                 fields[key] = field_value
                 field_counts[key] = field_counts.get(key, 0) + 1
-                list_field = key if key in {"Aliases", "Evidence", "Merged-From"} else None
+                if key in _SUBJECT_LIST_FIELDS:
+                    if field_value:
+                        issues.append(
+                            f"{path.name}: {heading[0]} {key} block heading must not contain a value"
+                        )
+                    list_field = key
+                else:
+                    if not field_value:
+                        issues.append(f"{path.name}: {heading[0]} {key} must not be empty")
+                    list_field = None
                 continue
             if line.startswith("- ") and list_field == "Aliases":
-                aliases.append(line[2:].strip())
+                value = line[2:].strip()
+                if not value:
+                    issues.append(f"{path.name}: {heading[0]} Aliases contains an empty item")
+                aliases.append(value)
             elif line.startswith("- ") and list_field == "Evidence":
-                evidence.append(line[2:].strip())
+                value = line[2:].strip()
+                if not value:
+                    issues.append(f"{path.name}: {heading[0]} Evidence contains an empty item")
+                evidence.append(value)
             elif line.startswith("- ") and list_field == "Merged-From":
-                merged_from.append(line[2:].strip())
+                value = line[2:].strip()
+                if not value:
+                    issues.append(f"{path.name}: {heading[0]} Merged-From contains an empty item")
+                merged_from.append(value)
             elif line.strip():
+                issues.append(
+                    f"{path.name}: {heading[0]} has unexpected line {line!r}"
+                )
                 list_field = None
         subjects.append(
             Subject(
-                heading.group(1),
-                heading.group(2),
+                heading[0],
+                heading[1],
                 fields.get("Status", ""),
                 fields.get("Kind", ""),
                 fields.get("Canonical-Ref") or None,
@@ -201,16 +237,22 @@ def parse_subjects(path: Path, text: str) -> list[Subject]:
                 fields.get("Merged-Into") or None,
                 tuple(merged_from),
                 field_counts,
+                unit.start_line,
+                unit.end_line,
             )
         )
-    return subjects
+    return subjects, issues
+
+
+def parse_subjects(path: Path, text: str) -> list[Subject]:
+    return parse_subject_registry(path, text)[0]
 
 
 def load_subjects(memory_dir: Path) -> list[Subject]:
     path = memory_dir / "subjects.md"
     if not path.exists():
         return []
-    return parse_subjects(path, path.read_text(encoding="utf-8"))
+    return parse_subjects(path, read_managed_text(memory_dir, path))
 
 
 def render_subject(
@@ -226,7 +268,7 @@ def render_subject(
         dict.fromkeys(" ".join(item.split()) for item in aliases if item.split())
     )
     lines = [
-        f"## {subject_id} — {normalized_title}",
+        render_canonical_h2(subject_id, normalized_title),
         "",
         "Status: active",
         f"Kind: {kind}",
@@ -266,12 +308,14 @@ def subject_indexes(subjects: list[Subject]) -> tuple[dict[str, Subject], dict[s
     return by_id, by_alias, by_ref
 
 
-def validate_subject_registry(memory_dir: Path, project_root: Path) -> list[str]:
-    path = memory_dir / "subjects.md"
-    if not path.exists():
-        return ["subjects.md: missing managed Subject registry"]
-    subjects = load_subjects(memory_dir)
-    issues: list[str] = []
+def subject_registry_issues(
+    subjects: list[Subject],
+    parse_issues: list[str] | tuple[str, ...],
+    project_root: Path,
+) -> list[str]:
+    """Validate already parsed registry state, including Git revision content."""
+
+    issues = list(parse_issues)
     ids: dict[str, str] = {}
     aliases: dict[str, str] = {}
     refs: dict[str, str] = {}
@@ -296,6 +340,10 @@ def validate_subject_registry(memory_dir: Path, project_root: Path) -> list[str]
             issues.append(f"subjects.md: {subject.subject_id} has invalid Status {subject.status!r}")
         if subject.status == "merged" and not subject.merged_into:
             issues.append(f"subjects.md: {subject.subject_id} merged Subject lacks Merged-Into")
+        if subject.status == "active" and subject.merged_into:
+            issues.append(f"subjects.md: {subject.subject_id} active Subject cannot declare Merged-Into")
+        if subject.status == "merged" and subject.merged_from:
+            issues.append(f"subjects.md: {subject.subject_id} merged Subject cannot declare Merged-From")
         try:
             validate_subject_kind(subject.kind)
         except ValueError as exc:
@@ -336,3 +384,12 @@ def validate_subject_registry(memory_dir: Path, project_root: Path) -> list[str]
                 f"subjects.md: {subject.subject_id} Merged-Into must reference a different active Subject"
             )
     return issues
+
+
+def validate_subject_registry(memory_dir: Path, project_root: Path) -> list[str]:
+    path = memory_dir / "subjects.md"
+    if not path.exists():
+        return ["subjects.md: missing managed Subject registry"]
+    text = read_managed_text(memory_dir, path)
+    subjects, parse_issues = parse_subject_registry(path, text)
+    return subject_registry_issues(subjects, parse_issues, project_root)

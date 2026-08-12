@@ -44,6 +44,7 @@ from .protocol import (
     MarkdownUnit,
     parse_markdown_units,
     protocol_metadata,
+    read_managed_text,
     strict_protocol_metadata,
     valid_project_id,
     resolve_memory_dir,
@@ -204,7 +205,7 @@ def _migration_sources(memory_dir: Path, manifest: str) -> dict[str, str]:
                 raise ValueError(
                     f"Migration operand must be a regular non-symlink file: {relative}"
                 )
-            sources[relative] = path.read_text(encoding="utf-8")
+            sources[relative] = read_managed_text(memory_dir, path)
     return sources
 
 
@@ -215,7 +216,7 @@ def _validate_existing_formal_entries(project_root: Path, memory_dir: Path) -> N
     id_counts: dict[str, int] = {}
     for path in managed_markdown_files(memory_dir):
         relative = path.relative_to(memory_dir).as_posix()
-        text = path.read_text(encoding="utf-8")
+        text = read_managed_text(memory_dir, path)
         issues.extend(entry_unit_issues(text, relative))
         for entry_id in heading_entry_ids(text):
             key = entry_id.casefold()
@@ -285,7 +286,7 @@ def _upgraded_manifest(
 
 def _build_plan(project_root: Path, memory_dir: Path) -> tuple[MutationPlan, list[str], tuple[Path, ...]]:
     manifest_path = memory_dir / "manifest.md"
-    original = manifest_path.read_text(encoding="utf-8")
+    original = read_managed_text(memory_dir, manifest_path)
     strict_protocol_metadata(original, allow_missing_section=True)
     metadata = protocol_metadata(original)
     version = metadata.get("protocol_version")
@@ -310,7 +311,7 @@ def _build_plan(project_root: Path, memory_dir: Path) -> tuple[MutationPlan, lis
     )
     sources = _migration_sources(memory_dir, original)
     _validate_existing_formal_entries(project_root, memory_dir)
-    from .check import cross_unit_integrity_findings
+    from .integrity import cross_unit_integrity_findings
 
     cross_issues, _cross_warnings = cross_unit_integrity_findings(
         project_root,
@@ -329,7 +330,7 @@ def _build_plan(project_root: Path, memory_dir: Path) -> tuple[MutationPlan, lis
         )
     changelog_path = memory_dir / "changelog.md"
     changelog_original = (
-        changelog_path.read_text(encoding="utf-8")
+        read_managed_text(memory_dir, changelog_path)
         if changelog_path.exists()
         else None
     )

@@ -15,7 +15,7 @@ from .protocol import (
     compare_versions,
     manifest_contract_metadata,
     project_id_from_manifest,
-    read_text,
+    read_managed_text,
     resolve_memory_dir,
     resolve_project_root,
     today,
@@ -27,7 +27,7 @@ from .reconciliations import (
     validate_reconciliations,
 )
 from .structural import active_structural_operand_issues, subject_index
-from .subjects import Subject, load_subjects
+from .subjects import Subject, load_subjects, validate_subject_registry
 
 
 @dataclass(frozen=True)
@@ -41,7 +41,7 @@ class GovernanceProject:
 def _project(args) -> GovernanceProject:
     project_root = resolve_project_root(args.project_root)
     memory_dir = resolve_memory_dir(project_root, args.memory_dir)
-    manifest = read_text(memory_dir / "manifest.md")
+    manifest = read_managed_text(memory_dir, memory_dir / "manifest.md")
     metadata = manifest_contract_metadata(manifest)
     version = metadata["protocol_version"]
     comparison = compare_versions(version, CURRENT_PROTOCOL_VERSION)
@@ -62,6 +62,9 @@ def _project(args) -> GovernanceProject:
             "Governance preview requires the declared subjects.md registry; "
             "run `memory-custodian init --repair`."
         )
+    registry_issues = validate_subject_registry(memory_dir, project_root)
+    if registry_issues:
+        raise ValueError("Subject registry is invalid: " + "; ".join(registry_issues[:5]))
     project_id = project_id_from_manifest(manifest)
     if not project_id:
         raise ValueError(
@@ -143,7 +146,7 @@ def _exception_add(args) -> int:
             _entry_state(area, memory_dir), _entry_state(baseline, memory_dir),
         ],
         "manifest_sha256": project.manifest_sha256,
-        "subjects_sha256": digest_text(read_text(subjects_path)),
+        "subjects_sha256": digest_text(read_managed_text(memory_dir, subjects_path)),
         "blockers": sorted(blockers),
     }
     print("Exception-To add preview:")
@@ -200,7 +203,7 @@ def _exception_remove(args) -> int:
             _entry_state(entry, memory_dir) for entry in (area, *targets)
         ],
         "manifest_sha256": project.manifest_sha256,
-        "subjects_sha256": digest_text(read_text(subjects_path)),
+        "subjects_sha256": digest_text(read_managed_text(memory_dir, subjects_path)),
         "blockers": sorted(blockers),
         "resulting_review": resulting_review,
     }
@@ -225,6 +228,8 @@ def _exception_remove(args) -> int:
 
 
 def _reconcile_preview(args) -> int:
+    from .markdown import render_canonical_h2
+
     project = _project(args)
     project_root = project.project_root
     memory_dir = project.memory_dir
@@ -249,7 +254,7 @@ def _reconcile_preview(args) -> int:
     suffix = hashlib.sha256(record_seed.encode()).hexdigest()[:8]
     record_id = f"MC-REC-{today().replace('-', '')}-{suffix}"
     unit = (
-        f"## {record_id} — {title}\n\n"
+        render_canonical_h2(record_id, title) + "\n\n"
         "Status: active\nEntries:\n"
         + "\n".join(f"- {value}" for value in requested)
         + f"\nResolution: {args.resolution}\nEvidence:\n"
@@ -260,7 +265,7 @@ def _reconcile_preview(args) -> int:
     )
     path = memory_dir / "reconciliations.md"
     existing, parse_issues = (
-        parse_reconciliations(path, read_text(path)) if path.exists() else ((), ())
+        parse_reconciliations(path, read_managed_text(memory_dir, path)) if path.exists() else ((), ())
     )
     entries = canonical_entries(memory_dir)
     _valid, issues = validate_reconciliations(
@@ -272,7 +277,7 @@ def _reconcile_preview(args) -> int:
     ]
     payload = {
         "record": unit,
-        "base_sha256": digest_text(read_text(path) if path.exists() else ""),
+        "base_sha256": digest_text(read_managed_text(memory_dir, path, required=False)),
         "entry_dependencies": [
             _entry_state(entry, memory_dir)
             for entry in sorted(
@@ -283,7 +288,7 @@ def _reconcile_preview(args) -> int:
             )
         ],
         "manifest_sha256": project.manifest_sha256,
-        "subjects_sha256": digest_text(read_text(memory_dir / "subjects.md")),
+        "subjects_sha256": digest_text(read_managed_text(memory_dir, memory_dir / "subjects.md")),
         "blockers": blockers,
     }
     print("Reconciliation record preview:")

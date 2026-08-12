@@ -33,11 +33,11 @@ from .protocol import (
     MarkdownUnit,
     compare_versions,
     ensure_newline,
-    iter_markdown_files,
+    managed_markdown_files,
     manifest_contract_metadata,
     optional_index_paths,
     parse_markdown_units,
-    read_text,
+    read_managed_text,
     render_markdown_document,
     resolve_memory_dir,
     resolve_project_root,
@@ -68,17 +68,19 @@ class ForgetBuild:
 def _target_files(memory_dir: Path, mode: str, *, include_do_not_use: bool = False) -> list[Path]:
     excluded = {"manifest.md", "do-not-use.md"}
     if mode == "purge":
-        candidates = iter_markdown_files(memory_dir, include_archive=True)
+        candidates = managed_markdown_files(memory_dir)
         return sorted(
             {path for path in candidates if path.name != "README.md" and path.relative_to(memory_dir).as_posix() not in excluded}
         )
 
-    manifest = read_text(memory_dir / "manifest.md")
+    manifest = read_managed_text(memory_dir, memory_dir / "manifest.md")
     enabled = optional_index_paths(manifest)
     active_core = {"brief.md", "decisions.md", "constraints.md", "preferences.md", "inbox.md", "changelog.md"}
     candidates: set[Path] = set()
-    for path in iter_markdown_files(memory_dir, include_archive=False):
+    for path in managed_markdown_files(memory_dir):
         relative = path.relative_to(memory_dir).as_posix()
+        if relative.startswith("archive/"):
+            continue
         if relative in active_core or relative in enabled:
             candidates.add(path)
     return sorted(
@@ -341,10 +343,10 @@ def _subject_reference_blockers(
     if tombstone_updated is not None:
         planned_text[memory_dir / "do-not-use.md"] = tombstone_updated
     references: dict[str, list[str]] = {subject_id: [] for subject_id in removed_ids}
-    for path in iter_markdown_files(memory_dir, include_archive=True):
+    for path in managed_markdown_files(memory_dir):
         if path.name == "subjects.md":
             continue
-        text = planned_text.get(path, read_text(path))
+        text = planned_text.get(path, read_managed_text(memory_dir, path))
         for entry in parse_structured_entries(path, text):
             for field in ("Subject", "Provisional-Subject"):
                 subject_id = entry.fields.get(field, "").casefold()
@@ -379,7 +381,7 @@ def _entry_reference_blockers(memory_dir: Path, entry_id: str | None) -> list[st
                 )
     reconciliation_path = memory_dir / "reconciliations.md"
     if reconciliation_path.exists():
-        text = read_text(reconciliation_path)
+        text = read_managed_text(memory_dir, reconciliation_path)
         from .reconciliations import parse_reconciliations
 
         records, parse_issues = parse_reconciliations(reconciliation_path, text)
@@ -416,7 +418,7 @@ def _build_forget_mutation_plan(
     targets = _target_files(memory_dir, args.mode, include_do_not_use=bool(getattr(args, "entry_id", None)))
     plans: list[FilePlan] = []
     for path in targets:
-        original = read_text(path)
+        original = read_managed_text(memory_dir, path)
         updated, matches, blockers = _remove_units(
             original,
             topic,
@@ -431,13 +433,13 @@ def _build_forget_mutation_plan(
     tombstone_blockers: tuple[MarkdownUnit, ...] = ()
     if args.mode in {"hard", "purge"}:
         candidate, tombstone_matches, tombstone_blockers = _update_existing_tombstones(
-            read_text(tombstone_path),
+            read_managed_text(memory_dir, tombstone_path),
             topic,
             args.mode,
             project_id,
             tombstone_suffix,
         )
-        if candidate != ensure_newline(read_text(tombstone_path)):
+        if candidate != ensure_newline(read_managed_text(memory_dir, tombstone_path)):
             tombstone_updated = candidate
     tombstone = _tombstone(topic, args.mode, project_id, tombstone_suffix)
     extra_blockers: list[str] = []
@@ -449,7 +451,9 @@ def _build_forget_mutation_plan(
         expected_guard = rendered[0] if len(rendered) == 1 else None
         existing_guards = [
             entry
-            for entry in parse_structured_entries(tombstone_path, read_text(tombstone_path))
+            for entry in parse_structured_entries(
+                tombstone_path, read_managed_text(memory_dir, tombstone_path)
+            )
             if tombstone_id and entry.entry_id.casefold() == tombstone_id.casefold()
         ]
         global_owner_count = (
@@ -487,7 +491,9 @@ def _build_forget_mutation_plan(
                     f"Generated Tombstone Entry ID already exists: {tombstone_id}"
                 )
         else:
-            tombstone_updated = _prepend_entry(read_text(tombstone_path), tombstone)
+            tombstone_updated = _prepend_entry(
+                read_managed_text(memory_dir, tombstone_path), tombstone
+            )
     elif args.mode == "hard" and tombstone and tombstone_updated is not None:
         rendered = parse_structured_entries(tombstone_path, tombstone)
         tombstone_id = rendered[0].entry_id if len(rendered) == 1 else None
@@ -503,7 +509,7 @@ def _build_forget_mutation_plan(
     changelog_base = (
         changelog_plan.updated
         if changelog_plan
-        else (read_text(changelog_path) if changelog_path.exists() else "")
+        else read_managed_text(memory_dir, changelog_path, required=False)
     )
     changelog_message = (
         f"Forgot topic '{topic}' with mode soft."
@@ -629,7 +635,7 @@ def run(args) -> int:
         raise ValueError("manifest.md is missing; forgetting cannot safely resolve active memory")
     if not (memory_dir / "do-not-use.md").exists():
         raise ValueError("do-not-use.md is missing; forgetting cannot safely record removal guards")
-    manifest_text = read_text(memory_dir / "manifest.md")
+    manifest_text = read_managed_text(memory_dir, memory_dir / "manifest.md")
     metadata = manifest_contract_metadata(
         manifest_text,
         allow_missing_section=True,

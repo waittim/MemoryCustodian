@@ -13,6 +13,7 @@ from .protocol import (
     is_safe_memory_name,
     manifest_with_optional_module_index,
     protocol_metadata,
+    read_managed_text,
     resolve_memory_dir,
     resolve_project_root,
     today,
@@ -71,14 +72,14 @@ def _build_mutations(
 ) -> tuple[str, str | None, list[TextMutation]]:
     path = memory_dir / relative_path
     state = "kept" if path.exists() else "written"
-    target_text = path.read_text(encoding="utf-8") if path.exists() else template_text
+    target_text = read_managed_text(memory_dir, path, required=False) if path.exists() else template_text
     planned: dict[Path, str] = {} if path.exists() else {path: target_text}
     manifest_state = None
     if is_indexable_optional_path(relative_path):
         folder = relative_path.split("/", 1)[0]
         activation = "path-or-explicit" if folder == "areas" and path_globs else "explicit-only"
         updated_manifest, changed = manifest_with_optional_module_index(
-            manifest_path.read_text(encoding="utf-8"),
+            read_managed_text(memory_dir, manifest_path),
             relative_path,
             activation=activation,
             paths=path_globs,
@@ -95,7 +96,7 @@ def _build_mutations(
         )
     elif changed_state and changelog.exists():
         planned[changelog] = changelog_text(
-            changelog.read_text(encoding="utf-8"),
+            read_managed_text(memory_dir, changelog),
             f"Enabled optional memory module {relative_path}.",
         )
     return state, manifest_state, [

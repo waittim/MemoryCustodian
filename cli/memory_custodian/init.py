@@ -19,6 +19,7 @@ from .protocol import (
     managed_markdown_files,
     project_id_from_manifest,
     protocol_metadata,
+    read_managed_text,
     resolve_memory_dir,
     resolve_project_root,
     today,
@@ -170,7 +171,7 @@ def _replacement_state(
         )
         if name == "manifest.md":
             rendered, _indexed = _index_existing_optional(memory_dir, rendered)
-        existing = path.read_text(encoding="utf-8") if path.exists() else ""
+        existing = read_managed_text(memory_dir, path, required=False)
         if path.exists() and existing == rendered:
             result = "kept (already current)"
         else:
@@ -227,7 +228,7 @@ def _initialization_state(
             mutations.append(TextMutation(path, rendered))
         elif args.repair and name == "manifest.md":
             repaired, changed = _repair_manifest(
-                path.read_text(encoding="utf-8"),
+                read_managed_text(memory_dir, path),
                 project_id,
             )
             repaired, indexed = _index_existing_optional(memory_dir, repaired)
@@ -279,7 +280,7 @@ def run(args) -> int:
     existing_project_id = None
     existing_protocol_version = None
     if existing_manifest.exists():
-        existing_text = existing_manifest.read_text(encoding="utf-8")
+        existing_text = read_managed_text(memory_dir, existing_manifest)
         existing_metadata = (
             manifest_contract_metadata(existing_text)
             if args.replace_existing

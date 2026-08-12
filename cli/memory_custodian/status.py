@@ -15,6 +15,7 @@ from .protocol import (
     managed_markdown_files,
     manifest_contract_metadata,
     protocol_metadata,
+    read_managed_text,
     resolve_memory_dir,
     resolve_project_root,
 )
@@ -36,7 +37,7 @@ def run(args) -> int:
 
     exit_code = 0
     manifest_path = memory_dir / "manifest.md"
-    manifest = manifest_path.read_text(encoding="utf-8") if manifest_path.exists() else ""
+    manifest = read_managed_text(memory_dir, manifest_path, required=False)
     protocol_error: str | None = None
     try:
         metadata = manifest_contract_metadata(manifest, allow_missing_section=True)
@@ -68,7 +69,7 @@ def run(args) -> int:
             print(f"{name}: MISSING")
             exit_code = 1
             continue
-        text = path.read_text(encoding="utf-8")
+        text = read_managed_text(memory_dir, path)
         tokens = estimate_tokens(text)
         budget = budget_for(name)
         usage_state = budget_state(tokens, budget) if budget is not None else "OK"
@@ -110,7 +111,7 @@ def run(args) -> int:
         if not path.exists():
             print(f"{name}: not enabled")
             continue
-        text = path.read_text(encoding="utf-8")
+        text = read_managed_text(memory_dir, path)
         tokens = estimate_tokens(text)
         budget = budget_for(name)
         state = "OK" if budget is None else budget_state(tokens, budget)

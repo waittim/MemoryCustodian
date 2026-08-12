@@ -14,7 +14,10 @@ from .reconciliations import (
     reconciliation_pairs,
     validate_reconciliations,
 )
-from .subjects import Subject, normalize_alias, normalize_canonical_ref, parse_subjects
+from .subjects import (
+    Subject, normalize_alias, normalize_canonical_ref, parse_subject_registry,
+    subject_registry_issues,
+)
 
 
 @dataclass(frozen=True)
@@ -62,8 +65,16 @@ def _entries(project_root: Path, revision: str, files: tuple[str, ...]) -> tuple
     return tuple(result)
 
 
-def _subjects(project_root: Path, revision: str, registry: str) -> tuple[Subject, ...]:
-    return tuple(parse_subjects(Path(registry), _show(project_root, revision, registry)))
+def _subjects(
+    project_root: Path, revision: str, registry: str,
+) -> tuple[tuple[Subject, ...], tuple[str, ...]]:
+    text = _show(project_root, revision, registry)
+    if not text:
+        return (), (f"{registry}: missing managed Subject registry",)
+    subjects, parse_issues = parse_subject_registry(Path(registry), text)
+    return tuple(subjects), tuple(subject_registry_issues(
+        subjects, parse_issues, project_root,
+    ))
 
 
 def _reconciliations(
@@ -119,9 +130,9 @@ def merge_review(project_root: Path, memory_dir: Path, target_ref: str) -> Merge
         base_entry_units = _entries(project_root, base, all_files)
         head_entry_units = _entries(project_root, "HEAD", all_files)
         target_entry_units = _entries(project_root, target_ref, all_files)
-        base_subject_units = _subjects(project_root, base, registry)
-        head_subject_units = _subjects(project_root, "HEAD", registry)
-        target_subject_units = _subjects(project_root, target_ref, registry)
+        base_subject_units, _base_subject_issues = _subjects(project_root, base, registry)
+        head_subject_units, head_subject_issues = _subjects(project_root, "HEAD", registry)
+        target_subject_units, target_subject_issues = _subjects(project_root, target_ref, registry)
         base_records, _base_record_issues = _reconciliations(
             project_root, base, reconciliations, base_entry_units, base_subject_units,
         )
@@ -154,6 +165,9 @@ def merge_review(project_root: Path, memory_dir: Path, target_ref: str) -> Merge
     right_subjects = _changed(base_subjects, target_subjects)
     conflicts: list[str] = []
     reviews: list[str] = []
+    for side, issues in (("HEAD", head_subject_issues), (target_ref, target_subject_issues)):
+        for issue in issues:
+            conflicts.append(f"MC-MERGE-006 {side} has invalid Subject registry: {issue}")
     for side, issues in (("HEAD", head_record_issues), (target_ref, target_record_issues)):
         for issue in issues:
             identity = f" {issue.record_id}" if issue.record_id else ""

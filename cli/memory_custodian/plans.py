@@ -5,8 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
+import stat
 import uuid
 
 from .locking import (
@@ -24,7 +26,33 @@ def digest_text(text: str) -> str:
 
 
 def digest_path(path: Path) -> str:
-    return digest_text(path.read_text(encoding="utf-8")) if path.exists() else digest_text("")
+    return (
+        digest_text(_read_regular_text(path))
+        if path.exists() or path.is_symlink()
+        else digest_text("")
+    )
+
+
+def _read_regular_text(path: Path) -> str:
+    before = path.lstat()
+    if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode):
+        raise ValueError(f"Plan operand must be a regular non-symlink file: {path}")
+    try:
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except OSError as exc:
+        raise ValueError(f"Plan operand could not be opened safely: {path}") from exc
+    try:
+        opened = os.fstat(descriptor)
+        if not stat.S_ISREG(opened.st_mode) or (
+            before.st_dev, before.st_ino
+        ) != (opened.st_dev, opened.st_ino):
+            raise ValueError(f"Plan operand changed during safe open: {path}")
+        with os.fdopen(descriptor, "r", encoding="utf-8") as handle:
+            descriptor = -1
+            return handle.read()
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
 
 
 PENDING_PLAN_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
@@ -198,7 +226,11 @@ class MutationPlan:
             limit = budget_for(name)
             if limit is None:
                 continue
-            before_text = mutation.path.read_text(encoding="utf-8") if mutation.path.exists() else ""
+            before_text = (
+                _read_regular_text(mutation.path)
+                if mutation.path.exists() or mutation.path.is_symlink()
+                else ""
+            )
             before = estimate_tokens(before_text)
             after = estimate_tokens(mutation.text)
             results.append(
