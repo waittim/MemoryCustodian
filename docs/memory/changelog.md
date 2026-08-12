@@ -5,9 +5,9 @@ Entries are newest first.
 ## 2026-08-09
 - Closed v0.11 cross-module audit gaps in manifest topology, migration containment and formal-entry validation, local
   overlay identity/path/relation safety, cross-store ID allocation, promotion/supersession integrity, stale-root
-  recovery, source-preserving visible Markdown units and fields, canonical Entry/Subject/reconciliation parsing,
-  no-follow managed-file enumeration, migration-wide integrity checks, lossless archive merging, mixed
-  inbox/compaction/quality boundaries, precise forgetting, cycle detection, and AMBIGUOUS deferral.
+  recovery, source-preserving field bodies and exact-range writes, canonical H2/Subject/reconciliation grammar,
+  no-follow reads with separate inventory/storage authority, revision-wide registry checks, migration-wide integrity,
+  order-preserving archive merges, precise forgetting, cycle detection, and AMBIGUOUS deferral.
 - Unified manifest Markdown section walking, made route topology and Optional index uniqueness fail closed, hardened
   local reset against symlinks/binary state, and made migration operand validation seed-free on failure.
 
