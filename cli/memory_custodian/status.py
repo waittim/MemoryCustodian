@@ -12,6 +12,7 @@ from .protocol import (
     count_inbox_items,
     estimate_tokens,
     long_decision_entries,
+    managed_markdown_files,
     manifest_contract_metadata,
     protocol_metadata,
     resolve_memory_dir,
@@ -31,6 +32,7 @@ def run(args) -> int:
     if not memory_dir.exists():
         print("Status: MISSING")
         return 1
+    managed_paths = managed_markdown_files(memory_dir)
 
     exit_code = 0
     manifest_path = memory_dir / "manifest.md"
@@ -125,7 +127,11 @@ def run(args) -> int:
         if not directory.exists():
             print(f"{folder}/: not enabled")
             continue
-        files = sorted(path.name for path in directory.glob("*.md"))
+        files = sorted(
+            path.name
+            for path in managed_paths
+            if path.parent == directory
+        )
         if files:
             print(f"{folder}/: enabled, {len(files)} markdown file(s)")
         else:

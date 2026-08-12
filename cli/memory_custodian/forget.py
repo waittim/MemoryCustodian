@@ -131,26 +131,38 @@ def _remove_units(
     )
     blockers = tuple(
         unit for unit in document.units
-        if not exact_entry_id
-        and unit.kind in {"preamble", "body"}
-        and needle in unit.text.casefold()
+        if (
+            unit.kind == "ambiguous-bullet"
+            and (exact_entry_id is not None or needle in unit.text.casefold())
+        )
+        or (
+            not exact_entry_id
+            and unit.kind in {"preamble", "body"}
+            and needle in unit.text.casefold()
+        )
     )
     kept = [unit for unit in document.units if unit not in matches]
     if matches:
-        without_empty_dates: list[MarkdownUnit] = []
-        for index, unit in enumerate(kept):
-            is_empty_date = bool(
+        removed_dates: set[MarkdownUnit] = set()
+        for index, unit in enumerate(document.units):
+            if not (
                 unit.kind == "h2"
                 and unit.heading
                 and re.fullmatch(r"\d{4}-\d{2}-\d{2}", unit.heading)
                 and len(unit.text.splitlines()) == 1
-            )
-            if is_empty_date:
-                following = kept[index + 1] if index + 1 < len(kept) else None
-                if following is None or following.kind == "h2":
-                    continue
-            without_empty_dates.append(unit)
-        kept = without_empty_dates
+            ):
+                continue
+            owned: list[MarkdownUnit] = []
+            following = index + 1
+            while (
+                following < len(document.units)
+                and document.units[following].kind == "bullet"
+            ):
+                owned.append(document.units[following])
+                following += 1
+            if owned and all(item in matches for item in owned):
+                removed_dates.add(unit)
+        kept = [unit for unit in kept if unit not in removed_dates]
     return render_markdown_document(document, kept), matches, blockers
 
 

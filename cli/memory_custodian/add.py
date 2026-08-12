@@ -42,6 +42,7 @@ from .protocol import (
     is_safe_memory_name,
     manifest_with_optional_module_index,
     manifest_contract_metadata,
+    managed_markdown_files,
     prepended_text,
     resolve_memory_dir,
     resolve_project_root,
@@ -158,7 +159,7 @@ def _report_budget(path: Path, target: str) -> None:
 
 def _find_entry(memory_dir: Path, entry_id: str):
     matches = []
-    for path in memory_dir.rglob("*.md"):
+    for path in managed_markdown_files(memory_dir):
         if path.relative_to(memory_dir).as_posix().startswith("archive/"):
             continue
         matches.extend(
@@ -234,7 +235,7 @@ def _validate_subject_and_conflict(
         return subject.subject_id, normalized_facet
 
     owner = None
-    for path in sorted(memory_dir.rglob("*.md")):
+    for path in managed_markdown_files(memory_dir):
         relative = path.relative_to(memory_dir).as_posix()
         if relative.startswith("archive/") or relative in {"subjects.md", "inbox.md"}:
             continue
@@ -391,7 +392,7 @@ def _supersede_fingerprint(args, project_id: str, memory_dir: Path) -> str:
         args.facet or "",
         *args.evidence,
     ]
-    for path in sorted(memory_dir.rglob("*.md")):
+    for path in managed_markdown_files(memory_dir):
         if not path.relative_to(memory_dir).as_posix().startswith("archive/"):
             values.extend([str(path.relative_to(memory_dir)), digest_path(path)])
     return hashlib.sha256("\0".join(values).encode("utf-8")).hexdigest()[:24]

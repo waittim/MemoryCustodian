@@ -198,12 +198,13 @@ def semantic_unit_ranges(text: str, *, start: int = 0) -> tuple[MarkdownUnitRang
         if line.startswith(("- ", "* ", "+ ")):
             if current_kind == "h2" and formal_entry and formal_field_follows(index):
                 continue
-            starts.append((index, "bullet", None))
-            current_kind = "bullet"
+            kind = "ambiguous-bullet" if current_kind == "h2" and formal_entry else "bullet"
+            starts.append((index, kind, None))
+            current_kind = kind
             formal_entry = False
             list_field = False
             continue
-        if current_kind == "bullet" and line and not line[0].isspace():
+        if current_kind in {"bullet", "ambiguous-bullet"} and line and not line[0].isspace():
             starts.append((index, "body", None))
             current_kind = "body"
 

@@ -5,10 +5,12 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 import re
+import stat
 
 from .entries import (
     ENTRY_ID_RE,
     VALID_SCOPES_RE,
+    entry_unit_issues,
     heading_entry_ids,
     line_safe_markdown_body,
     memory_entry_ids,
@@ -18,6 +20,7 @@ from .entries import (
     validate_evidence,
 )
 from .locking import project_mutation_guard
+from .markdown import visible_lines
 from .mutations import TextMutation, apply_mutations
 from .plans import (
     MutationPlan,
@@ -37,6 +40,7 @@ from .protocol import (
     manifest_contract_metadata,
     manifest_with_optional_index,
     manifest_with_protocol_07_optional_routes,
+    managed_markdown_files,
     MarkdownUnit,
     parse_markdown_units,
     protocol_metadata,
@@ -85,7 +89,8 @@ def _migrate_decisions(
         if ENTRY_ID_RE.search(section.splitlines()[0]):
             updated.append(unit)
             continue
-        if "Decision:" not in section:
+        visible = {line.index: line.text for line in visible_lines(section)}
+        if not any(line.strip() == "Decision:" for line in visible.values()):
             manual += 1
             updated.append(unit)
             continue
@@ -96,12 +101,12 @@ def _migrate_decisions(
             continue
         lines = section.splitlines()
         title = re.sub(r"^##\s+(?:\d{4}-\d{2}-\d{2}\s+-\s+)?", "", lines[0]).strip()
-        safe_body = [
-            line
-            if line in {"Decision:", "Reason:"}
-            else line_safe_markdown_body(line)
-            for line in lines[1:]
-        ]
+        safe_body = []
+        for line_index, line in enumerate(lines[1:], start=1):
+            if line_index not in visible or line in {"Decision:", "Reason:"}:
+                safe_body.append(line)
+            else:
+                safe_body.append(line_safe_markdown_body(line))
         migrated = "\n".join(
             [
                 f"## {entry_id} — {title}",
@@ -153,7 +158,13 @@ def _migration_entry_seed(
             if unit.kind != "h2":
                 continue
             section = unit.text
-            if not ENTRY_ID_RE.search(section.splitlines()[0]) and "Decision:" in section:
+            if (
+                not ENTRY_ID_RE.search(section.splitlines()[0])
+                and any(
+                    line.text.strip() == "Decision:"
+                    for line in visible_lines(section)
+                )
+            ):
                 keys.append(_legacy_key(relative, section, index))
     source_sha = digest_text("\0".join(fingerprint_parts))
     return pending_entry_suffixes("migrate-entries", project_root, source_sha, keys)
@@ -187,7 +198,12 @@ def _migration_sources(memory_dir: Path, manifest: str) -> dict[str, str]:
             raise ValueError(
                 f"Migration operand escapes the managed memory directory: {relative}"
             ) from exc
-        if path.exists():
+        if path.exists() or path.is_symlink():
+            metadata = path.lstat()
+            if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+                raise ValueError(
+                    f"Migration operand must be a regular non-symlink file: {relative}"
+                )
             sources[relative] = path.read_text(encoding="utf-8")
     return sources
 
@@ -197,9 +213,10 @@ def _validate_existing_formal_entries(project_root: Path, memory_dir: Path) -> N
 
     issues: list[str] = []
     id_counts: dict[str, int] = {}
-    for path in sorted(memory_dir.rglob("*.md")):
+    for path in managed_markdown_files(memory_dir):
         relative = path.relative_to(memory_dir).as_posix()
         text = path.read_text(encoding="utf-8")
+        issues.extend(entry_unit_issues(text, relative))
         for entry_id in heading_entry_ids(text):
             key = entry_id.casefold()
             id_counts[key] = id_counts.get(key, 0) + 1
@@ -287,9 +304,29 @@ def _build_plan(project_root: Path, memory_dir: Path) -> tuple[MutationPlan, lis
             f"Invalid project_id {project_id!r}; review manifest.md manually."
         )
     provisional_project_id = project_id or "00000000-0000-4000-8000-000000000000"
-    _upgraded_manifest(original, provisional_project_id)
+    preflight_manifest, *_preflight_changes = _upgraded_manifest(
+        original,
+        provisional_project_id,
+    )
     sources = _migration_sources(memory_dir, original)
     _validate_existing_formal_entries(project_root, memory_dir)
+    from .check import cross_unit_integrity_findings
+
+    cross_issues, _cross_warnings = cross_unit_integrity_findings(
+        project_root,
+        memory_dir,
+        preflight_manifest,
+        project_id=project_id,
+        allow_missing_subjects=True,
+    )
+    if cross_issues:
+        preview = "; ".join(cross_issues[:5])
+        suffix = f"; and {len(cross_issues) - 5} more" if len(cross_issues) > 5 else ""
+        raise ValueError(
+            "Migration candidate fails shared project integrity validation: "
+            + preview
+            + suffix
+        )
     changelog_path = memory_dir / "changelog.md"
     changelog_original = (
         changelog_path.read_text(encoding="utf-8")

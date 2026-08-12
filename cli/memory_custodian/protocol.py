@@ -644,22 +644,52 @@ def existing_memory_files(memory_dir: Path) -> list[Path]:
     return [memory_dir / name for name in ALL_TEMPLATE_FILES if (memory_dir / name).exists()]
 
 
+def managed_markdown_files(memory_dir: Path) -> tuple[Path, ...]:
+    """Enumerate contained regular Markdown files without following symlinks."""
+
+    if not memory_dir.exists():
+        return ()
+    root = memory_dir.resolve()
+    found: list[Path] = []
+    pending = [memory_dir]
+    while pending:
+        directory = pending.pop()
+        with os.scandir(directory) as scanned:
+            entries = sorted(scanned, key=lambda item: item.name)
+        for entry in entries:
+            path = Path(entry.path)
+            if entry.is_symlink():
+                raise ValueError(
+                    f"Managed memory path must not be a symlink: "
+                    f"{path.relative_to(memory_dir).as_posix()}"
+                )
+            if entry.is_dir(follow_symlinks=False):
+                try:
+                    path.resolve().relative_to(root)
+                except (OSError, RuntimeError, ValueError) as exc:
+                    raise ValueError(
+                        f"Managed memory directory escapes its root: {path}"
+                    ) from exc
+                pending.append(path)
+                continue
+            if not entry.is_file(follow_symlinks=False):
+                raise ValueError(
+                    f"Managed memory path must be a regular file: "
+                    f"{path.relative_to(memory_dir).as_posix()}"
+                )
+            if path.suffix.casefold() == ".md":
+                found.append(path)
+    return tuple(sorted(found, key=lambda path: path.relative_to(memory_dir).as_posix()))
+
+
 def iter_markdown_files(memory_dir: Path, include_archive: bool = False) -> Iterable[Path]:
-    for name in ALL_TEMPLATE_FILES:
-        if name.startswith("archive/") and not include_archive:
+    for path in managed_markdown_files(memory_dir):
+        relative = path.relative_to(memory_dir).as_posix()
+        if relative.startswith("archive/") and not include_archive:
             continue
-        path = memory_dir / name
-        if path.exists():
-            yield path
-    for folder in ("rules", "profiles", "areas"):
-        directory = memory_dir / folder
-        if directory.exists():
-            for path in sorted(directory.glob("*.md")):
-                if path.name != "README.md":
-                    yield path
-    archive = memory_dir / "archive"
-    if include_archive and archive.exists():
-        yield from sorted(archive.rglob("*.md"))
+        if relative in {"rules/README.md", "profiles/README.md", "archive/README.md"}:
+            continue
+        yield path
 
 
 def split_top_level_bullet_units(text: str) -> list[tuple[str, str]]:

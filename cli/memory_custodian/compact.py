@@ -166,7 +166,7 @@ def _dedupe_mutations(memory_dir: Path, target: str, path: Path) -> list[TextMut
 def _planned_archive_mutations(memory_dir: Path, target: str, budget: int) -> list[TextMutation]:
     path = memory_dir.joinpath(*PurePosixPath(target).parts)
     original = path.read_text(encoding="utf-8")
-    plan = _plan_h2_archive(original, budget)
+    plan = _plan_h2_archive(original, budget, target)
     if plan is None:
         return []
     mutations = _archive_mutations(memory_dir, target, plan["archived"])
@@ -314,22 +314,9 @@ def _dedupe_bullets(text: str) -> tuple[str, int]:
     return _render_chunks(kept), removed
 
 
-def _split_h2_sections(text: str) -> tuple[list[str], list[list[str]]]:
-    lines = text.rstrip().splitlines()
-    ranges = semantic_unit_ranges(
-        "\n".join(lines),
-        start=1 if lines and lines[0].startswith("# ") else 0,
-    )
-    h2_ranges = _archivable_h2_ranges(ranges)
-    if not h2_ranges:
-        return lines, []
-    preamble = lines[:h2_ranges[0].start]
-    sections = [lines[unit_range.start:unit_range.end] for unit_range in h2_ranges]
-    return preamble, sections
-
-
 def _archivable_h2_ranges(
     ranges: tuple[MarkdownUnitRange, ...],
+    target: str,
 ) -> list[MarkdownUnitRange]:
     """Attach changelog bullets to date H2s without swallowing legacy units elsewhere."""
 
@@ -338,7 +325,11 @@ def _archivable_h2_ranges(
         if unit_range.kind != "h2":
             continue
         end = unit_range.end
-        if unit_range.heading and re.fullmatch(r"\d{4}-\d{2}-\d{2}", unit_range.heading):
+        if (
+            target == "changelog.md"
+            and unit_range.heading
+            and re.fullmatch(r"\d{4}-\d{2}-\d{2}", unit_range.heading)
+        ):
             following = position + 1
             while following < len(ranges) and ranges[following].kind == "bullet":
                 end = ranges[following].end
@@ -363,13 +354,13 @@ def _join_h2_sections(preamble: list[str], sections: list[list[str]]) -> str:
     return "\n\n".join(part for part in parts if part).rstrip() + "\n"
 
 
-def _plan_h2_archive(text: str, budget: int):
+def _plan_h2_archive(text: str, budget: int, target: str = "decisions.md"):
     lines = text.rstrip().splitlines()
     ranges = semantic_unit_ranges(
         "\n".join(lines),
         start=1 if lines and lines[0].startswith("# ") else 0,
     )
-    h2_ranges = _archivable_h2_ranges(ranges)
+    h2_ranges = _archivable_h2_ranges(ranges, target)
     if len(h2_ranges) < 2:
         return None
 
@@ -440,7 +431,25 @@ def _render_archive_document(
     existing: str,
     archived_sections: list[list[str]],
 ) -> str:
-    _preamble, existing_sections = _split_h2_sections(existing)
+    standard_preamble = _archive_preamble(target)
+    existing_body = existing
+    if existing_body.startswith(standard_preamble):
+        existing_body = existing_body[len(standard_preamble):].lstrip("\n")
+    else:
+        existing_lines_with_header = existing_body.splitlines()
+        if (
+            existing_lines_with_header
+            and existing_lines_with_header[0].strip()
+            == f"# Archived Memory: {target}"
+        ):
+            existing_body = "\n".join(existing_lines_with_header[1:]).lstrip("\n")
+    existing_ranges = semantic_unit_ranges(existing_body)
+    grouped_ranges = _archivable_h2_ranges(existing_ranges, target)
+    existing_lines = existing_body.rstrip().splitlines()
+    existing_sections = [
+        existing_lines[unit_range.start:unit_range.end]
+        for unit_range in grouped_ranges
+    ]
     retained = [
         section
         for section in existing_sections
@@ -449,13 +458,30 @@ def _render_archive_document(
     sections = [*archived_sections, *retained]
     if target == "changelog.md":
         sections = _merge_changelog_sections(sections)
-    preamble = [
+    covered = {
+        index
+        for unit_range in grouped_ranges
+        for index in range(unit_range.start, unit_range.end)
+    }
+    preserved = "\n".join(
+        line
+        for index, line in enumerate(existing_lines)
+        if index not in covered
+    ).strip()
+    rendered = _join_h2_sections(_archive_preamble(target).rstrip().splitlines(), sections)
+    if preserved:
+        rendered = rendered.rstrip() + "\n\n" + preserved + "\n"
+    return rendered
+
+
+def _archive_preamble(target: str) -> str:
+    lines = [
         f"# Archived Memory: {target}",
         "",
         "Complete historical entries moved from active memory after reviewed compaction.",
         "This file is explicit-only and is not part of normal task context.",
     ]
-    return _join_h2_sections(preamble, sections)
+    return "\n".join(lines).rstrip() + "\n"
 
 
 def _archive_mutations(memory_dir: Path, target: str, archived_sections: list[list[str]]) -> list[TextMutation]:
@@ -546,7 +572,7 @@ def _run_target_compaction(args, project_root: Path, memory_dir: Path) -> int:
         return 0
 
     if target in ARCHIVABLE_H2_TARGETS:
-        plan = _plan_h2_archive(working, budget)
+        plan = _plan_h2_archive(working, budget, target)
         if plan is not None:
             archive_path = _archive_target_path(memory_dir, target).relative_to(memory_dir).as_posix()
             print("Action: archive oldest complete H2 entries")

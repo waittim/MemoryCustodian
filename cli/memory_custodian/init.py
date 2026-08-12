@@ -16,6 +16,7 @@ from .protocol import (
     manifest_with_current_task_routing,
     manifest_with_optional_index,
     manifest_with_optional_module_index,
+    managed_markdown_files,
     project_id_from_manifest,
     protocol_metadata,
     resolve_memory_dir,
@@ -117,11 +118,10 @@ def _repair_manifest(text: str, project_id: str) -> tuple[str, bool]:
 def _index_existing_optional(memory_dir: Path, manifest: str) -> tuple[str, bool]:
     updated = manifest
     changed = False
+    managed_paths = managed_markdown_files(memory_dir)
     for folder in ("rules", "profiles", "areas"):
         directory = memory_dir / folder
-        if not directory.exists():
-            continue
-        for path in sorted(directory.glob("*.md")):
+        for path in (path for path in managed_paths if path.parent == directory):
             relative = path.relative_to(memory_dir).as_posix()
             if not is_indexable_optional_path(relative):
                 continue

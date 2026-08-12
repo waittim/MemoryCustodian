@@ -15,6 +15,7 @@ from .protocol import (
     estimate_tokens,
     long_decision_entries,
     manifest_contract_metadata,
+    managed_markdown_files,
     optional_index_paths,
     parse_markdown_units,
     parse_manifest_task_file_specs,
@@ -29,6 +30,7 @@ from .entries import (
     CANDIDATE_ONLY_EVIDENCE,
     INTERNAL_EVIDENCE,
     VALID_SCOPES_RE,
+    entry_unit_issues,
     heading_entry_ids,
     memory_entry_ids,
     parse_structured_entries,
@@ -40,7 +42,12 @@ from .entries import (
 from .scanning import scan_text
 from .subjects import FACETS, load_subjects, subject_indexes, validate_subject_registry
 from .templates import CORE_FILES, brief_needs_curation
-from .conflicts import ConflictStatus, analyze_conflicts, render_conflict_result
+from .conflicts import (
+    ConflictStatus,
+    analyze_conflicts,
+    canonical_entries,
+    render_conflict_result,
+)
 from .quality import (
     QualityFinding,
     freshness_findings,
@@ -132,6 +139,72 @@ def _specialized_protocol_finding(memory_dir: Path) -> QualityFinding | None:
     return None
 
 
+def cross_unit_integrity_findings(
+    project_root: Path,
+    memory_dir: Path,
+    manifest: str,
+    *,
+    project_id: str | None = None,
+    allow_missing_subjects: bool = False,
+) -> tuple[list[str], list[str]]:
+    """Validate repository-wide relationships shared by check and migration."""
+
+    issues = validate_subject_registry(memory_dir, project_root)
+    if allow_missing_subjects and not (memory_dir / "subjects.md").exists():
+        issues = [
+            issue
+            for issue in issues
+            if issue != "subjects.md: missing managed Subject registry"
+        ]
+    warnings: list[str] = []
+    entries = canonical_entries(memory_dir, include_archive=True)
+    issues.extend(structured_relation_issues(list(entries)))
+    # Pre-0.7 migrations may legitimately contain active entries without the
+    # Subject/Facet owner metadata introduced by 0.7. The migration path still
+    # validates the registry itself and the complete relation graph above; its
+    # renderer is responsible for preserving those entries as legacy units.
+    if not allow_missing_subjects:
+        conflict_result = analyze_conflicts(memory_dir)
+        for finding in conflict_result.findings:
+            message = f"{finding.code}: {finding.message}"
+            if finding.status in {ConflictStatus.INVALID, ConflictStatus.CONFLICT}:
+                issues.append(message)
+            elif finding.status == ConflictStatus.REVIEW:
+                warnings.append(message)
+
+    indexed_optional_paths = optional_index_paths(manifest)
+    managed_paths = managed_markdown_files(memory_dir)
+    for folder in ("rules", "profiles", "areas"):
+        directory = memory_dir / folder
+        folder_paths = [
+            path
+            for path in managed_paths
+            if path.relative_to(memory_dir).as_posix().startswith(folder + "/")
+            and path.name != "README.md"
+        ]
+        if directory.exists() and folder + "/" not in manifest:
+            issues.append(
+                f"manifest.md: {folder}/ exists but manifest does not describe when to load it"
+            )
+        for path in folder_paths:
+            relative = path.relative_to(memory_dir).as_posix()
+            if relative not in indexed_optional_paths:
+                issues.append(
+                    f"manifest.md: {relative} exists but is missing from optional module index"
+                )
+
+    if project_id:
+        overlay = inspect_overlay(
+            project_root,
+            project_id,
+            shared_ids=memory_entry_ids(memory_dir),
+        )
+        if overlay.status == LocalStatus.REVIEW:
+            target = issues if overlay.corrupt else warnings
+            target.extend(f"local overlay: {warning}" for warning in overlay.warnings)
+    return issues, warnings
+
+
 def run(args) -> int:
     project_root = resolve_project_root(args.project_root)
     memory_dir = resolve_memory_dir(project_root, args.memory_dir)
@@ -165,7 +238,6 @@ def run(args) -> int:
     issues: list[str] = []
     warnings: list[str] = []
     detailed_findings = []
-    structured_by_id: dict[str, list] = {}
     active_identities: dict[tuple[str, str, str], tuple[str, str]] = {}
 
     for name in CORE_FILES:
@@ -176,8 +248,6 @@ def run(args) -> int:
     manifest = _read(manifest_path)
     if manifest_path.exists():
         issues.extend(_check_protocol_metadata(manifest))
-        if protocol_metadata(manifest).get("subject_schema_version") == "1":
-            issues.extend(validate_subject_registry(memory_dir, project_root))
     if manifest:
         issues.extend(_manifest_mentions_required_policy(manifest))
         issues.extend(f"manifest.md: {issue}" for issue in validate_manifest_routes(manifest))
@@ -206,13 +276,13 @@ def run(args) -> int:
     if brief and brief_needs_curation(brief):
         issues.append("brief.md: generated scaffold still needs real project purpose, direction, and system context")
 
-    for path in sorted(memory_dir.rglob("*.md")):
+    for path in managed_markdown_files(memory_dir):
         relative = path.relative_to(memory_dir).as_posix()
         text = _read(path)
+        issues.extend(entry_unit_issues(text, relative))
         detailed_findings.extend(scan_text(path, text))
         parsed_entries = parse_structured_entries(path, text)
         for entry in parsed_entries:
-            structured_by_id.setdefault(entry.entry_id.casefold(), []).append(entry)
             issues.extend(structured_entry_schema_issues(entry, relative))
             issues.extend(structured_entry_storage_issues(entry, relative))
         if relative.startswith("archive/"):
@@ -365,9 +435,6 @@ def run(args) -> int:
         else None
     )
     local_paths: set[Path] = set()
-    if overlay is not None and overlay.status == LocalStatus.REVIEW:
-        target = issues if overlay.corrupt else warnings
-        target.extend(f"local overlay: {warning}" for warning in overlay.warnings)
     if (
         overlay is not None
         and overlay.directory is not None
@@ -390,36 +457,25 @@ def run(args) -> int:
         if inbox_items > 30:
             warnings.append(f"inbox.md: {inbox_items} items, compaction recommended")
 
-    indexed_optional_paths = optional_index_paths(manifest)
-    for folder in ("rules", "profiles", "areas"):
-        directory = memory_dir / folder
-        if not directory.exists():
-            continue
-        if folder + "/" not in manifest:
-            issues.append(f"manifest.md: {folder}/ exists but manifest does not describe when to load it")
-        for path in sorted(directory.glob("*.md")):
-            if path.name == "README.md":
-                continue
-            relative = path.relative_to(memory_dir).as_posix()
-            if relative not in indexed_optional_paths:
-                issues.append(f"manifest.md: {relative} exists but is missing from optional module index")
+    cross_issues, cross_warnings = cross_unit_integrity_findings(
+        project_root,
+        memory_dir,
+        manifest,
+        project_id=overlay_project_id,
+    )
+    issues.extend(cross_issues)
+    warnings.extend(cross_warnings)
 
     for entry_name in ("AGENTS.md", "CLAUDE.md", "GEMINI.md"):
         warnings.extend(_check_agent_entry(project_root / entry_name))
 
     all_ids: dict[str, list[str]] = {}
-    for path in sorted(memory_dir.rglob("*.md")):
+    for path in managed_markdown_files(memory_dir):
         for value in heading_entry_ids(_read(path)):
             all_ids.setdefault(value.casefold(), []).append(path.relative_to(memory_dir).as_posix())
     for value, paths in all_ids.items():
         if len(paths) > 1:
             issues.append(f"duplicate Entry ID {value.upper()} in: {', '.join(paths)}")
-
-    issues.extend(structured_relation_issues([
-        entry
-        for matches in structured_by_id.values()
-        for entry in matches
-    ]))
 
     security = [item for item in detailed_findings if item.category == "security"]
     privacy = [item for item in detailed_findings if item.category == "privacy"]

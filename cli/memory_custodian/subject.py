@@ -29,6 +29,7 @@ from .protocol import (
     CURRENT_PROTOCOL_VERSION,
     compare_versions,
     manifest_contract_metadata,
+    managed_markdown_files,
     prepended_text,
     resolve_memory_dir,
     resolve_project_root,
@@ -224,7 +225,7 @@ def _show(args) -> int:
         print(f"- {item}")
     print("Referenced by:")
     references = []
-    for path in memory_dir.rglob("*.md"):
+    for path in managed_markdown_files(memory_dir):
         if path.name == "subjects.md":
             continue
         for entry in parse_structured_entries(path, path.read_text(encoding="utf-8")):

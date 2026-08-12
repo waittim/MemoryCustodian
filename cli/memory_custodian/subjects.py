@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path, PurePosixPath
 import re
@@ -10,9 +10,14 @@ import unicodedata
 import uuid
 
 from .entries import validate_evidence
+from .markdown import visible_lines
+from .protocol import parse_markdown_units
 
 
 SUBJECT_ID_RE = re.compile(r"\bMC-SUBJ-(\d{8})-([0-9a-f]{8})\b", re.I)
+SUBJECT_HEADING_RE = re.compile(
+    r"^## (MC-SUBJ-\d{8}-[0-9a-f]{8}) — (\S(?:.*\S)?)$", re.I
+)
 SUBJECT_KINDS = {
     "dependency",
     "repo-path",
@@ -68,6 +73,7 @@ class Subject:
     path: Path
     merged_into: str | None = None
     merged_from: tuple[str, ...] = ()
+    field_counts: dict[str, int] = field(default_factory=dict)
 
 
 def normalize_alias(value: str) -> str:
@@ -148,20 +154,29 @@ def generate_subject_id(existing_ids: set[str] | None = None, *, day: date | Non
 
 
 def parse_subjects(path: Path, text: str) -> list[Subject]:
-    matches = list(re.finditer(r"(?m)^## (MC-SUBJ-\d{8}-[0-9a-f]{8})\s+—\s+(.+)$", text, re.I))
     subjects: list[Subject] = []
-    for index, match in enumerate(matches):
-        section = text[match.start() : matches[index + 1].start() if index + 1 < len(matches) else len(text)].strip()
+    for unit in parse_markdown_units(text).units:
+        if unit.kind != "h2":
+            continue
+        section = unit.text
+        heading = SUBJECT_HEADING_RE.fullmatch(section.splitlines()[0])
+        if heading is None:
+            continue
         fields: dict[str, str] = {}
+        field_counts: dict[str, int] = {}
         aliases: list[str] = []
         evidence: list[str] = []
         merged_from: list[str] = []
         list_field: str | None = None
-        for line in section.splitlines()[1:]:
+        for visible in visible_lines(section):
+            if visible.index == 0:
+                continue
+            line = visible.text
             field = _FIELD_RE.match(line)
             if field:
                 key, field_value = field.group(1), (field.group(2) or "").strip()
                 fields[key] = field_value
+                field_counts[key] = field_counts.get(key, 0) + 1
                 list_field = key if key in {"Aliases", "Evidence", "Merged-From"} else None
                 continue
             if line.startswith("- ") and list_field == "Aliases":
@@ -174,8 +189,8 @@ def parse_subjects(path: Path, text: str) -> list[Subject]:
                 list_field = None
         subjects.append(
             Subject(
-                match.group(1),
-                match.group(2).strip(),
+                heading.group(1),
+                heading.group(2),
                 fields.get("Status", ""),
                 fields.get("Kind", ""),
                 fields.get("Canonical-Ref") or None,
@@ -185,6 +200,7 @@ def parse_subjects(path: Path, text: str) -> list[Subject]:
                 path,
                 fields.get("Merged-Into") or None,
                 tuple(merged_from),
+                field_counts,
             )
         )
     return subjects
@@ -264,6 +280,18 @@ def validate_subject_registry(memory_dir: Path, project_root: Path) -> list[str]
         if key in ids:
             issues.append(f"subjects.md: duplicate Subject ID {subject.subject_id}")
         ids[key] = subject.subject_id
+        for name, count in sorted(subject.field_counts.items()):
+            if count > 1:
+                issues.append(
+                    f"subjects.md: {subject.subject_id} has duplicate {name} fields"
+                )
+        for name in ("Status", "Kind", "Evidence", "Aliases"):
+            count = subject.field_counts.get(name, 0)
+            if count != 1:
+                issues.append(
+                    f"subjects.md: {subject.subject_id} must declare exactly one {name} field "
+                    f"(found {count})"
+                )
         if subject.status not in {"active", "merged"}:
             issues.append(f"subjects.md: {subject.subject_id} has invalid Status {subject.status!r}")
         if subject.status == "merged" and not subject.merged_into:

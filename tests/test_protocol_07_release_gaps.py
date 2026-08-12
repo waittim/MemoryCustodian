@@ -20,12 +20,17 @@ from memory_custodian.conflicts import analyze_conflicts
 from memory_custodian.context import ContextRoutingResult
 from memory_custodian.entries import (
     heading_entry_ids,
+    memory_entry_ids,
     parse_structured_entries,
     render_active_entry,
     render_candidate_entry,
     structured_entry_schema_issues,
 )
-from memory_custodian.compact import _clean_inbox, _plan_h2_archive
+from memory_custodian.compact import (
+    _clean_inbox,
+    _plan_h2_archive,
+    _render_archive_document,
+)
 from memory_custodian.forget import _remove_units
 from memory_custodian.main import main
 from memory_custodian.migrate import (
@@ -42,6 +47,7 @@ from memory_custodian.protocol import (
     today,
 )
 from memory_custodian.routes import RouteReason, RoutingCompleteness
+from memory_custodian.subjects import parse_subjects, validate_subject_registry
 
 
 def capture(argv: list[str]) -> tuple[int, str, str]:
@@ -2706,7 +2712,7 @@ class RoutingAndQualityReleaseTests(unittest.TestCase):
 
 
 class ForgetAndHistoryReleaseTests(unittest.TestCase):
-    def test_mixed_h2_and_bullet_forget_preserves_unmatched_entry(self):
+    def test_ambiguous_tail_bullet_blocks_forget(self):
         with tempfile.TemporaryDirectory() as tmp:
             with redirect_stdout(StringIO()):
                 self.assertEqual(main(["init", "--project-root", tmp]), 0)
@@ -2722,7 +2728,10 @@ class ForgetAndHistoryReleaseTests(unittest.TestCase):
                 encoding="utf-8",
             )
             document = parse_markdown_units(constraints.read_text(encoding="utf-8"))
-            self.assertEqual([unit.kind for unit in document.units], ["h2", "bullet"])
+            self.assertEqual(
+                [unit.kind for unit in document.units],
+                ["h2", "ambiguous-bullet"],
+            )
             self.assertIn("- user-confirmed", document.units[0].text)
             structured = parse_structured_entries(
                 constraints, constraints.read_text(encoding="utf-8"),
@@ -2736,14 +2745,10 @@ class ForgetAndHistoryReleaseTests(unittest.TestCase):
             ]
             code, preview, error = capture(command)
             self.assertEqual(code, 0, preview + error)
-            plan_id = re.search(r"Plan ID: ([0-9a-f]{16})", preview).group(1)
-            code, output, error = capture([
-                *command, "--apply", "--confirm-plan", plan_id,
-            ])
-            self.assertEqual(code, 0, output + error)
+            self.assertIn("ambiguous-bullet contains non-removable", preview)
             final = constraints.read_text(encoding="utf-8")
             self.assertIn(unrelated_id, final)
-            self.assertNotIn("MixedLegacyTarget", final)
+            self.assertIn("MixedLegacyTarget", final)
 
     def test_new_guard_precedes_existing_legacy_bullet(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -3801,6 +3806,192 @@ class MergeAndDeterminismReleaseTests(unittest.TestCase):
 
 
 class MarkdownUnitBoundaryAuditTests(unittest.TestCase):
+    def test_entry_fields_ignore_fences_and_comments(self):
+        entry_id = "MC-PREF-20200101-aaaaaaaa"
+        text = (
+            f"# Preferences\n\n## {entry_id} — Hidden fields\n\n"
+            "```markdown\nStatus: active\nScope: project\nEvidence:\n"
+            "- user-confirmed\nPreference:\nHidden.\n```\n\n"
+            "<!--\nStatus: active\n-->\n"
+        )
+        parsed = parse_structured_entries(Path("preferences.md"), text)
+        self.assertEqual(len(parsed), 1)
+        self.assertEqual(parsed[0].fields, {})
+        issues = structured_entry_schema_issues(parsed[0], "preferences.md")
+        self.assertTrue(any("Status" in issue for issue in issues))
+        self.assertTrue(any("Preference" in issue for issue in issues))
+
+        legacy = (
+            "# Decisions\n\n## 2020-01-01 - Example\n\n"
+            "```markdown\nDecision:\nExample only.\n```\n"
+        )
+        migrated, changed, manual, generated = _migrate_decisions(legacy, {})
+        self.assertEqual(migrated, legacy)
+        self.assertEqual((changed, manual, generated), (0, 1, ()))
+
+    def test_subjects_ignore_comments_and_reject_duplicate_scalars(self):
+        commented_id = "MC-SUBJ-20200101-aaaaaaaa"
+        commented = (
+            "# Subject Registry\n\n<!--\n"
+            + subject_unit(commented_id, "Commented")
+            + "-->\n"
+        )
+        self.assertEqual(parse_subjects(Path("subjects.md"), commented), [])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            memory = Path(tmp) / "docs/memory"
+            subject_id = "MC-SUBJ-20200101-bbbbbbbb"
+            duplicate = subject_unit(subject_id, "Duplicate").replace(
+                "Status: active", "Status: active\nStatus: active"
+            ).replace("Kind: concept", "Kind: concept\nKind: concept")
+            (memory / "subjects.md").write_text(
+                "# Subject Registry\n\n" + duplicate,
+                encoding="utf-8",
+            )
+            issues = validate_subject_registry(memory, Path(tmp))
+            self.assertTrue(any("duplicate Status" in issue for issue in issues))
+            self.assertTrue(any("duplicate Kind" in issue for issue in issues))
+
+    def test_date_h2_bullet_grouping_is_changelog_only(self):
+        text = (
+            "# Decisions\n\n## 2026-08-12\nDecision:\n" + "new " * 80 +
+            "\n\n## 2026-08-11\nDecision:\n" + "old " * 80 +
+            "\n\n- Independent decision invariant.\n"
+        )
+        budget = estimate_tokens(text) // 2 + 10
+        plan = _plan_h2_archive(text, budget, "decisions.md")
+        self.assertIsNotNone(plan)
+        self.assertIn("Independent decision invariant", plan["compacted"])
+        self.assertNotIn(
+            "Independent decision invariant",
+            "\n".join(plan["archived"][0]),
+        )
+
+    def test_archive_merge_preserves_non_h2_units(self):
+        existing = (
+            "# Archived Memory: decisions.md\n\n"
+            "Complete historical entries moved from active memory after reviewed compaction.\n"
+            "This file is explicit-only and is not part of normal task context.\n\n"
+            "- PreserveArchiveLegacy.\n\n<!-- preserve-comment -->\n\n"
+            "## MC-DEC-20200101-aaaaaaaa — Existing\n\nDecision:\nOld.\n"
+        )
+        rendered = _render_archive_document(
+            "decisions.md",
+            existing,
+            [["## MC-DEC-20200102-bbbbbbbb — New", "", "Decision:", "New."]],
+        )
+        self.assertIn("PreserveArchiveLegacy", rendered)
+        self.assertIn("preserve-comment", rendered)
+        self.assertIn("MC-DEC-20200101-aaaaaaaa", rendered)
+
+    def test_migration_reuses_cross_unit_project_integrity(self):
+        cases = ("relation", "subjects", "optional")
+        for case in cases:
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as tmp:
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["init", "--project-root", tmp]), 0)
+                memory = Path(tmp) / "docs/memory"
+                manifest = memory / "manifest.md"
+                manifest.write_text(
+                    manifest.read_text(encoding="utf-8").replace(
+                        "protocol_version: 0.7", "protocol_version: 0.6", 1
+                    ),
+                    encoding="utf-8",
+                )
+                if case == "relation":
+                    entry = render_active_entry(
+                        "decision", "MC-DEC-20200101-aaaaaaaa", "Broken relation",
+                        "Body.", None, "project", ("user-confirmed",),
+                    ).replace(
+                        "Evidence:\n",
+                        "Supersedes: MC-DEC-20200101-bbbbbbbb\nEvidence:\n",
+                    )
+                    (memory / "decisions.md").write_text(
+                        "# Decisions\n\n" + entry + "\n", encoding="utf-8"
+                    )
+                elif case == "subjects":
+                    duplicate = subject_unit(
+                        "MC-SUBJ-20200101-aaaaaaaa", "Duplicate subject"
+                    )
+                    (memory / "subjects.md").write_text(
+                        "# Subject Registry\n\n" + duplicate + "\n" + duplicate,
+                        encoding="utf-8",
+                    )
+                else:
+                    (memory / "areas").mkdir()
+                    (memory / "areas/orphan.md").write_text(
+                        "# Orphan\n\n- Unindexed.\n", encoding="utf-8"
+                    )
+                code, output, error = capture(["migrate", "--project-root", tmp])
+                self.assertNotEqual(code, 0, output + error)
+                self.assertIn("shared project integrity", error)
+
+    def test_managed_scans_reject_external_file_symlinks(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as outside:
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            memory = Path(tmp) / "docs/memory"
+            (memory / "areas").mkdir()
+            external = Path(outside) / "secret.md"
+            external.write_text(
+                "## MC-DEC-20200101-aaaaaaaa — External\n\nStatus: active\n",
+                encoding="utf-8",
+            )
+            (memory / "areas/leak.md").symlink_to(external)
+            with self.assertRaisesRegex(ValueError, "must not be a symlink"):
+                memory_entry_ids(memory)
+            code, output, error = capture(["check", "--project-root", tmp])
+            self.assertNotEqual(code, 0, output + error)
+            self.assertIn("must not be a symlink", error)
+
+    def test_reconciliation_index_ignores_fenced_examples(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            record_id = "MC-REC-20200101-aaaaaaaa"
+            reconciliation = Path(tmp) / "docs/memory/reconciliations.md"
+            reconciliation.write_text(
+                "# Reconciliations\n\n```markdown\n"
+                f"## {record_id} — Example\n\nStatus: active\nResolution: distinct\n"
+                "Entries:\n- MC-DEC-20200101-aaaaaaaa\n- MC-DEC-20200101-bbbbbbbb\n"
+                "Evidence:\n- user-confirmed\n```\n",
+                encoding="utf-8",
+            )
+            code, output, error = capture(["list", "--project-root", tmp])
+            self.assertEqual(code, 0, output + error)
+            self.assertNotIn(record_id, output)
+            code, output, error = capture(["show", record_id, "--project-root", tmp])
+            self.assertNotEqual(code, 0, output + error)
+
+    def test_malformed_entry_heading_is_not_formal_and_check_rejects_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            preferences = Path(tmp) / "docs/memory/preferences.md"
+            preferences.write_text(
+                "# Preferences\n\n## Prefix MC-PREF-20260812-abcdef12 suffix\n\n"
+                "Status: active\nScope: project\nEvidence:\n- user-confirmed\n\n"
+                "Preference:\nMalformed.\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(parse_structured_entries(preferences, preferences.read_text()), [])
+            code, output, error = capture(["check", "--project-root", tmp])
+            self.assertEqual(code, 1, output + error)
+            self.assertIn("malformed Entry heading", output)
+
+    def test_forget_removes_only_the_date_heading_emptied_by_this_operation(self):
+        text = (
+            "# Memory Changelog\n\n## 2020-01-01\n\n"
+            "## 2020-01-02\n- Remove TargetEvent.\n"
+        )
+        updated, matches, blockers = _remove_units(text, "TargetEvent")
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(blockers, ())
+        self.assertIn("## 2020-01-01", updated)
+        self.assertNotIn("## 2020-01-02", updated)
+
     def test_comments_and_fences_never_become_selectable_entries(self):
         text = (
             "# Decisions\n\n<!--\n## MC-DEC-20200101-aaaaaaaa — Commented\n"
@@ -3826,7 +4017,7 @@ class MarkdownUnitBoundaryAuditTests(unittest.TestCase):
             "Decision:\n- first body item\nReason:\nBecause.\n\n- Separate legacy.\n"
         )
         units = parse_markdown_units(text).units
-        self.assertEqual([unit.kind for unit in units], ["h2", "bullet"])
+        self.assertEqual([unit.kind for unit in units], ["h2", "ambiguous-bullet"])
         parsed = parse_structured_entries(Path("decisions.md"), text)
         self.assertEqual(len(parsed), 1)
         self.assertIn("first body item", parsed[0].field_bodies["Decision"])
@@ -3899,7 +4090,10 @@ class MarkdownUnitBoundaryAuditTests(unittest.TestCase):
             "MC-INBOX-20200101-aaaaaaaa", "Candidate", "note", "Structured.",
             "project", ("agent-observed",), "Confirm.",
         )
-        text = f"# Memory Inbox\n\n{candidate}\n\n- Legacy candidate.\n"
+        text = (
+            f"# Memory Inbox\n\n{candidate}\n\n"
+            "## Legacy candidates\n\n- Legacy candidate.\n"
+        )
         self.assertEqual(count_inbox_items(text), 2)
         _cleaned, candidates, _duplicates, _tombstones = _clean_inbox(text, "")
         self.assertEqual(candidates, ["- Legacy candidate."])

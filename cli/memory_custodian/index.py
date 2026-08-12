@@ -91,13 +91,20 @@ def build_index(
     records.extend(_legacy_records(memory_dir, include_archive=include_archive))
     reconciliation = memory_dir / "reconciliations.md"
     if reconciliation.exists():
+        from .reconciliations import parse_reconciliations
+
         text = reconciliation.read_text(encoding="utf-8")
-        sections = re.split(r"(?m)(?=^## MC-REC-)", text)
-        for section in sections:
-            match = re.match(r"^## (MC-REC-\d{8}-[0-9a-f]{8})\b", section.strip(), re.I)
-            if match:
-                status = re.search(r"(?m)^Status:\s*(\S+)", section)
-                records.append(IndexedEntry(match.group(1), status.group(1) if status else "", "project", "reconciliations.md", section.strip()))
+        reconciliation_records, _issues = parse_reconciliations(reconciliation, text)
+        records.extend(
+            IndexedEntry(
+                record.record_id,
+                record.status,
+                "project",
+                "reconciliations.md",
+                record.text,
+            )
+            for record in reconciliation_records
+        )
     if include_local:
         overlay = inspect_overlay(
             project_root,

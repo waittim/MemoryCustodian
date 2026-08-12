@@ -22,6 +22,10 @@ TYPE_CODES = {
     "candidate": "INBOX",
 }
 ENTRY_ID_RE = re.compile(r"\bMC-(DEC|CON|DNU|PREF|AREA|INBOX|TOMB)-(\d{8})-([0-9a-f]{8})\b", re.I)
+ENTRY_HEADING_RE = re.compile(
+    r"^## (MC-(?:DEC|CON|DNU|PREF|AREA|INBOX|TOMB)-\d{8}-[0-9a-f]{8}) — (\S(?:.*\S)?)$",
+    re.I,
+)
 ACTIVE_EVIDENCE_RE = re.compile(
     r"^(?:user-confirmed|(?:repo|doc|test):[^@\s]+(?:@[A-Za-z0-9._-]+)?|issue:#\d+|pr:#\d+)$"
 )
@@ -83,17 +87,40 @@ def heading_entry_ids(text: str) -> list[str]:
     for unit in parse_markdown_units(text).units:
         if unit.kind != "h2" or unit.heading is None:
             continue
-        match = ENTRY_ID_RE.search(unit.heading)
+        match = ENTRY_HEADING_RE.fullmatch("## " + unit.heading)
         if match:
-            found.append(match.group(0))
+            found.append(match.group(1))
     return found
 
 
+def entry_unit_issues(text: str, relative_path: str) -> list[str]:
+    """Return canonical-heading and ambiguous formal-unit findings."""
+
+    from .protocol import parse_markdown_units
+
+    issues: list[str] = []
+    for unit in parse_markdown_units(text).units:
+        if unit.kind == "h2" and unit.heading and ENTRY_ID_RE.search(unit.heading):
+            if ENTRY_HEADING_RE.fullmatch("## " + unit.heading) is None:
+                issues.append(
+                    f"{relative_path}: malformed Entry heading {('## ' + unit.heading)!r}; "
+                    "expected `## <ENTRY_ID> — <title>`"
+                )
+        elif unit.kind == "ambiguous-bullet":
+            issues.append(
+                f"{relative_path}: ambiguous column-zero bullet follows a formal Entry; "
+                "indent body bullets or move legacy memory under an explicit heading"
+            )
+    return issues
+
+
 def memory_entry_ids(memory_dir: Path) -> set[str]:
+    from .protocol import managed_markdown_files
+
     found: set[str] = set()
     if not memory_dir.exists():
         return found
-    for path in memory_dir.rglob("*.md"):
+    for path in managed_markdown_files(memory_dir):
         for value in heading_entry_ids(path.read_text(encoding="utf-8")):
             found.add(value)
     return found
@@ -102,10 +129,12 @@ def memory_entry_ids(memory_dir: Path) -> set[str]:
 def memory_entry_id_counts(memory_dir: Path) -> dict[str, int]:
     """Count canonical heading IDs across all shared managed-memory storage."""
 
+    from .protocol import managed_markdown_files
+
     counts: dict[str, int] = {}
     if not memory_dir.exists():
         return counts
-    for path in memory_dir.rglob("*.md"):
+    for path in managed_markdown_files(memory_dir):
         for value in heading_entry_ids(path.read_text(encoding="utf-8")):
             key = value.casefold()
             counts[key] = counts.get(key, 0) + 1
@@ -340,6 +369,7 @@ def render_candidate_entry(
 
 def parse_structured_entries(path: Path, text: str) -> list[StructuredEntry]:
     from .protocol import parse_markdown_units
+    from .markdown import visible_lines
 
     sections = [
         unit.text
@@ -349,7 +379,7 @@ def parse_structured_entries(path: Path, text: str) -> list[StructuredEntry]:
     parsed: list[StructuredEntry] = []
     for section in sections:
         lines = section.splitlines()
-        heading = ENTRY_ID_RE.search(lines[0])
+        heading = ENTRY_HEADING_RE.fullmatch(lines[0])
         if not heading:
             continue
         fields: dict[str, str] = {}
@@ -366,7 +396,10 @@ def parse_structured_entries(path: Path, text: str) -> list[StructuredEntry]:
             current_field = None
             current_body = []
 
-        for line in lines[1:]:
+        for visible in visible_lines(section):
+            if visible.index == 0:
+                continue
+            line = visible.text
             matched_field = FIELD_RE.match(line)
             if matched_field:
                 flush_field()
@@ -391,10 +424,10 @@ def parse_structured_entries(path: Path, text: str) -> list[StructuredEntry]:
             ).strip()
             for key, occurrences in occurrence_bodies.items()
         }
-        title = re.sub(r"^.*?\s+—\s+", "", lines[0]).strip()
+        title = heading.group(2)
         parsed.append(
             StructuredEntry(
-                heading.group(0),
+                heading.group(1),
                 title,
                 fields.get("Status", ""),
                 fields.get("Scope", ""),

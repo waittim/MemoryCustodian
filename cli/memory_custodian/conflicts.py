@@ -11,6 +11,7 @@ from .entries import StructuredEntry, parse_structured_entries
 from .reconciliations import parse_reconciliations, validate_reconciliations
 from .structural import active_structural_operand_issues, subject_index
 from .subjects import Subject, load_subjects, normalize_alias, normalize_canonical_ref
+from .protocol import managed_markdown_files
 
 
 class ConflictStatus(str, Enum):
@@ -48,7 +49,7 @@ def canonical_entries(memory_dir: Path, *, include_archive: bool = False) -> tup
     entries: list[StructuredEntry] = []
     if not memory_dir.exists():
         return ()
-    for path in sorted(memory_dir.rglob("*.md")):
+    for path in managed_markdown_files(memory_dir):
         relative = path.relative_to(memory_dir).as_posix()
         if relative == "subjects.md" or (relative.startswith("archive/") and not include_archive):
             continue

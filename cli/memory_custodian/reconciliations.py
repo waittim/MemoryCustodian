@@ -8,6 +8,8 @@ from pathlib import Path
 import re
 
 from .entries import ENTRY_ID_RE, StructuredEntry, VALID_SCOPES_RE
+from .markdown import visible_lines
+from .protocol import parse_markdown_units
 from .structural import (
     active_structural_operand_issues,
     structural_identity,
@@ -105,14 +107,13 @@ def parse_reconciliations(
 ) -> tuple[tuple[ReconciliationRecord, ...], tuple[str, ...]]:
     """Parse every H2 record, returning valid records and deterministic issues."""
 
-    lines = text.splitlines()
-    starts = [index for index, line in enumerate(lines) if line.startswith("## ")]
     records: list[ReconciliationRecord] = []
     issues: list[str] = []
-    for position, start in enumerate(starts):
-        end = starts[position + 1] if position + 1 < len(starts) else len(lines)
-        section_lines = lines[start:end]
-        section = "\n".join(section_lines).strip()
+    for unit in parse_markdown_units(text).units:
+        if unit.kind != "h2":
+            continue
+        section = unit.text
+        section_lines = [line.text for line in visible_lines(section)]
         heading = REC_ID_RE.fullmatch(section_lines[0])
         if not heading:
             issues.append(f"{path.name}: malformed reconciliation heading {section_lines[0]!r}")
