@@ -136,6 +136,21 @@ def _remove_units(
         and needle in unit.text.casefold()
     )
     kept = [unit for unit in document.units if unit not in matches]
+    if matches:
+        without_empty_dates: list[MarkdownUnit] = []
+        for index, unit in enumerate(kept):
+            is_empty_date = bool(
+                unit.kind == "h2"
+                and unit.heading
+                and re.fullmatch(r"\d{4}-\d{2}-\d{2}", unit.heading)
+                and len(unit.text.splitlines()) == 1
+            )
+            if is_empty_date:
+                following = kept[index + 1] if index + 1 < len(kept) else None
+                if following is None or following.kind == "h2":
+                    continue
+            without_empty_dates.append(unit)
+        kept = without_empty_dates
     return render_markdown_document(document, kept), matches, blockers
 
 

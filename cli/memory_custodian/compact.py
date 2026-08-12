@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 from pathlib import Path, PurePosixPath
+import re
+
+from .markdown import MarkdownUnitRange, semantic_unit_ranges
 
 from .protocol import (
     DECISION_ENTRY_BUDGET,
@@ -185,12 +188,6 @@ def _planned_archive_mutations(memory_dir: Path, target: str, budget: int) -> li
 def _inbox_cleanup_mutations(memory_dir: Path) -> list[TextMutation]:
     inbox = memory_dir / "inbox.md"
     original = inbox.read_text(encoding="utf-8")
-    structured_candidates = [
-        entry for entry in parse_structured_entries(inbox, original)
-        if entry.status == "candidate"
-    ]
-    if structured_candidates:
-        return []
     tombstone_path = memory_dir / "do-not-use.md"
     tombstones = tombstone_path.read_text(encoding="utf-8") if tombstone_path.exists() else ""
     cleaned, _candidates, duplicates, tombstone_matches = _clean_inbox(original, tombstones)
@@ -227,7 +224,7 @@ def _bullet_label(text: str) -> str:
 
 
 def _render_chunks(chunks: list[tuple[str, str]]) -> str:
-    return "\n".join(text for _kind, text in chunks).rstrip() + "\n"
+    return "\n\n".join(text for _kind, text in chunks).rstrip() + "\n"
 
 
 def _clean_inbox(text: str, tombstones: str) -> tuple[str, list[str], int, int]:
@@ -274,6 +271,8 @@ def _clean_inbox(text: str, tombstones: str) -> tuple[str, list[str], int, int]:
             continue
         candidates.append(unit_text)
         kept_chunks.append((kind, unit_text))
+    if duplicates == 0 and tombstone_matches == 0:
+        return text, candidates, 0, 0
     return _render_chunks(kept_chunks), candidates, duplicates, tombstone_matches
 
 
@@ -317,16 +316,42 @@ def _dedupe_bullets(text: str) -> tuple[str, int]:
 
 def _split_h2_sections(text: str) -> tuple[list[str], list[list[str]]]:
     lines = text.rstrip().splitlines()
-    starts = [index for index, line in enumerate(lines) if line.startswith("## ")]
-    if not starts:
+    ranges = semantic_unit_ranges(
+        "\n".join(lines),
+        start=1 if lines and lines[0].startswith("# ") else 0,
+    )
+    h2_ranges = _archivable_h2_ranges(ranges)
+    if not h2_ranges:
         return lines, []
-
-    preamble = lines[: starts[0]]
-    sections: list[list[str]] = []
-    for index, start in enumerate(starts):
-        end = starts[index + 1] if index + 1 < len(starts) else len(lines)
-        sections.append(lines[start:end])
+    preamble = lines[:h2_ranges[0].start]
+    sections = [lines[unit_range.start:unit_range.end] for unit_range in h2_ranges]
     return preamble, sections
+
+
+def _archivable_h2_ranges(
+    ranges: tuple[MarkdownUnitRange, ...],
+) -> list[MarkdownUnitRange]:
+    """Attach changelog bullets to date H2s without swallowing legacy units elsewhere."""
+
+    grouped = []
+    for position, unit_range in enumerate(ranges):
+        if unit_range.kind != "h2":
+            continue
+        end = unit_range.end
+        if unit_range.heading and re.fullmatch(r"\d{4}-\d{2}-\d{2}", unit_range.heading):
+            following = position + 1
+            while following < len(ranges) and ranges[following].kind == "bullet":
+                end = ranges[following].end
+                following += 1
+        grouped.append(
+            MarkdownUnitRange(
+                unit_range.start,
+                end,
+                unit_range.kind,
+                unit_range.heading,
+            )
+        )
+    return grouped
 
 
 def _join_h2_sections(preamble: list[str], sections: list[list[str]]) -> str:
@@ -339,20 +364,32 @@ def _join_h2_sections(preamble: list[str], sections: list[list[str]]) -> str:
 
 
 def _plan_h2_archive(text: str, budget: int):
-    preamble, sections = _split_h2_sections(text)
-    if len(sections) < 2:
+    lines = text.rstrip().splitlines()
+    ranges = semantic_unit_ranges(
+        "\n".join(lines),
+        start=1 if lines and lines[0].startswith("# ") else 0,
+    )
+    h2_ranges = _archivable_h2_ranges(ranges)
+    if len(h2_ranges) < 2:
         return None
 
-    for keep_count in range(len(sections) - 1, 0, -1):
-        kept = sections[:keep_count]
-        archived = sections[keep_count:]
-        compacted = _join_h2_sections(preamble, kept)
+    for keep_count in range(len(h2_ranges) - 1, 0, -1):
+        kept_ranges = h2_ranges[:keep_count]
+        archived_ranges = h2_ranges[keep_count:]
+        removed_lines = {
+            index
+            for unit_range in archived_ranges
+            for index in range(unit_range.start, unit_range.end)
+        }
+        compacted = "\n".join(
+            line for index, line in enumerate(lines) if index not in removed_lines
+        ).rstrip() + "\n"
         projected = estimate_tokens(compacted)
         if projected <= budget:
             return {
                 "compacted": compacted,
-                "archived": archived,
-                "kept": kept,
+                "archived": [lines[item.start:item.end] for item in archived_ranges],
+                "kept": [lines[item.start:item.end] for item in kept_ranges],
                 "projected": projected,
             }
     return None
@@ -597,21 +634,25 @@ def run(args) -> int:
         entry for entry in parse_structured_entries(inbox, original)
         if entry.status == "candidate"
     ]
-    if structured_candidates:
-        items = [entry.text for entry in structured_candidates]
-        cleaned, candidates, duplicates, tombstone_matches = original, items, 0, 0
-    else:
-        items = [unit_text for kind, unit_text in split_top_level_bullet_units(original) if kind == "bullet"]
-        cleaned, candidates, duplicates, tombstone_matches = _clean_inbox(original, tombstones)
+    legacy_items = [
+        unit_text
+        for kind, unit_text in split_top_level_bullet_units(original)
+        if kind == "bullet"
+    ]
+    cleaned, legacy_candidates, duplicates, tombstone_matches = _clean_inbox(original, tombstones)
+    review_items = [
+        *(("structured", entry.text, entry) for entry in structured_candidates),
+        *(("legacy", item, None) for item in legacy_candidates),
+    ]
+    items = [entry.text for entry in structured_candidates] + legacy_items
 
     print("# Compaction Plan")
     print(f"Inbox items: {len(items)}")
     print(f"Exact duplicates removable: {duplicates}")
     print(f"Exact tombstone matches removable: {tombstone_matches}")
-    print(f"Candidates requiring Agent review: {len(candidates)}")
-    for index, item in enumerate(candidates, start=1):
-        if structured_candidates:
-            entry = structured_candidates[index - 1]
+    print(f"Candidates requiring Agent review: {len(review_items)}")
+    for index, (kind, item, entry) in enumerate(review_items, start=1):
+        if kind == "structured" and entry is not None:
             print(f"- [{index}] {entry.entry_id} — {entry.title}")
             continue
         lines = item.splitlines()
@@ -634,7 +675,7 @@ def run(args) -> int:
     )
     if not applied:
         return 0
-    if candidates:
+    if review_items:
         print("Applied deterministic inbox cleanup; candidates remain for Agent review.")
     else:
         print("Applied deterministic inbox cleanup; no candidates remain.")

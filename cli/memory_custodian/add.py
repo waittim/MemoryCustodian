@@ -7,6 +7,7 @@ import hashlib
 
 from .entries import (
     generate_entry_id,
+    heading_entry_ids,
     line_safe_markdown_body,
     memory_entry_ids,
     parse_structured_entries,
@@ -19,6 +20,7 @@ from .entries import (
     validate_evidence,
     validate_scope,
 )
+from .local_overlay import LocalStatus, inspect_overlay, read_local_private_file
 from .locking import (
     create_private_file,
     discard_private_file,
@@ -285,6 +287,23 @@ def _build_mutations(
             allow_missing=args.allow_missing_evidence,
         )
         ids = memory_entry_ids(memory_dir)
+        metadata = manifest_contract_metadata(
+            (memory_dir / "manifest.md").read_text(encoding="utf-8")
+        )
+        overlay = inspect_overlay(
+            project_root,
+            metadata["project_id"],
+            shared_ids=ids,
+        )
+        if overlay.status == LocalStatus.REVIEW:
+            detail = "; ".join(overlay.warnings) or "local overlay requires review"
+            raise ValueError(
+                "Cannot allocate a shared Entry ID while local overlay integrity is unresolved: "
+                + detail
+            )
+        if overlay.status == LocalStatus.BOUND:
+            for module in overlay.modules:
+                ids.update(heading_entry_ids(read_local_private_file(module)))
         subject_id, facet = _validate_subject_and_conflict(
             args,
             project_root,

@@ -21,7 +21,7 @@ from . import (
     __version__,
 )
 from .markdown import headings as markdown_headings
-from .markdown import section_ranges, visible_lines
+from .markdown import section_ranges, semantic_unit_ranges, visible_lines
 from .templates import (
     ALL_TEMPLATE_FILES,
     CORE_FILES,
@@ -262,28 +262,16 @@ def append_changelog(memory_dir: Path, message: str, create: bool = False) -> No
 
 def changelog_text(existing: str, message: str) -> str:
     entry = f"## {today()}\n- {message}"
-    existing = existing.rstrip()
-    if not existing:
+    if not existing.strip():
         return "# Memory Changelog\n\n" + entry + "\n"
 
-    lines = existing.splitlines()
+    document = parse_markdown_units(existing)
+    units = list(document.units)
     insert_at = 0
-    if lines and lines[0].strip() == "# Memory Changelog":
-        insert_at = len(lines)
-        for index, line in enumerate(lines[1:], start=1):
-            if line.startswith("## "):
-                insert_at = index
-                break
-
-    before = "\n".join(lines[:insert_at]).rstrip()
-    after = "\n".join(lines[insert_at:]).strip()
-    if before and after:
-        return f"{before}\n\n{entry}\n\n{after}\n"
-    elif before:
-        return f"{before}\n\n{entry}\n"
-    elif after:
-        return f"{entry}\n\n{after}\n"
-    return entry + "\n"
+    while insert_at < len(units) and units[insert_at].kind in {"preamble", "body"}:
+        insert_at += 1
+    units.insert(insert_at, MarkdownUnit("h2", entry, today()))
+    return render_markdown_document(document, units)
 
 
 def protocol_metadata(manifest: str) -> dict[str, str]:
@@ -697,36 +685,33 @@ def split_top_level_bullet_units(text: str) -> list[tuple[str, str]]:
 
 
 def count_inbox_items(text: str) -> int:
-    structured = len(re.findall(r"(?m)^Status:\s*candidate\s*$", text, re.I))
-    without_structured = re.sub(
-        r"(?ms)^## MC-INBOX-[^\n]*\n.*?(?=^## |\Z)",
-        "",
-        text,
+    units = parse_markdown_units(text).units
+    structured = sum(
+        1
+        for unit in units
+        if unit.kind == "h2"
+        and unit.heading is not None
+        and re.search(r"\bMC-INBOX-\d{8}-[0-9a-f]{8}\b", unit.heading, re.I)
+        and re.search(r"(?m)^Status:\s*candidate\s*$", unit.text, re.I)
     )
-    legacy = sum(
-        1 for kind, _unit in split_top_level_bullet_units(without_structured)
-        if kind == "bullet"
-    )
+    legacy = sum(1 for unit in units if unit.kind == "bullet")
     return structured + legacy
 
 
 def count_h2_entries(text: str) -> int:
-    return sum(1 for line in text.splitlines() if line.startswith("## "))
+    return sum(1 for unit in parse_markdown_units(text).units if unit.kind == "h2")
 
 
 def decision_entry_sizes(text: str) -> list[tuple[str, int]]:
     """Return titles and token sizes for H2 sections that contain a Decision field."""
 
-    lines = text.rstrip().splitlines()
-    starts = [index for index, line in enumerate(lines) if line.startswith("## ")]
     entries: list[tuple[str, int]] = []
-    for position, start in enumerate(starts):
-        end = starts[position + 1] if position + 1 < len(starts) else len(lines)
-        section = lines[start:end]
-        if not any(line.strip() == "Decision:" for line in section[1:]):
+    for unit in parse_markdown_units(text).units:
+        if unit.kind != "h2" or unit.heading is None:
             continue
-        title = section[0][3:].strip()
-        entries.append((title, estimate_tokens("\n".join(section))))
+        if re.search(r"(?m)^Decision:[ \t]*$", unit.text) is None:
+            continue
+        entries.append((unit.heading, estimate_tokens(unit.text)))
     return entries
 
 
@@ -765,80 +750,21 @@ class MarkdownDocument:
     units: tuple[MarkdownUnit, ...]
 
 
-_UNIT_LIST_FIELDS = frozenset({"Aliases", "Entries", "Evidence", "Merged-From"})
-
-
-def _semantic_unit_starts(lines: list[str], start: int) -> list[tuple[int, str]]:
-    """Return ordered H2, top-level bullet, and post-bullet body boundaries."""
-
-    starts: list[tuple[int, str]] = []
-    current_kind: str | None = None
-    list_field = False
-    fence_character: str | None = None
-    fence_length = 0
-    for index in range(start, len(lines)):
-        line = lines[index]
-        if fence_character is not None:
-            closing = re.fullmatch(
-                rf" {{0,3}}{re.escape(fence_character)}{{{fence_length},}}[ \t]*",
-                line,
-            )
-            if closing:
-                fence_character = None
-                fence_length = 0
-            continue
-        opening = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", line)
-        if opening:
-            fence_character = opening.group(1)[0]
-            fence_length = len(opening.group(1))
-            continue
-
-        if line.startswith("## "):
-            starts.append((index, "h2"))
-            current_kind = "h2"
-            list_field = False
-            continue
-
-        if current_kind == "h2":
-            field = re.fullmatch(r"([A-Za-z][A-Za-z-]*):[ \t]*", line)
-            if field:
-                list_field = field.group(1) in _UNIT_LIST_FIELDS
-                continue
-            if list_field:
-                if line.startswith(("- ", "* ", "+ ")) or (
-                    line and line[0].isspace()
-                ):
-                    continue
-                list_field = False
-
-        if line.startswith(("- ", "* ", "+ ")):
-            starts.append((index, "bullet"))
-            current_kind = "bullet"
-            list_field = False
-            continue
-        if current_kind == "bullet" and line and not line[0].isspace():
-            starts.append((index, "body"))
-            current_kind = "body"
-    return starts
-
-
 def parse_markdown_units(text: str) -> MarkdownDocument:
     """Parse ordered H2 and legacy-bullet units without merging mixed formats."""
 
     lines = text.rstrip().splitlines()
     title = lines[0] if lines and lines[0].startswith("# ") else ""
     start = 1 if title else 0
-    starts = _semantic_unit_starts(lines, start)
+    ranges = semantic_unit_ranges("\n".join(lines), start=start)
     units: list[MarkdownUnit] = []
-    if starts:
-        preamble = "\n".join(lines[start:starts[0][0]]).strip()
+    if ranges:
+        preamble = "\n".join(lines[start:ranges[0].start]).strip()
         if preamble:
             units.append(MarkdownUnit("preamble", preamble))
-        for position, (unit_start, kind) in enumerate(starts):
-            unit_end = starts[position + 1][0] if position + 1 < len(starts) else len(lines)
-            unit_text = "\n".join(lines[unit_start:unit_end]).strip()
-            heading = lines[unit_start][3:].strip() if kind == "h2" else None
-            units.append(MarkdownUnit(kind, unit_text, heading))
+        for unit_range in ranges:
+            unit_text = "\n".join(lines[unit_range.start:unit_range.end]).strip()
+            units.append(MarkdownUnit(unit_range.kind, unit_text, unit_range.heading))
         return MarkdownDocument(title, tuple(units))
 
     body = "\n".join(lines[start:]).strip()

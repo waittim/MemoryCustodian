@@ -77,12 +77,15 @@ def entry_ids(text: str) -> list[str]:
 
 
 def heading_entry_ids(text: str) -> list[str]:
+    from .protocol import parse_markdown_units
+
     found: list[str] = []
-    for line in text.splitlines():
-        if line.startswith("## "):
-            match = ENTRY_ID_RE.search(line)
-            if match:
-                found.append(match.group(0))
+    for unit in parse_markdown_units(text).units:
+        if unit.kind != "h2" or unit.heading is None:
+            continue
+        match = ENTRY_ID_RE.search(unit.heading)
+        if match:
+            found.append(match.group(0))
     return found
 
 
@@ -333,18 +336,6 @@ def render_candidate_entry(
         promotion_requirement,
     )
     return rendered
-
-
-def split_h2(text: str) -> tuple[str, list[str]]:
-    matches = list(re.finditer(r"(?m)^## .*$", text))
-    if not matches:
-        return text, []
-    preamble = text[: matches[0].start()].rstrip()
-    entries = [
-        text[match.start() : (matches[index + 1].start() if index + 1 < len(matches) else len(text))].strip()
-        for index, match in enumerate(matches)
-    ]
-    return preamble, entries
 
 
 def parse_structured_entries(path: Path, text: str) -> list[StructuredEntry]:
@@ -739,13 +730,19 @@ def structured_relation_issues(entries: list[StructuredEntry]) -> list[str]:
 
 
 def supersede_entry(text: str, old_id: str, new_id: str) -> str:
-    preamble, sections = split_h2(text)
+    from .protocol import MarkdownUnit, parse_markdown_units, render_markdown_document
+
+    document = parse_markdown_units(text)
     changed = False
-    updated: list[str] = []
-    for section in sections:
+    updated: list[MarkdownUnit] = []
+    for unit in document.units:
+        if unit.kind != "h2":
+            updated.append(unit)
+            continue
+        section = unit.text
         match = ENTRY_ID_RE.search(section.splitlines()[0])
         if not match or match.group(0).casefold() != old_id.casefold():
-            updated.append(section)
+            updated.append(unit)
             continue
         if re.search(r"(?m)^Status:\s*superseded\s*$", section, re.I):
             existing = re.search(r"(?m)^Superseded-By:\s*(\S+)", section)
@@ -758,9 +755,8 @@ def supersede_entry(text: str, old_id: str, new_id: str) -> str:
         assert status_line is not None
         insert = status_line.end()
         section = section[:insert] + f"\nSuperseded-By: {new_id}" + section[insert:]
-        updated.append(section)
+        updated.append(MarkdownUnit("h2", section, section.splitlines()[0][3:].strip()))
         changed = True
     if not changed:
         raise ValueError(f"Entry ID not found: {old_id}")
-    parts = [preamble, *updated] if preamble else updated
-    return "\n\n".join(part for part in parts if part).rstrip() + "\n"
+    return render_markdown_document(document, updated)

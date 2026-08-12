@@ -20,8 +20,25 @@ class MarkdownHeading:
     title: str
 
 
+@dataclass(frozen=True)
+class MarkdownUnitRange:
+    """A source range for one visible semantic memory unit."""
+
+    start: int
+    end: int
+    kind: str
+    heading: str | None = None
+
+
+_LIST_FIELDS = frozenset({"Aliases", "Entries", "Evidence", "Merged-From"})
+_FORMAL_ENTRY_HEADING_RE = re.compile(
+    r"^ {0,3}##[ \t]+MC-(?:DEC|CON|DNU|PREF|AREA|INBOX|TOMB)-", re.I
+)
+_FIELD_RE = re.compile(r"^([A-Za-z][A-Za-z-]*):[ \t]*(?:.*)?$")
+
+
 def visible_lines(text: str) -> tuple[MarkdownLine, ...]:
-    """Return lines under the manifest's deliberately limited Markdown contract."""
+    """Return source lines visible under the supported Markdown lexical contract."""
 
     visible: list[MarkdownLine] = []
     fence_character: str | None = None
@@ -34,7 +51,7 @@ def visible_lines(text: str) -> tuple[MarkdownLine, ...]:
                 continue
             if trailing.strip():
                 raise ValueError(
-                    "HTML comment closing lines in manifest.md must contain no other content"
+                    "HTML comment closing lines must contain no other content"
                 )
             in_comment = False
             continue
@@ -53,7 +70,7 @@ def visible_lines(text: str) -> tuple[MarkdownLine, ...]:
             info = opening.group(2)
             if marker[0] == "`" and "`" in info:
                 raise ValueError(
-                    "Backtick fence info strings in manifest.md must not contain backticks"
+                    "Backtick fence info strings must not contain backticks"
                 )
             fence_character = marker[0]
             fence_length = len(marker)
@@ -65,7 +82,7 @@ def visible_lines(text: str) -> tuple[MarkdownLine, ...]:
             if marker:
                 if trailing.strip():
                     raise ValueError(
-                        "HTML comments in manifest.md must occupy complete lines"
+                        "HTML comments must occupy complete lines"
                     )
             else:
                 in_comment = True
@@ -79,9 +96,9 @@ def visible_lines(text: str) -> tuple[MarkdownLine, ...]:
             )
         )
     if fence_character is not None:
-        raise ValueError("Unclosed fenced code block in manifest.md")
+        raise ValueError("Unclosed fenced code block")
     if in_comment:
-        raise ValueError("Unclosed HTML comment in manifest.md")
+        raise ValueError("Unclosed HTML comment")
     return tuple(visible)
 
 
@@ -121,3 +138,81 @@ def section_ranges(
                 break
         ranges.append((heading.index + 1, end))
     return tuple(ranges)
+
+
+def semantic_unit_ranges(text: str, *, start: int = 0) -> tuple[MarkdownUnitRange, ...]:
+    """Return source-preserving H2, legacy-bullet, and body unit ranges.
+
+    Only visible Markdown participates in boundary detection. Fenced examples,
+    HTML comments, and indented code remain inside their containing source range
+    and can never become selectable memory entries.
+    """
+
+    lines = text.splitlines()
+    visible = {
+        line.index: line
+        for line in visible_lines(text)
+        if line.index >= start and not line.indented_code
+    }
+    visible_indices = sorted(visible)
+    next_h2: dict[int, int] = {}
+    following_h2 = len(lines)
+    for index in reversed(visible_indices):
+        next_h2[index] = following_h2
+        if re.match(r"^ {0,3}##(?:[ \t]+|$)", visible[index].text):
+            following_h2 = index
+
+    def formal_field_follows(index: int) -> bool:
+        limit = next_h2.get(index, len(lines))
+        return any(
+            index < candidate < limit
+            and _FIELD_RE.fullmatch(visible[candidate].text) is not None
+            for candidate in visible_indices
+        )
+
+    starts: list[tuple[int, str, str | None]] = []
+    current_kind: str | None = None
+    formal_entry = False
+    list_field = False
+    for index in visible_indices:
+        line = visible[index].text
+        heading_match = re.match(r"^ {0,3}##(?:[ \t]+|$)(.*)$", line)
+        if heading_match:
+            heading = re.sub(r"[ \t]+#+[ \t]*$", "", heading_match.group(1)).strip()
+            starts.append((index, "h2", heading))
+            current_kind = "h2"
+            formal_entry = _FORMAL_ENTRY_HEADING_RE.match(line) is not None
+            list_field = False
+            continue
+
+        if current_kind == "h2":
+            field = _FIELD_RE.fullmatch(line)
+            if field:
+                list_field = field.group(1) in _LIST_FIELDS
+                continue
+            if list_field:
+                if line.startswith(("- ", "* ", "+ ")) or (line and line[0].isspace()):
+                    continue
+                list_field = False
+
+        if line.startswith(("- ", "* ", "+ ")):
+            if current_kind == "h2" and formal_entry and formal_field_follows(index):
+                continue
+            starts.append((index, "bullet", None))
+            current_kind = "bullet"
+            formal_entry = False
+            list_field = False
+            continue
+        if current_kind == "bullet" and line and not line[0].isspace():
+            starts.append((index, "body", None))
+            current_kind = "body"
+
+    return tuple(
+        MarkdownUnitRange(
+            unit_start,
+            starts[position + 1][0] if position + 1 < len(starts) else len(lines),
+            kind,
+            heading,
+        )
+        for position, (unit_start, kind, heading) in enumerate(starts)
+    )

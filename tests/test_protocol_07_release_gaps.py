@@ -19,14 +19,28 @@ from unittest.mock import patch
 from memory_custodian.conflicts import analyze_conflicts
 from memory_custodian.context import ContextRoutingResult
 from memory_custodian.entries import (
+    heading_entry_ids,
     parse_structured_entries,
     render_active_entry,
     render_candidate_entry,
     structured_entry_schema_issues,
 )
+from memory_custodian.compact import _clean_inbox, _plan_h2_archive
+from memory_custodian.forget import _remove_units
 from memory_custodian.main import main
-from memory_custodian.migrate import _legacy_key, _migrate_decisions
-from memory_custodian.protocol import parse_markdown_units, today
+from memory_custodian.migrate import (
+    _legacy_key,
+    _migrate_decisions,
+)
+from memory_custodian.protocol import (
+    changelog_text,
+    count_h2_entries,
+    count_inbox_items,
+    decision_entry_sizes,
+    estimate_tokens,
+    parse_markdown_units,
+    today,
+)
 from memory_custodian.routes import RouteReason, RoutingCompleteness
 
 
@@ -3784,6 +3798,135 @@ class MergeAndDeterminismReleaseTests(unittest.TestCase):
             with patch.object(Path, "rglob", reversed_rglob):
                 reversed_result = analyze_conflicts(memory)
             self.assertEqual(normal, reversed_result)
+
+
+class MarkdownUnitBoundaryAuditTests(unittest.TestCase):
+    def test_comments_and_fences_never_become_selectable_entries(self):
+        text = (
+            "# Decisions\n\n<!--\n## MC-DEC-20200101-aaaaaaaa — Commented\n"
+            "Decision:\nHidden.\n-->\n\n```md\n"
+            "## MC-DEC-20200101-bbbbbbbb — Example\nDecision:\nHidden.\n```\n\n"
+            "- Visible legacy invariant.\n"
+        )
+        document = parse_markdown_units(text)
+        self.assertEqual([unit.kind for unit in document.units], ["preamble", "bullet"])
+        self.assertEqual(heading_entry_ids(text), [])
+        updated, matches, blockers = _remove_units(
+            text, "ignored", exact_entry_id="MC-DEC-20200101-aaaaaaaa"
+        )
+        self.assertIn("<!--", updated)
+        self.assertIn("MC-DEC-20200101-aaaaaaaa", updated)
+        self.assertEqual(matches, ())
+        self.assertEqual(blockers, ())
+
+    def test_formal_body_bullet_stays_attached_when_later_field_proves_ownership(self):
+        text = (
+            "# Decisions\n\n## MC-DEC-20200101-aaaaaaaa — Formal\n\n"
+            "Status: active\nScope: project\nEvidence:\n- user-confirmed\n\n"
+            "Decision:\n- first body item\nReason:\nBecause.\n\n- Separate legacy.\n"
+        )
+        units = parse_markdown_units(text).units
+        self.assertEqual([unit.kind for unit in units], ["h2", "bullet"])
+        parsed = parse_structured_entries(Path("decisions.md"), text)
+        self.assertEqual(len(parsed), 1)
+        self.assertIn("first body item", parsed[0].field_bodies["Decision"])
+        self.assertEqual(parsed[0].field_bodies["Reason"], "Because.")
+
+    def test_target_archive_moves_only_h2_source_ranges(self):
+        first = "## 2026-08-12 — New\n\nDecision:\n" + "new " * 80
+        second = "## 2026-08-11 — Old\n\nDecision:\n" + "old " * 80
+        legacy = "- Independent legacy invariant must remain active."
+        text = f"# Decisions\n\n{first}\n\n{second}\n\n{legacy}\n"
+        budget = estimate_tokens(f"# Decisions\n\n{first}\n\n{legacy}\n") + 2
+        plan = _plan_h2_archive(text, budget)
+        self.assertIsNotNone(plan)
+        self.assertIn(legacy, plan["compacted"])
+        self.assertNotIn(legacy, "\n".join(plan["archived"][0]))
+
+    def test_migration_ignores_fenced_h2_examples(self):
+        text = (
+            "# Decisions\n\n```markdown\n## 2020-01-01 - Example\n"
+            "Decision:\nExample only.\n```\n"
+        )
+        migrated, changed, manual, generated = _migrate_decisions(text, {})
+        self.assertEqual(migrated, text)
+        self.assertEqual((changed, manual, generated), (0, 0, ()))
+
+    def test_migration_rejects_invalid_existing_formal_entry_before_seeding(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            memory = Path(tmp) / "docs/memory"
+            (memory / "decisions.md").write_text(
+                "# Decisions\n\n## MC-DEC-20200101-aaaaaaaa — Invalid\n\n"
+                "Status: active\nDecision:\nMissing scope and evidence.\n",
+                encoding="utf-8",
+            )
+            code, output, error = capture(["migrate", "--project-root", tmp])
+            self.assertNotEqual(code, 0, output + error)
+            self.assertIn("manual repair", error)
+
+    def test_shared_add_reserves_bound_local_entry_ids(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as state:
+            with patch.dict(os.environ, {"XDG_STATE_HOME": state}):
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["init", "--project-root", tmp]), 0)
+                    self.assertEqual(main(["local", "enable", "--project-root", tmp]), 0)
+                    self.assertEqual(main(["local", "link", "--project-root", tmp]), 0)
+                code, output, error = capture([
+                    "local", "add", "Private preference.", "--type", "preference",
+                    "--evidence", "user-confirmed", "--project-root", tmp,
+                ])
+                self.assertEqual(code, 0, output + error)
+                local_id = re.search(r"MC-PREF-\d{8}-[0-9a-f]{8}", output).group(0)
+                with patch("memory_custodian.add.generate_entry_id", return_value=local_id):
+                    code, output, error = capture([
+                        "add", "Shared preference.", "--type", "preference",
+                        "--evidence", "user-confirmed", "--project-root", tmp,
+                    ])
+                self.assertNotEqual(code, 0, output + error)
+                self.assertIn("Entry ID collision", error)
+
+    def test_noop_inbox_cleanup_is_byte_stable(self):
+        text = "# Memory Inbox\n\n- First.\n\n\n- Second.\n"
+        cleaned, candidates, duplicates, tombstones = _clean_inbox(text, "")
+        self.assertEqual(cleaned, text)
+        self.assertEqual(len(candidates), 2)
+        self.assertEqual((duplicates, tombstones), (0, 0))
+
+    def test_mixed_inbox_counts_structured_and_legacy_candidates(self):
+        candidate = render_candidate_entry(
+            "MC-INBOX-20200101-aaaaaaaa", "Candidate", "note", "Structured.",
+            "project", ("agent-observed",), "Confirm.",
+        )
+        text = f"# Memory Inbox\n\n{candidate}\n\n- Legacy candidate.\n"
+        self.assertEqual(count_inbox_items(text), 2)
+        _cleaned, candidates, _duplicates, _tombstones = _clean_inbox(text, "")
+        self.assertEqual(candidates, ["- Legacy candidate."])
+
+    def test_changelog_is_newest_first_and_forget_removes_empty_date_heading(self):
+        updated = changelog_text("# Memory Changelog\n\n- Legacy old event.\n", "New event.")
+        self.assertLess(updated.index("## "), updated.index("Legacy old event"))
+        date = today()
+        removed, matches, blockers = _remove_units(
+            f"# Memory Changelog\n\n## {date}\n- Remove me.\n", "Remove me"
+        )
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(blockers, ())
+        self.assertNotIn(f"## {date}", removed)
+
+    def test_counters_share_visible_semantic_boundaries(self):
+        text = (
+            "# Decisions\n\n<!--\n## MC-DEC-20200101-aaaaaaaa — Comment\n-->\n\n"
+            "```md\n## Fake\nDecision:\n" + "hidden " * 200 + "\n```\n\n"
+            "## MC-DEC-20200101-bbbbbbbb — Real\n\nDecision:\nShort.\n\n"
+            "- Separate legacy invariant with many words " + "legacy " * 100 + "\n"
+        )
+        self.assertEqual(count_h2_entries(text), 1)
+        sizes = decision_entry_sizes(text)
+        self.assertEqual(len(sizes), 1)
+        self.assertLess(sizes[0][1], 30)
+        self.assertEqual(heading_entry_ids(text), ["MC-DEC-20200101-bbbbbbbb"])
 
 
 if __name__ == "__main__":

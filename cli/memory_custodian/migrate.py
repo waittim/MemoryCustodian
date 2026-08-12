@@ -8,12 +8,14 @@ import re
 
 from .entries import (
     ENTRY_ID_RE,
+    VALID_SCOPES_RE,
+    heading_entry_ids,
     line_safe_markdown_body,
     memory_entry_ids,
     parse_structured_entries,
-    split_h2,
     structured_entry_schema_issues,
     structured_entry_storage_issues,
+    validate_evidence,
 )
 from .locking import project_mutation_guard
 from .mutations import TextMutation, apply_mutations
@@ -35,11 +37,14 @@ from .protocol import (
     manifest_contract_metadata,
     manifest_with_optional_index,
     manifest_with_protocol_07_optional_routes,
+    MarkdownUnit,
+    parse_markdown_units,
     protocol_metadata,
     strict_protocol_metadata,
     valid_project_id,
     resolve_memory_dir,
     resolve_project_root,
+    render_markdown_document,
     today,
 )
 from .routes import parse_optional_module_index
@@ -67,23 +72,27 @@ def _migrate_decisions(
     used_ids: set[str] | None = None,
 ) -> tuple[str, int, int, tuple[str, ...]]:
     occupied_ids = used_ids if used_ids is not None else set()
-    preamble, sections = split_h2(text)
+    document = parse_markdown_units(text)
     changed = 0
     manual = 0
-    updated = []
+    updated: list[MarkdownUnit] = []
     generated_ids: list[str] = []
-    for index, section in enumerate(sections):
+    for index, unit in enumerate(document.units):
+        if unit.kind != "h2":
+            updated.append(unit)
+            continue
+        section = unit.text
         if ENTRY_ID_RE.search(section.splitlines()[0]):
-            updated.append(section)
+            updated.append(unit)
             continue
         if "Decision:" not in section:
             manual += 1
-            updated.append(section)
+            updated.append(unit)
             continue
         entry_id = _legacy_id(relative, section, index, code, suffixes)
         if entry_id.casefold() in occupied_ids:
             manual += 1
-            updated.append(section)
+            updated.append(unit)
             continue
         lines = section.splitlines()
         title = re.sub(r"^##\s+(?:\d{4}-\d{2}-\d{2}\s+-\s+)?", "", lines[0]).strip()
@@ -108,7 +117,7 @@ def _migrate_decisions(
         parsed = parse_structured_entries(Path(relative), migrated)
         if len(parsed) != 1 or parsed[0].entry_id.casefold() != entry_id.casefold():
             manual += 1
-            updated.append(section)
+            updated.append(unit)
             continue
         validation_issues = [
             *structured_entry_schema_issues(parsed[0], relative),
@@ -116,15 +125,15 @@ def _migrate_decisions(
         ]
         if validation_issues:
             manual += 1
-            updated.append(section)
+            updated.append(unit)
             continue
         generated_ids.append(entry_id)
         occupied_ids.add(entry_id.casefold())
-        updated.append(migrated)
+        updated.append(MarkdownUnit("h2", migrated, migrated.splitlines()[0][3:].strip()))
         changed += 1
-    parts = [preamble, *updated] if preamble else updated
+    rendered = render_markdown_document(document, updated) if changed else text
     return (
-        "\n\n".join(part for part in parts if part).rstrip() + "\n",
+        rendered,
         changed,
         manual,
         tuple(generated_ids),
@@ -140,8 +149,10 @@ def _migration_entry_seed(
     fingerprint_parts = [digest_text(manifest)]
     for relative, text in sorted(sources.items()):
         fingerprint_parts.extend([relative, digest_text(text)])
-        _preamble, sections = split_h2(text)
-        for index, section in enumerate(sections):
+        for index, unit in enumerate(parse_markdown_units(text).units):
+            if unit.kind != "h2":
+                continue
+            section = unit.text
             if not ENTRY_ID_RE.search(section.splitlines()[0]) and "Decision:" in section:
                 keys.append(_legacy_key(relative, section, index))
     source_sha = digest_text("\0".join(fingerprint_parts))
@@ -179,6 +190,53 @@ def _migration_sources(memory_dir: Path, manifest: str) -> dict[str, str]:
         if path.exists():
             sources[relative] = path.read_text(encoding="utf-8")
     return sources
+
+
+def _validate_existing_formal_entries(project_root: Path, memory_dir: Path) -> None:
+    """Reject formal Entries that an upgrade would otherwise grandfather as 0.7."""
+
+    issues: list[str] = []
+    id_counts: dict[str, int] = {}
+    for path in sorted(memory_dir.rglob("*.md")):
+        relative = path.relative_to(memory_dir).as_posix()
+        text = path.read_text(encoding="utf-8")
+        for entry_id in heading_entry_ids(text):
+            key = entry_id.casefold()
+            id_counts[key] = id_counts.get(key, 0) + 1
+        for entry in parse_structured_entries(path, text):
+            issues.extend(structured_entry_schema_issues(entry, relative))
+            issues.extend(structured_entry_storage_issues(entry, relative))
+            if entry.status not in {"active", "candidate", "superseded", "promoted"}:
+                issues.append(
+                    f"{relative}: {entry.entry_id} has invalid Status {entry.status!r}"
+                )
+            if not VALID_SCOPES_RE.fullmatch(entry.scope):
+                issues.append(
+                    f"{relative}: {entry.entry_id} has invalid Scope {entry.scope!r}"
+                )
+            if entry.evidence:
+                try:
+                    validate_evidence(
+                        entry.evidence,
+                        project_root,
+                        candidate=entry.status in {"candidate", "promoted"},
+                        allow_missing=True,
+                        allow_internal=entry.status not in {"candidate", "promoted"},
+                    )
+                except ValueError:
+                    issues.append(
+                        f"{relative}: {entry.entry_id} has invalid Evidence schema or unsafe source path"
+                    )
+    duplicates = sorted(key for key, count in id_counts.items() if count != 1)
+    issues.extend(f"duplicate Entry ID: {entry_id}" for entry_id in duplicates)
+    if issues:
+        preview = "; ".join(issues[:5])
+        suffix = f"; and {len(issues) - 5} more" if len(issues) > 5 else ""
+        raise ValueError(
+            "Migration requires manual repair of existing formal Entries before upgrade: "
+            + preview
+            + suffix
+        )
 
 
 def _upgraded_manifest(
@@ -231,6 +289,7 @@ def _build_plan(project_root: Path, memory_dir: Path) -> tuple[MutationPlan, lis
     provisional_project_id = project_id or "00000000-0000-4000-8000-000000000000"
     _upgraded_manifest(original, provisional_project_id)
     sources = _migration_sources(memory_dir, original)
+    _validate_existing_formal_entries(project_root, memory_dir)
     changelog_path = memory_dir / "changelog.md"
     changelog_original = (
         changelog_path.read_text(encoding="utf-8")

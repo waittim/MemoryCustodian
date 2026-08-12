@@ -16,6 +16,7 @@ from .protocol import (
     long_decision_entries,
     manifest_contract_metadata,
     optional_index_paths,
+    parse_markdown_units,
     parse_manifest_task_file_specs,
     protocol_contract_metadata,
     protocol_metadata,
@@ -23,7 +24,6 @@ from .protocol import (
     resolve_memory_dir,
     resolve_project_root,
     validate_manifest_routes,
-    split_top_level_bullet_units,
 )
 from .entries import (
     CANDIDATE_ONLY_EVIDENCE,
@@ -311,16 +311,18 @@ def run(args) -> int:
         if relative in {
             "decisions.md", "constraints.md", "do-not-use.md", "preferences.md", "inbox.md"
         } or relative.startswith(("areas/", "rules/", "profiles/")):
-            without_structured = re.sub(
-                r"(?ms)^## MC-(?:DEC|CON|DNU|PREF|AREA|INBOX|TOMB)-[^\n]*\n.*?(?=^## |\Z)",
-                "",
-                text,
+            units = parse_markdown_units(text).units
+            legacy_h2 = sum(
+                1
+                for unit in units
+                if unit.kind == "h2"
+                and not (unit.heading and re.search(
+                    r"\bMC-(?:DEC|CON|DNU|PREF|AREA|INBOX|TOMB)-\d{8}-[0-9a-f]{8}\b",
+                    unit.heading,
+                    re.I,
+                ))
             )
-            legacy_h2 = sum(1 for line in without_structured.splitlines() if line.startswith("## "))
-            legacy_bullets = sum(
-                1 for kind, _unit in split_top_level_bullet_units(without_structured)
-                if kind == "bullet"
-            )
+            legacy_bullets = sum(1 for unit in units if unit.kind == "bullet")
             legacy_count = legacy_h2 + legacy_bullets
             if legacy_count:
                 warnings.append(
