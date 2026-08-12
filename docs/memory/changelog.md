@@ -3,12 +3,10 @@
 Entries are newest first.
 
 ## 2026-08-09
-- Closed manifest lexical/topology bypasses, contained migration operands including symlink loops, enforced local
-  overlay path/mode/identity/scaffold boundaries, made multi-root review diagnostic-only, completed reset inventory
-  dependencies, restored stale-root move recovery, completed shared promotion/supersession integrity, restricted local
-  relations/cross-store/random IDs, unified mixed H2/bullet boundaries, made renderers/soft forget safe and idempotent,
-  rejected empty bodies/requirements and ambiguous migration candidates, contained promotion/archive access,
-  preserved real cycle edges, and removed `exclusive-group` while recording AMBIGUOUS deferral.
+- Closed v0.11 cross-module audit gaps in manifest topology, migration containment and formal-entry validation, local
+  overlay identity/path/relation safety, cross-store ID allocation, promotion/supersession integrity, stale-root
+  recovery, source-preserving visible Markdown units, mixed inbox/compaction/quality boundaries, line-safe rendering,
+  idempotent forgetting, cycle detection, and AMBIGUOUS deferral.
 - Unified manifest Markdown section walking, made route topology and Optional index uniqueness fail closed, hardened
   local reset against symlinks/binary state, and made migration operand validation seed-free on failure.
 
