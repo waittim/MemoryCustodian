@@ -35,6 +35,7 @@ Do not read `archive/` unless the user asks.
 - Do not erase uncertain information silently.
 - Do not resurrect topics listed in `do-not-use.md`.
 - Preserve the decision, not the full conversation.
+- Preserve Subject IDs, Facets, Evidence, and supersede relationships when semantically rewriting entries.
 - Shorten entries over 120 tokens semantically before archiving other decisions; never truncate mechanically.
 - Prefer short bullets over narrative history.
 - Keep tombstones active; do not archive `do-not-use.md` entries merely to meet a budget.
@@ -47,8 +48,17 @@ Do not read `archive/` unless the user asks.
 
 The CLI must not classify inbox entries by keywords or infer semantic destinations. It may report budgets and candidates, remove exact duplicate top-level bullet units, and filter exact tombstone matches. A top-level bullet unit includes all of its continuation and nested lines; exact comparison and removal operate on that complete unit, never on a nested bullet or continuation line independently. All other candidates remain in the inbox until an Agent or user reviews their scope, type, confidence, and overlap with existing memory.
 
-Use `memory-custodian compact` to generate the candidate report. After review, edit the destination Markdown directly or call `add`, then run `check`. Use `memory-custodian compact --apply` only to apply the exact mechanical inbox cleanup shown in the preview; it does not promote candidates or remove them merely because they were reported.
+Use `memory-custodian compact` to generate the candidate report and Plan ID. After review, edit the destination
+Markdown directly or call `add`, then run `check`. Under Protocol 0.6, use
+`memory-custodian compact --apply --confirm-plan <PLAN_ID>` only to apply the exact mechanical inbox cleanup shown
+in the preview; it does not promote candidates or remove them merely because they were reported.
 
-For an over-budget active file, use `memory-custodian compact --target decisions.md` first. With `--target`, the CLI reports the current budget state and applies only conservative deterministic changes: exact duplicate complete top-level bullet-unit removal for simple bullet files, or older complete H2 entry archival for supported history-like files such as `decisions.md` and `changelog.md`.
+At `NEAR LIMIT` (80%–100%) or `OVER BUDGET`, use `memory-custodian compact --target decisions.md` first.
+`add` emits a deterministic dry-run maintenance preview when a write reaches either state, but never applies
+semantic changes. With `--target`, the CLI reports the current budget state and applies only conservative
+deterministic changes: exact duplicate complete top-level bullet-unit removal for simple bullet files, or older
+complete H2 entry archival for supported history-like files such as `decisions.md` and `changelog.md`.
+Archive files have one canonical file-level explanation. Repeated same-day compaction must not append duplicate
+batch wrappers; changelog entries with the same date are grouped under one heading and remain newest-first.
 
 Decision archival has an explicit semantic gate. First shorten long entries, consolidate, supersede, and relocate scoped knowledge; then review the dry run. The CLI blocks age-based archival while kept decisions remain over the per-entry guide. Use `--apply --archive-oldest` only when the proposed oldest entries contain no active invariant that would become unreachable. Changelog archival does not require this extra confirmation.

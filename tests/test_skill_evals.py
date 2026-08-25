@@ -20,7 +20,8 @@ class SkillEvalTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("MemoryCustodian skill contract check: OK", result.stdout)
-        self.assertIn("Scenarios: 9", result.stdout)
+        self.assertIn("Scenarios: 26", result.stdout)
+        self.assertIn("Skill contracts: 14", result.stdout)
 
 
 if __name__ == "__main__":

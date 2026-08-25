@@ -2,6 +2,64 @@
 
 ## Unreleased
 
+## v0.10.0 - 2026-07-28
+
+### Subject identity, routing, and erasure alignment
+
+- Added `subjects.md` as a non-routed, plain-text registry with stable Subject IDs, exact normalized alias and
+  canonical-reference ownership, and preview-first add, rename, and alias mutations.
+- Added controlled Facets and active-owner admission based on normalized `Scope + Subject ID + Facet`, including
+  explicit supersede transitions and legacy coverage reporting.
+- Made routing provenance structured and deterministic for manifest routes and explicit profile/area inputs,
+  without hidden relevance scoring.
+- Added a unified `ErasureScope` for forget previews and apply output. Hard and purge state that managed-memory
+  removal does not rewrite Git history or revoke distributed copies.
+- Added prevention-first sensitive-memory guidance: prefer minimal abstract constraints and controlled Evidence
+  references over copying raw secrets, contract text, or unnecessary vendor details.
+- Extended same-version migration to install Subject protocol metadata and registry scaffolding without inferring
+  semantic identity from legacy prose.
+
+### Evidence-backed entry governance
+
+- Added Protocol 0.6 manifests with entry schema 1, persistent UUIDv4 project identity, and evidence-required admission.
+- Added stable Entry IDs, structured active/candidate entries, source-path validation, candidate-only unconfirmed evidence, and linked supersede updates.
+- Kept Protocol 0.5 freeform units readable and migrated structured legacy decisions with `legacy-unverified` evidence without claiming semantic verification.
+
+### Concurrent and preview-safe mutation
+
+- Added one bootstrap-to-permanent project mutation guard for every writer, including repair, enable, migration,
+  Subject operations, and Protocol 0.5 compatibility writes. The manifest project ID installed during repair is
+  now exactly the identity of the permanent lock being held.
+- Added repo-relative canonical Plan IDs with private execution and public preview representations. Ordinary plans
+  expose base/output SHA-256 digests; hard and purge public plans redact raw arguments, digests, and matching topic
+  text in path/blocker metadata while a random private nonce keeps confirmation identifiers resistant to topic
+  dictionary attacks.
+- Generate migration project identity from a random UUIDv4 persisted in platform state for the preview/apply pair, preventing identical legacy projects from sharing locks or future overlays.
+- Rebuild complete replacement, supersede, compaction, forgetting, and migration plans after acquiring the mutation lock; legacy destructive replacement now requires migration first.
+- Hold the normalized-path bootstrap lock through permanent-lock acquisition and mutation-plan rebuild, eliminating
+  the repair/enable handoff window.
+- Recover malformed private lock residue only through explicit stale-lock recovery after a five-minute safety age,
+  and opportunistically expire abandoned preview seeds after seven days.
+- Added real-process concurrent-add and stale-plan regression tests. These tests verify deterministic safety properties, not a live cross-agent benchmark or database transaction semantics.
+- Added deterministic `OK`, `NEAR LIMIT`, and `OVER BUDGET` states; writes at 80% or above emit a no-write maintenance preview instead of relying on an agent to calculate the threshold.
+- Made same-day archives idempotent: one canonical file note, no repeated batch wrappers, merged changelog date headings, and newest-first archived changelog order.
+
+### Trust, privacy, and security boundaries
+
+- Documented that memory cannot elevate authority or override system, user, safety, or permission boundaries.
+- Added redacted deterministic checks for common credential-like patterns, machine paths, personal email, and phone-number shapes. These checks are not complete secret detection and never auto-delete content.
+- Redact every recognized sensitive span on a finding line before rendering any preview, and revalidate manually
+  edited active/candidate Evidence during `check`.
+- Validate formal structured entries as schema claims: reject duplicate fields, missing Status/Scope/Evidence,
+  missing or mismatched typed bodies, duplicate relations, and contradictory lifecycle fields.
+- Keep area decision IDs as `MC-AREA` while area constraints, preferences, and rejected approaches retain
+  `MC-CON`, `MC-PREF`, and `MC-DNU`; validate type, body, storage path, and Scope bidirectionally.
+- Generate hard-forget Tombstone suffixes from random repo-external preview seeds rather than topic-derived hashes;
+  protect both formal and provisional Subject references during purge.
+- Restrict private state directories/files to `0700`/`0600` on POSIX and reject symlink, foreign-owner, or
+  non-regular private state targets.
+- Keep ordinary scan output summary-only while `--security` and `--privacy` reveal redacted locations; validate inbox statuses and promotion/supersede relation integrity.
+
 ### Demo and submission materials
 
 - Added the reproducible NightNotes demo fixture and its intentionally failing persistence acceptance test.
@@ -15,7 +73,8 @@
 
 ### Compatibility and repository hygiene
 
-- Restored Python 3.10+ support with CI coverage on Python 3.10 and 3.13.
+- Restored Python 3.10+ support with CI coverage across every supported minor from Python 3.10 through 3.14.
+- Run CI on every pushed branch and include version-drift verification plus explicit privacy/security checks.
 - Removed generated `egg-info` metadata from source control and expanded build-artifact ignores.
 - Removed an obsolete demo preparation script that recursively deleted a user-provided target path.
 

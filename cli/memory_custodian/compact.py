@@ -6,8 +6,8 @@ from pathlib import Path, PurePosixPath
 
 from .protocol import (
     DECISION_ENTRY_BUDGET,
-    appended_text,
     budget_for,
+    budget_state,
     changelog_text,
     estimate_tokens,
     long_decision_entries,
@@ -18,7 +18,16 @@ from .protocol import (
     today,
 )
 from .mutations import TextMutation, apply_mutations
+from .locking import project_mutation_guard
+from .plans import MutationPlan, print_plan
 from .templates import render_template
+from .entries import parse_structured_entries
+from .protocol import (
+    CURRENT_PROTOCOL_VERSION,
+    compare_versions,
+    project_id_from_manifest,
+    protocol_metadata,
+)
 
 ARCHIVABLE_H2_TARGETS = {"decisions.md", "changelog.md"}
 BULLET_DEDUPE_TARGETS = {"constraints.md", "preferences.md"}
@@ -26,6 +35,179 @@ MANUAL_TARGET_REASONS = {
     "brief.md": "brief.md is the current one-screen summary; rewrite it semantically instead of archiving old lines.",
     "do-not-use.md": "do-not-use.md tombstones remain active; consolidate or shorten them instead of archiving them away.",
 }
+
+
+def _compact_plan(
+    args,
+    project_root: Path,
+    memory_dir: Path,
+    mutations: list[TextMutation],
+) -> MutationPlan:
+    manifest = (memory_dir / "manifest.md").read_text(encoding="utf-8")
+    metadata = protocol_metadata(manifest)
+    comparison = compare_versions(
+        metadata.get("protocol_version", "0.5"),
+        CURRENT_PROTOCOL_VERSION,
+    )
+    if comparison is None:
+        raise ValueError("Project manifest has an invalid protocol version.")
+    if comparison > 0:
+        raise ValueError("Project protocol is newer than this CLI supports.")
+    protocol_06 = comparison == 0
+    project_id = project_id_from_manifest(manifest) if protocol_06 else "legacy-protocol-0.5"
+    return MutationPlan(
+        "compact",
+        {"target": args.target or "inbox.md", "archive_oldest": args.archive_oldest},
+        project_id or "legacy-protocol-0.5",
+        metadata.get("protocol_version", "0.5"),
+        tuple(mutations),
+        project_root=project_root,
+    )
+
+
+def _execute_plan(
+    args,
+    project_root: Path,
+    memory_dir: Path,
+    mutations: list[TextMutation],
+    rebuild,
+) -> bool:
+    plan = _compact_plan(args, project_root, memory_dir, mutations)
+    protocol_06 = plan.protocol_version == CURRENT_PROTOCOL_VERSION
+    project_id = plan.project_id
+    print_plan(plan)
+    if not args.apply:
+        print("Dry run only. Re-run with --apply" + (" --confirm-plan <PLAN_ID>." if protocol_06 else "."))
+        return False
+    if protocol_06 and not args.confirm_plan:
+        raise ValueError("Protocol 0.6 compact apply requires --confirm-plan <PLAN_ID>.")
+    with project_mutation_guard(
+        project_root,
+        memory_dir / "manifest.md",
+        "compact",
+        timeout=args.lock_timeout,
+        break_stale=args.break_stale_lock,
+        allow_legacy=True,
+    ) as guard:
+        current_mutations = rebuild()
+        current_plan = _compact_plan(
+            args,
+            project_root,
+            memory_dir,
+            current_mutations,
+        )
+        current_comparison = compare_versions(
+            current_plan.protocol_version,
+            CURRENT_PROTOCOL_VERSION,
+        )
+        if current_comparison is None:
+            raise ValueError(
+                "Project protocol became invalid before compact apply."
+            )
+        if protocol_06:
+            if guard.project_id != project_id:
+                raise ValueError(
+                    "Project identity changed before compact apply; preview again."
+                )
+            if current_plan.plan_id != args.confirm_plan:
+                print_plan(current_plan)
+                raise ValueError(
+                    f"Stale or mismatched plan: confirmed {args.confirm_plan}, "
+                    f"current Plan ID is {current_plan.plan_id}. No files written."
+                )
+        elif current_comparison == 0:
+            raise ValueError(
+                "Project migrated to Protocol 0.6 before compatibility compact apply; "
+                "preview again and confirm the new Plan ID."
+            )
+        elif current_comparison > 0:
+            raise ValueError(
+                "Project protocol became newer than this CLI supports before "
+                "compatibility compact apply; update MemoryCustodian."
+            )
+        else:
+            print(
+                "Migration available: Protocol 0.5 apply keeps legacy confirmation "
+                "behavior under the bootstrap mutation guard."
+            )
+        apply_mutations(current_mutations)
+        mutations = current_mutations
+    print("Written files:")
+    for mutation in mutations:
+        print(f"- {mutation.path}")
+    return True
+
+
+def _dedupe_mutations(memory_dir: Path, target: str, path: Path) -> list[TextMutation]:
+    original = path.read_text(encoding="utf-8")
+    deduped, removed = _dedupe_bullets(original)
+    if not removed:
+        return []
+    mutations = [TextMutation(path, deduped)]
+    changelog = memory_dir / "changelog.md"
+    if changelog.exists() and changelog != path:
+        mutations.append(
+            TextMutation(
+                changelog,
+                changelog_text(
+                    changelog.read_text(encoding="utf-8"),
+                    f"Compacted {target}: removed {removed} duplicate bullet(s).",
+                ),
+            )
+        )
+    return mutations
+
+
+def _planned_archive_mutations(memory_dir: Path, target: str, budget: int) -> list[TextMutation]:
+    path = memory_dir.joinpath(*PurePosixPath(target).parts)
+    original = path.read_text(encoding="utf-8")
+    plan = _plan_h2_archive(original, budget)
+    if plan is None:
+        return []
+    mutations = _archive_mutations(memory_dir, target, plan["archived"])
+    mutations.append(TextMutation(path, plan["compacted"]))
+    changelog = memory_dir / "changelog.md"
+    if target != "changelog.md" and changelog.exists():
+        mutations.append(
+            TextMutation(
+                changelog,
+                changelog_text(
+                    changelog.read_text(encoding="utf-8"),
+                    f"Compacted {target}: archived {len(plan['archived'])} old entries.",
+                ),
+            )
+        )
+    return mutations
+
+
+def _inbox_cleanup_mutations(memory_dir: Path) -> list[TextMutation]:
+    inbox = memory_dir / "inbox.md"
+    original = inbox.read_text(encoding="utf-8")
+    structured_candidates = [
+        entry for entry in parse_structured_entries(inbox, original)
+        if entry.status == "candidate"
+    ]
+    if structured_candidates:
+        return []
+    tombstone_path = memory_dir / "do-not-use.md"
+    tombstones = tombstone_path.read_text(encoding="utf-8") if tombstone_path.exists() else ""
+    cleaned, _candidates, duplicates, tombstone_matches = _clean_inbox(original, tombstones)
+    if cleaned == original:
+        return []
+    mutations = [TextMutation(inbox, cleaned)]
+    changelog = memory_dir / "changelog.md"
+    if changelog.exists():
+        message = (
+            f"Cleaned inbox: removed {duplicates} exact duplicate(s) "
+            f"and {tombstone_matches} exact tombstone match(es)."
+        )
+        mutations.append(
+            TextMutation(
+                changelog,
+                changelog_text(changelog.read_text(encoding="utf-8"), message),
+            )
+        )
+    return mutations
 
 
 def _bullet_key(text: str) -> str:
@@ -55,12 +237,18 @@ def _clean_inbox(text: str, tombstones: str) -> tuple[str, list[str], int, int]:
         if kind == "bullet" and _bullet_key(unit_text)
     }
     tombstone_keys.update(
-        unit.heading.split(":", 1)[1].strip().casefold()
+        (
+            unit.heading.split("Tombstone:", 1)[1].strip().casefold()
+            if "Tombstone:" in unit.heading
+            else unit.heading.split(":", 1)[1].strip().casefold()
+        )
         for unit in parse_markdown_units(tombstones).units
         if unit.kind == "h2"
         and unit.heading is not None
-        and unit.heading.casefold().startswith("tombstone:")
-        and unit.heading.split(":", 1)[1].strip()
+        and (
+            unit.heading.casefold().startswith("tombstone:")
+            or " — tombstone:" in unit.heading.casefold()
+        )
     )
     seen: set[str] = set()
     candidates: list[str] = []
@@ -173,6 +361,64 @@ def _archive_target_path(memory_dir: Path, target: str) -> Path:
     return memory_dir / "archive" / f"{stem}-{today()}.md"
 
 
+def _is_legacy_archive_wrapper(section: list[str], target: str) -> bool:
+    heading = section[0] if section else ""
+    return heading.endswith(f" - From {target}") and any(
+        line.strip() == "Reason:" for line in section[1:]
+    )
+
+
+def _merge_changelog_sections(sections: list[list[str]]) -> list[list[str]]:
+    merged: dict[str, list[str]] = {}
+    order: list[str] = []
+    for section in sections:
+        heading = section[0].strip()
+        if heading not in merged:
+            merged[heading] = list(section)
+            order.append(heading)
+            continue
+        body = list(section[1:])
+        while body and not body[0].strip():
+            body.pop(0)
+        if body:
+            if merged[heading] and merged[heading][-1].strip():
+                merged[heading].append("")
+            merged[heading].extend(body)
+
+    dated = all(
+        len(heading) == len("## 2000-01-01")
+        and heading.startswith("## ")
+        and heading[3:7].isdigit()
+        for heading in order
+    )
+    if dated:
+        order.sort(key=lambda heading: heading[3:], reverse=True)
+    return [merged[heading] for heading in order]
+
+
+def _render_archive_document(
+    target: str,
+    existing: str,
+    archived_sections: list[list[str]],
+) -> str:
+    _preamble, existing_sections = _split_h2_sections(existing)
+    retained = [
+        section
+        for section in existing_sections
+        if not _is_legacy_archive_wrapper(section, target)
+    ]
+    sections = [*archived_sections, *retained]
+    if target == "changelog.md":
+        sections = _merge_changelog_sections(sections)
+    preamble = [
+        f"# Archived Memory: {target}",
+        "",
+        "Complete historical entries moved from active memory after reviewed compaction.",
+        "This file is explicit-only and is not part of normal task context.",
+    ]
+    return _join_h2_sections(preamble, sections)
+
+
 def _archive_mutations(memory_dir: Path, target: str, archived_sections: list[list[str]]) -> list[TextMutation]:
     mutations: list[TextMutation] = []
     readme = memory_dir / "archive" / "README.md"
@@ -180,16 +426,8 @@ def _archive_mutations(memory_dir: Path, target: str, archived_sections: list[li
         mutations.append(TextMutation(readme, render_template("archive/README.md", today())))
 
     archive_path = _archive_target_path(memory_dir, target)
-    body = (
-        f"## {today()} - From {target}\n"
-        "Reason:\n"
-        "Active memory exceeded its context budget; older complete entries were moved to explicit-only archive.\n\n"
-        + "\n\n".join("\n".join(section).strip() for section in archived_sections)
-    )
-    if archive_path.exists():
-        archive_text = appended_text(archive_path.read_text(encoding="utf-8"), body)
-    else:
-        archive_text = f"# Archived Memory: {target}\n\n{body}\n"
+    existing = archive_path.read_text(encoding="utf-8") if archive_path.exists() else ""
+    archive_text = _render_archive_document(target, existing, archived_sections)
     mutations.append(TextMutation(archive_path, archive_text))
     return mutations
 
@@ -204,7 +442,7 @@ def _print_long_decision_entries(entries: list[tuple[str, int]]) -> None:
         print(f"- ... and {len(entries) - 10} more")
 
 
-def _run_target_compaction(args, memory_dir: Path) -> int:
+def _run_target_compaction(args, project_root: Path, memory_dir: Path) -> int:
     target, path = _target_path(memory_dir, args.target)
     if not path.exists():
         raise FileNotFoundError(f"Target not found: {path}")
@@ -217,6 +455,8 @@ def _run_target_compaction(args, memory_dir: Path) -> int:
     print("# Target Compaction Plan")
     print(f"Target: {target}")
     print(f"Current tokens: {tokens}/{budget} max")
+    state = budget_state(tokens, budget)
+    print(f"State: {state}")
     _print_long_decision_entries(long_entries)
     if tokens <= budget:
         if long_entries:
@@ -224,6 +464,14 @@ def _run_target_compaction(args, memory_dir: Path) -> int:
                 "Manual review required: shorten long decisions semantically; "
                 "move supporting detail to constraints, matched area context, or source documentation."
             )
+        elif state == "NEAR LIMIT":
+            print("Maintenance preview (dry run; no files changed):")
+            if target == "decisions.md":
+                print("- Shorten long entries, merge duplicates, link superseded decisions, and move scoped knowledge.")
+                print("- Confirm active invariants remain reachable before considering age-based archival.")
+            else:
+                print("- Review duplicates, obsolete detail, and content that belongs in a scoped module.")
+            print("Maintenance recommended before the next write.")
         else:
             print("Status: OK")
         return 0
@@ -237,26 +485,16 @@ def _run_target_compaction(args, memory_dir: Path) -> int:
             projected = estimate_tokens(working)
             print(f"Action: remove {removed} exact duplicate bullet(s)")
             print(f"Projected tokens after dedupe: {projected}/{budget} max")
-            if args.apply:
-                mutations = [TextMutation(path, working)]
-                changelog = memory_dir / "changelog.md"
-                if changelog.exists() and changelog != path:
-                    mutations.append(
-                        TextMutation(
-                            changelog,
-                            changelog_text(
-                                changelog.read_text(encoding="utf-8"),
-                                f"Compacted {target}: removed {removed} duplicate bullet(s).",
-                            ),
-                        )
-                    )
-                apply_mutations(mutations)
-                applied_actions.append("deduped bullets")
+            mutations = _dedupe_mutations(memory_dir, target, path)
             if projected <= budget:
-                if args.apply:
+                if _execute_plan(
+                    args,
+                    project_root,
+                    memory_dir,
+                    mutations,
+                    lambda: _dedupe_mutations(memory_dir, target, path),
+                ):
                     print("Applied target compaction.")
-                else:
-                    print("Dry run only. Re-run with --apply to write deterministic changes.")
                 return 0
 
     manual_reason = MANUAL_TARGET_REASONS.get(target)
@@ -289,11 +527,19 @@ def _run_target_compaction(args, memory_dir: Path) -> int:
                     "Semantic review required: merge superseded entries and retain active invariants "
                     "in brief.md, constraints.md, or matched areas before archival."
                 )
+            mutations = _planned_archive_mutations(memory_dir, target, budget)
             if not args.apply:
                 if target == "decisions.md":
-                    print("Dry run only. After semantic review, re-run with --apply --archive-oldest.")
+                    print("After semantic review, confirm this plan with --apply --archive-oldest.")
                 else:
-                    print("Dry run only. Re-run with --apply after reviewing the plan.")
+                    print("Review this plan before applying.")
+                _execute_plan(
+                    args,
+                    project_root,
+                    memory_dir,
+                    mutations,
+                    lambda: _planned_archive_mutations(memory_dir, target, budget),
+                )
                 return 0
             if target == "decisions.md" and kept_long_entries:
                 print("Not applied: shorten the kept long decisions before age-based archival.")
@@ -305,20 +551,13 @@ def _run_target_compaction(args, memory_dir: Path) -> int:
                 )
                 return 1
 
-            mutations = _archive_mutations(memory_dir, target, plan["archived"])
-            mutations.append(TextMutation(path, plan["compacted"]))
-            changelog = memory_dir / "changelog.md"
-            if target != "changelog.md" and changelog.exists():
-                mutations.append(
-                    TextMutation(
-                        changelog,
-                        changelog_text(
-                            changelog.read_text(encoding="utf-8"),
-                            f"Compacted {target}: archived {len(plan['archived'])} old entries.",
-                        ),
-                    )
-                )
-            apply_mutations(mutations)
+            _execute_plan(
+                args,
+                project_root,
+                memory_dir,
+                mutations,
+                lambda: _planned_archive_mutations(memory_dir, target, budget),
+            )
             print("Applied target compaction.")
             return 0
 
@@ -339,7 +578,7 @@ def run(args) -> int:
     if not (memory_dir / "manifest.md").exists():
         raise ValueError("manifest.md is missing; the MemoryCustodian setup is incomplete or corrupted")
     if args.target:
-        return _run_target_compaction(args, memory_dir)
+        return _run_target_compaction(args, project_root, memory_dir)
 
     inbox = memory_dir / "inbox.md"
     if not inbox.exists():
@@ -348,8 +587,16 @@ def run(args) -> int:
     original = inbox.read_text(encoding="utf-8")
     tombstone_path = memory_dir / "do-not-use.md"
     tombstones = tombstone_path.read_text(encoding="utf-8") if tombstone_path.exists() else ""
-    items = [unit_text for kind, unit_text in split_top_level_bullet_units(original) if kind == "bullet"]
-    cleaned, candidates, duplicates, tombstone_matches = _clean_inbox(original, tombstones)
+    structured_candidates = [
+        entry for entry in parse_structured_entries(inbox, original)
+        if entry.status == "candidate"
+    ]
+    if structured_candidates:
+        items = [entry.text for entry in structured_candidates]
+        cleaned, candidates, duplicates, tombstone_matches = original, items, 0, 0
+    else:
+        items = [unit_text for kind, unit_text in split_top_level_bullet_units(original) if kind == "bullet"]
+        cleaned, candidates, duplicates, tombstone_matches = _clean_inbox(original, tombstones)
 
     print("# Compaction Plan")
     print(f"Inbox items: {len(items)}")
@@ -357,29 +604,30 @@ def run(args) -> int:
     print(f"Exact tombstone matches removable: {tombstone_matches}")
     print(f"Candidates requiring Agent review: {len(candidates)}")
     for index, item in enumerate(candidates, start=1):
+        if structured_candidates:
+            entry = structured_candidates[index - 1]
+            print(f"- [{index}] {entry.entry_id} — {entry.title}")
+            continue
         lines = item.splitlines()
         print(f"- [{index}] {_bullet_label(item)}")
         for line in lines[1:]:
             print(f"      {line}")
     print("No semantic destinations are inferred. Review scope, type, confidence, and existing memory before using `add` or editing Markdown.")
 
-    if not args.apply:
-        if duplicates or tombstone_matches:
-            print("Dry run only. Re-run with --apply to remove only the exact mechanical matches shown above.")
-        else:
-            print("Dry run only. No deterministic inbox cleanup is available.")
-        return 0
-
     if cleaned == original:
         print("No deterministic inbox changes to apply; candidates remain for Agent review.")
         return 0
 
-    mutations = [TextMutation(inbox, cleaned)]
-    changelog = memory_dir / "changelog.md"
-    if changelog.exists():
-        message = f"Cleaned inbox: removed {duplicates} exact duplicate(s) and {tombstone_matches} exact tombstone match(es)."
-        mutations.append(TextMutation(changelog, changelog_text(changelog.read_text(encoding="utf-8"), message)))
-    apply_mutations(mutations)
+    mutations = _inbox_cleanup_mutations(memory_dir)
+    applied = _execute_plan(
+        args,
+        project_root,
+        memory_dir,
+        mutations,
+        lambda: _inbox_cleanup_mutations(memory_dir),
+    )
+    if not applied:
+        return 0
     if candidates:
         print("Applied deterministic inbox cleanup; candidates remain for Agent review.")
     else:

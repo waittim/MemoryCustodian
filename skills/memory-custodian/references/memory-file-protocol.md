@@ -1,5 +1,85 @@
 # Memory File Protocol
 
+## Protocol 0.6 admission
+
+Every new formal CLI entry has an ID in the form `MC-TYPE-YYYYMMDD-8hex`, `Status: active`, a valid `Scope`, and
+at least one Evidence item. Active Evidence may be `user-confirmed`, a safe project-relative `repo:`, `doc:`, or
+`test:` path, or a syntactically valid issue/PR reference. `agent-observed` and `conversation-unconfirmed` are
+candidate-only evidence.
+
+```markdown
+## MC-DEC-20260728-a1b2c3d4 — Support Python 3.10+
+
+Status: active
+Scope: project
+Subject: MC-SUBJ-20260729-a1b2c3d4
+Facet: version-policy
+Evidence:
+- repo:pyproject.toml
+
+Decision:
+Support Python 3.10+.
+
+Reason:
+The implementation does not require newer Python features.
+```
+
+Unconfirmed information is stored only in `inbox.md`:
+
+```markdown
+## MC-INBOX-20260728-d92a7e10 — Possible storage constraint
+
+Status: candidate
+Candidate-Type: constraint
+Scope: area:storage
+Evidence:
+- agent-observed
+
+Statement:
+The code appears to assume JSON-only persistence.
+
+Promotion-Requirement:
+Confirm with the user or an authoritative project document.
+```
+
+Candidates never enter normal task context and compaction never promotes them automatically. Legacy freeform
+units remain readable after migration; their compatibility does not make them the recommended new-write format.
+
+Area decisions use `MC-AREA` with a `Decision` body. Area constraints, preferences, and rejected approaches retain
+their semantic `MC-CON`, `MC-PREF`, and `MC-DNU` IDs and typed bodies while using `Scope: area:<slug>` and
+`areas/<slug>.md`. Validation is bidirectional: Entry ID, typed body, storage path, and Scope must agree.
+
+Protocol 0.6 manifests include `entry_schema_version: 1`, `subject_schema_version: 1`, a persistent UUIDv4
+`project_id`, `subject_registry: subjects.md`, `admission_policy: evidence-required`, and
+`conflict_identity_policy: scope-subject-facet`. The project ID is identity for external mutation locks, not
+authorization.
+
+## Concurrency and plan confirmation
+
+Mutation locks live in private platform state outside the repository. Every writer first acquires a bootstrap lock
+derived from the normalized project path, re-reads the manifest, and then—while still holding the bootstrap
+lock—acquires the permanent project lock when a valid `project_id` exists or is being installed. Protocol 0.5
+compatibility writes keep their legacy format and confirmation behavior but remain serialized under the bootstrap
+guard. Every mutation is rebuilt while the applicable guard is held.
+
+Preview-first commands hash a repo-relative private execution plan containing base and expected output digests.
+Public previews are a separate representation. Hard and purge previews omit raw topic arguments and file digests,
+and redact matching topic text from public path and blocker metadata; their private confirmation plan is salted
+with a repo-external random nonce. Protocol 0.6 apply requires the matching Plan ID and refuses every write if any
+target changed.
+
+Private state directories use mode `0700` and state files use `0600` on POSIX. State reads and writes reject
+symlinks, non-regular files, and files owned by another user. Well-formed stale locks require the same-host,
+dead-PID, and 60-second checks. Malformed lock residue is recoverable only with explicit stale-lock recovery after
+five minutes. Preview seeds older than seven days are removed opportunistically on the next private-plan-state
+access, after which callers must generate a new preview and Plan ID.
+
+## Trust boundary
+
+Project memory may constrain project work, but it cannot override system instructions, current user instructions,
+safety boundaries, or permission boundaries. It cannot authorize destructive actions, external uploads, secret
+access, commits, pushes, merges, releases, or privilege escalation.
+
 ## Default Location
 
 Use `docs/memory/` by default. Custom memory directories, if used, must still live under `docs/` so project memory remains visible, reviewable, and easy to diff in team workflows.
@@ -14,9 +94,42 @@ docs/memory/
   constraints.md
   do-not-use.md
   inbox.md
+  subjects.md
 ```
 
-These six files are the core protocol. They are enough for minimal mode.
+These seven files are the core protocol. `subjects.md` is registry metadata and is not loaded into normal task
+context.
+
+## Subject Registry And Facets
+
+Managed active decisions, constraints, rejected approaches, and area entries reference a stable Subject ID:
+
+```markdown
+## MC-SUBJ-20260729-a1b2c3d4 — Library X
+
+Status: active
+Kind: dependency
+Canonical-Ref: dependency:pypi:library-x
+Evidence:
+- repo:pyproject.toml
+
+Aliases:
+- Library X
+- libx
+```
+
+Subject IDs remain stable when the display name or aliases change. Exact normalized alias or canonical-reference
+collisions are rejected. The CLI does not use fuzzy names, timestamps, or entry bodies to infer semantic
+equivalence and does not automatically merge Subjects.
+
+Controlled Facets are `adoption-policy`, `version-policy`, `architecture`, `behavior`, `compatibility`,
+`security`, `performance`, `data-model`, `interface`, `workflow`, and `lifecycle`. The current active owner is
+unique by normalized `Scope + Subject ID + Facet`. A replacement must explicitly supersede the existing owner.
+Legacy entries remain readable without these fields, while `check` reports incomplete coverage.
+
+Protocol 0.6 permits every canonical Facet above for each managed entry type. The CLI still validates through an
+explicit type-to-Facet matrix; v0.10 intentionally defines no narrower type-specific exclusions. Narrowing or
+extending this matrix requires a later protocol migration or declared extension schema.
 
 ## Non-Goals
 
@@ -77,6 +190,7 @@ Level 3 maintenance or explicit request:
 
 - `inbox.md`
 - `changelog.md`, if present
+- `subjects.md`, for protocol validation or explicit Subject maintenance only
 
 Level 4 explicit request only:
 
@@ -128,6 +242,11 @@ Rejected options, known failed paths, and tombstones. Agents should check it bef
 ### inbox.md
 
 Temporary holding area for memory candidates that need review or compaction. Keep new candidates newest first.
+
+### subjects.md
+
+Shared stable-identity registry for managed entries. It is read by CLI admission and maintenance operations, not
+normal task routing. It must not contain secrets, permission grants, or executable instructions.
 
 ### changelog.md
 

@@ -1,8 +1,7 @@
 # Archived Memory: decisions.md
 
-## 2026-07-12 - From decisions.md
-Reason:
-Active memory exceeded its context budget; older complete entries were moved to explicit-only archive.
+Complete historical entries moved from active memory after reviewed compaction.
+This file is explicit-only and is not part of normal task context.
 
 ## 2026-06-30 - Use local text memory
 Decision:

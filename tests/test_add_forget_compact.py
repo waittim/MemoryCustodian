@@ -8,7 +8,8 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "cli"))
 
-from memory_custodian.main import main
+from tests.cli_test_support import main
+from memory_custodian.compact import _archive_mutations, _archive_target_path
 
 
 def curate_brief(memory: Path) -> None:
@@ -19,6 +20,72 @@ def curate_brief(memory: Path) -> None:
 
 
 class AddForgetCompactTests(unittest.TestCase):
+    def _assert_area_scoped_entry(
+        self,
+        *,
+        kind: str,
+        code: str,
+        body: str,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            memory = Path(tmp) / "docs" / "memory"
+            curate_brief(memory)
+            self.assertEqual(
+                main(
+                    [
+                        "add",
+                        f"Area-scoped {kind} regression.",
+                        "--type",
+                        kind,
+                        "--area",
+                        "backend",
+                        "--project-root",
+                        tmp,
+                    ]
+                ),
+                0,
+            )
+            area = (memory / "areas" / "backend.md").read_text(encoding="utf-8")
+            self.assertRegex(
+                area,
+                rf"(?m)^## MC-{code}-\d{{8}}-[0-9a-f]{{8}}\b",
+            )
+            self.assertIn(f"\n{body}:\n", area)
+            self.assertIn("Scope: area:backend", area)
+            output = StringIO()
+            with redirect_stdout(output):
+                self.assertEqual(main(["check", "--project-root", tmp]), 0)
+            self.assertIn("MemoryCustodian check: OK", output.getvalue())
+
+    def test_area_decision_id_body_scope_and_storage_are_valid(self):
+        self._assert_area_scoped_entry(
+            kind="decision",
+            code="AREA",
+            body="Decision",
+        )
+
+    def test_area_constraint_id_body_scope_and_storage_are_valid(self):
+        self._assert_area_scoped_entry(
+            kind="constraint",
+            code="CON",
+            body="Constraint",
+        )
+
+    def test_area_preference_id_body_scope_and_storage_are_valid(self):
+        self._assert_area_scoped_entry(
+            kind="preference",
+            code="PREF",
+            body="Preference",
+        )
+
+    def test_area_do_not_use_id_body_scope_and_storage_are_valid(self):
+        self._assert_area_scoped_entry(
+            kind="do-not-use",
+            code="DNU",
+            body="Rejected",
+        )
+
     def test_add_decision_and_forget_topic(self):
         with tempfile.TemporaryDirectory() as tmp:
             self.assertEqual(main(["init", "--project-root", tmp]), 0)
@@ -35,7 +102,7 @@ class AddForgetCompactTests(unittest.TestCase):
             self.assertNotIn("SQLite", (memory / "decisions.md").read_text(encoding="utf-8"))
             tombstones = (memory / "do-not-use.md").read_text(encoding="utf-8")
             self.assertIn("Tombstone: SQLite", tombstones)
-            self.assertNotIn("Status:", tombstones)
+            self.assertIn("Status: active", tombstones)
 
     def test_add_time_series_memory_is_newest_first(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -216,10 +283,10 @@ class AddForgetCompactTests(unittest.TestCase):
             out = StringIO()
             with redirect_stdout(out):
                 self.assertEqual(main(["compact", "--project-root", tmp]), 0)
-            self.assertIn("Exact tombstone matches removable: 1", out.getvalue())
+            self.assertIn("Exact tombstone matches removable: 0", out.getvalue())
 
             self.assertEqual(main(["compact", "--project-root", tmp, "--apply"]), 0)
-            self.assertNotIn("Avoid remote cache.", (memory / "inbox.md").read_text(encoding="utf-8"))
+            self.assertIn("Avoid remote cache.", (memory / "inbox.md").read_text(encoding="utf-8"))
             self.assertEqual((memory / "do-not-use.md").read_text(encoding="utf-8"), tombstones)
 
     def test_compact_apply_does_not_promote_keyword_candidates(self):
@@ -393,18 +460,91 @@ class AddForgetCompactTests(unittest.TestCase):
             active = (memory / "changelog.md").read_text(encoding="utf-8")
             self.assertNotIn("Compacted changelog.md", active)
 
+    def test_same_day_archive_is_idempotent_and_normalizes_legacy_wrappers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = Path(tmp) / "docs" / "memory"
+            archive = memory / "archive"
+            archive.mkdir(parents=True)
+            (archive / "README.md").write_text("# Memory Archive\n", encoding="utf-8")
+            archive_path = _archive_target_path(memory, "changelog.md")
+            archive_path.write_text(
+                "# Archived Memory: changelog.md\n\n"
+                "## 2026-07-28 - From changelog.md\n"
+                "Reason:\nActive memory exceeded its context budget.\n\n"
+                "## 2026-07-19\n- Release A.\n\n"
+                "## 2026-07-28 - From changelog.md\n"
+                "Reason:\nActive memory exceeded its context budget.\n\n"
+                "## 2026-07-19\n- Release B.\n\n"
+                "## 2026-07-18\n- Release C.\n",
+                encoding="utf-8",
+            )
+
+            first = _archive_mutations(
+                memory,
+                "changelog.md",
+                [["## 2026-07-20", "- Release D."]],
+            )[-1].text
+            archive_path.write_text(first, encoding="utf-8")
+            second = _archive_mutations(
+                memory,
+                "changelog.md",
+                [["## 2026-07-21", "- Release E."]],
+            )[-1].text
+
+            self.assertEqual(second.count("# Archived Memory: changelog.md"), 1)
+            self.assertEqual(second.count("Complete historical entries moved"), 1)
+            self.assertNotIn("From changelog.md", second)
+            self.assertEqual(second.count("## 2026-07-19"), 1)
+            self.assertIn("- Release A.", second)
+            self.assertIn("- Release B.", second)
+            self.assertLess(second.index("## 2026-07-21"), second.index("## 2026-07-20"))
+            self.assertLess(second.index("## 2026-07-20"), second.index("## 2026-07-19"))
+            self.assertLess(second.index("## 2026-07-19"), second.index("## 2026-07-18"))
+
     def test_add_rule_creates_optional_rule_file(self):
         with tempfile.TemporaryDirectory() as tmp:
             self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            memory = Path(tmp) / "docs" / "memory"
+            curate_brief(memory)
             self.assertEqual(
                 main(["add", "Do not include internal notes in published text.", "--type", "rule", "--name", "output", "--project-root", tmp]),
                 0,
             )
-            rule = Path(tmp) / "docs" / "memory" / "rules" / "output.md"
+            rule = memory / "rules" / "output.md"
             self.assertIn("Rule: Output", rule.read_text(encoding="utf-8"))
             self.assertIn("published text", rule.read_text(encoding="utf-8"))
-            manifest = Path(tmp) / "docs" / "memory" / "manifest.md"
+            manifest = memory / "manifest.md"
             self.assertIn("`rules/output.md`", manifest.read_text(encoding="utf-8"))
+            self.assertEqual(main(["check", "--project-root", tmp]), 0)
+
+    def test_add_profile_uses_canonical_id_body_scope_and_storage(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            memory = Path(tmp) / "docs" / "memory"
+            curate_brief(memory)
+            self.assertEqual(
+                main(
+                    [
+                        "add",
+                        "Keep Git operations reviewable.",
+                        "--type",
+                        "profile",
+                        "--name",
+                        "git",
+                        "--project-root",
+                        tmp,
+                    ]
+                ),
+                0,
+            )
+            profile = (memory / "profiles" / "git.md").read_text(encoding="utf-8")
+            self.assertRegex(
+                profile,
+                r"(?m)^## MC-AREA-\d{8}-[0-9a-f]{8}\b",
+            )
+            self.assertIn("\nScope: project\n", profile)
+            self.assertIn("\nProfile:\n", profile)
+            self.assertEqual(main(["check", "--project-root", tmp]), 0)
 
     def test_add_area_indexes_optional_area_file(self):
         with tempfile.TemporaryDirectory() as tmp:

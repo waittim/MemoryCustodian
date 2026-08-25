@@ -1,6 +1,7 @@
 from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
+import re
 import sys
 import tempfile
 import unittest
@@ -9,7 +10,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "cli"))
 
-from memory_custodian.main import main
+from tests.cli_test_support import main
 
 
 class InitTests(unittest.TestCase):
@@ -31,8 +32,8 @@ class InitTests(unittest.TestCase):
             self.assertFalse((memory / "archive").exists())
             manifest = (memory / "manifest.md").read_text(encoding="utf-8")
             self.assertIn("## MemoryCustodian Protocol", manifest)
-            self.assertIn("- protocol_version: 0.5", manifest)
-            self.assertIn("- initialized_with: memory-custodian 0.9.1", manifest)
+            self.assertIn("- protocol_version: 0.6", manifest)
+            self.assertIn("- initialized_with: memory-custodian 0.10.0", manifest)
             decisions = (memory / "decisions.md").read_text(encoding="utf-8")
             constraints = (memory / "constraints.md").read_text(encoding="utf-8")
             self.assertIn("Entries are newest first.", decisions)
@@ -85,16 +86,12 @@ class InitTests(unittest.TestCase):
             brief = memory / "brief.md"
             brief.write_text("# Curated Brief\n\nDo not replace this.\n", encoding="utf-8")
             manifest = memory / "manifest.md"
-            damaged = manifest.read_text(encoding="utf-8").replace(
-                "- protocol_version: 0.5", "- protocol_version: 0.4"
-            )
-            manifest.write_text(damaged, encoding="utf-8")
             (memory / "constraints.md").unlink()
 
             self.assertEqual(main(["init", "--project-root", tmp, "--repair"]), 0)
 
             self.assertEqual(brief.read_text(encoding="utf-8"), "# Curated Brief\n\nDo not replace this.\n")
-            self.assertIn("- protocol_version: 0.5", manifest.read_text(encoding="utf-8"))
+            self.assertIn("- protocol_version: 0.6", manifest.read_text(encoding="utf-8"))
             self.assertTrue((memory / "constraints.md").exists())
 
     def test_init_repair_preserves_unknown_protocol_metadata_and_comments(self):
@@ -102,8 +99,8 @@ class InitTests(unittest.TestCase):
             self.assertEqual(main(["init", "--project-root", tmp]), 0)
             manifest = Path(tmp) / "docs" / "memory" / "manifest.md"
             damaged = manifest.read_text(encoding="utf-8").replace(
-                "- protocol_version: 0.5",
-                "- protocol_version: 0.4\n"
+                "- protocol_version: 0.6",
+                "- protocol_version: 0.6\n"
                 "- custom_owner: team-memory\n"
                 "<!-- Preserve this project-specific protocol note. -->",
             )
@@ -112,7 +109,7 @@ class InitTests(unittest.TestCase):
             self.assertEqual(main(["init", "--project-root", tmp, "--repair"]), 0)
 
             repaired = manifest.read_text(encoding="utf-8")
-            self.assertIn("- protocol_version: 0.5", repaired)
+            self.assertIn("- protocol_version: 0.6", repaired)
             self.assertIn("- custom_owner: team-memory", repaired)
             self.assertIn("<!-- Preserve this project-specific protocol note. -->", repaired)
 
@@ -122,7 +119,7 @@ class InitTests(unittest.TestCase):
             memory = Path(tmp) / "docs" / "memory"
             manifest = memory / "manifest.md"
             newer = manifest.read_text(encoding="utf-8").replace(
-                "- protocol_version: 0.5", "- protocol_version: 0.6"
+                "- protocol_version: 0.6", "- protocol_version: 0.7"
             )
             manifest.write_text(newer, encoding="utf-8")
             (memory / "constraints.md").unlink()
@@ -136,13 +133,31 @@ class InitTests(unittest.TestCase):
             self.assertEqual(manifest.read_text(encoding="utf-8"), newer)
             self.assertFalse((memory / "constraints.md").exists())
 
+    def test_init_repair_routes_older_protocol_to_preview_first_migrate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            memory = Path(tmp) / "docs" / "memory"
+            manifest = memory / "manifest.md"
+            older = manifest.read_text(encoding="utf-8").replace(
+                "- protocol_version: 0.6", "- protocol_version: 0.5"
+            )
+            manifest.write_text(older, encoding="utf-8")
+            (memory / "constraints.md").unlink()
+            err = StringIO()
+            with redirect_stderr(err):
+                code = main(["init", "--repair", "--project-root", tmp])
+            self.assertEqual(code, 2)
+            self.assertIn("preview-first migration", err.getvalue())
+            self.assertEqual(manifest.read_text(encoding="utf-8"), older)
+            self.assertFalse((memory / "constraints.md").exists())
+
     def test_init_repair_rejects_invalid_project_protocol_without_writing(self):
         with tempfile.TemporaryDirectory() as tmp:
             self.assertEqual(main(["init", "--project-root", tmp]), 0)
             memory = Path(tmp) / "docs" / "memory"
             manifest = memory / "manifest.md"
             invalid = manifest.read_text(encoding="utf-8").replace(
-                "- protocol_version: 0.5", "- protocol_version: not-a-version"
+                "- protocol_version: 0.6", "- protocol_version: not-a-version"
             )
             manifest.write_text(invalid, encoding="utf-8")
             (memory / "constraints.md").unlink()
@@ -161,13 +176,13 @@ class InitTests(unittest.TestCase):
             self.assertEqual(main(["init", "--project-root", tmp]), 0)
             manifest = Path(tmp) / "docs" / "memory" / "manifest.md"
             without_version = manifest.read_text(encoding="utf-8").replace(
-                "- protocol_version: 0.5\n", ""
+                "- protocol_version: 0.6\n", ""
             )
             manifest.write_text(without_version, encoding="utf-8")
 
             self.assertEqual(main(["init", "--project-root", tmp, "--repair"]), 0)
 
-            self.assertIn("- protocol_version: 0.5", manifest.read_text(encoding="utf-8"))
+            self.assertIn("- protocol_version: 0.6", manifest.read_text(encoding="utf-8"))
 
     def test_init_repair_keeps_same_protocol_manifest_unchanged(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -201,6 +216,24 @@ class InitTests(unittest.TestCase):
                 0,
             )
             self.assertIn("TODO: Describe what this project does", brief.read_text(encoding="utf-8"))
+
+    def test_legacy_init_replace_requires_migration_first(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            manifest = Path(tmp) / "docs" / "memory" / "manifest.md"
+            legacy = re.sub(
+                r"(?m)^- project_id: .*\n|- entry_schema_version: .*\n|- admission_policy: .*\n",
+                "",
+                manifest.read_text(encoding="utf-8").replace(
+                    "- protocol_version: 0.6", "- protocol_version: 0.5"
+                ),
+            )
+            manifest.write_text(legacy, encoding="utf-8")
+            error = StringIO()
+            with redirect_stderr(error):
+                code = main(["init", "--replace-existing", "--project-root", tmp])
+            self.assertEqual(code, 2)
+            self.assertIn("must be migrated before --replace-existing", error.getvalue())
 
     def test_init_can_add_codex_snippet(self):
         with tempfile.TemporaryDirectory() as tmp:

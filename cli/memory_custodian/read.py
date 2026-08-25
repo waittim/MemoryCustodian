@@ -5,29 +5,33 @@ from __future__ import annotations
 from .protocol import (
     budget_for,
     is_safe_memory_name,
-    manifest_task_file_specs,
+    manifest_task_modules,
     pack_to_budget,
     resolve_manifest_memory_path,
     resolve_memory_dir,
     resolve_project_root,
 )
+from .routes import RouteReason, RoutedModule, merge_routed_modules
 
 
-def _optional_requested(kind: str, names: list[str]) -> list[tuple[str, bool]]:
-    files: list[tuple[str, bool]] = []
+def _optional_requested(kind: str, names: list[str]) -> list[RoutedModule]:
+    files: list[RoutedModule] = []
+    reason = RouteReason.EXPLICIT_PROFILE if kind == "profiles" else RouteReason.EXPLICIT_AREA
     for name in names:
         if not is_safe_memory_name(name):
             raise ValueError(f"Invalid {kind[:-1]} name: {name}")
-        files.append((f"{kind}/{name}.md", False))
+        files.append(RoutedModule(f"{kind}/{name}.md", False, (reason,)))
     return files
 
 
 def run(args) -> int:
     project_root = resolve_project_root(args.project_root)
     memory_dir = resolve_memory_dir(project_root, args.memory_dir)
-    files = manifest_task_file_specs(memory_dir, args.task)
-    files += _optional_requested("profiles", args.profile)
-    files += _optional_requested("areas", args.area)
+    modules = merge_routed_modules([
+        *manifest_task_modules(memory_dir, args.task),
+        *_optional_requested("profiles", args.profile),
+        *_optional_requested("areas", args.area),
+    ])
 
     loaded: list[str] = []
     missing_required: list[str] = []
@@ -35,11 +39,9 @@ def run(args) -> int:
     omitted_files: list[tuple[str, int]] = []
     oversized_files: list[str] = []
     contents: list[tuple[str, str]] = []
-    seen: set[str] = set()
-    for name, required in files:
-        if name in seen:
-            continue
-        seen.add(name)
+    route_results: list[RoutedModule] = []
+    for module in modules:
+        name, required = module.module_id, module.required
         path = resolve_manifest_memory_path(memory_dir, name)
         if path.exists():
             loaded.append(name)
@@ -49,10 +51,19 @@ def run(args) -> int:
             if oversized:
                 oversized_files.append(name)
             contents.append((name, text))
+            route_results.append(
+                module.with_result(
+                    loaded=True,
+                    omitted_entries=omitted,
+                    oversized=oversized,
+                )
+            )
         elif required:
             missing_required.append(name)
+            route_results.append(module.with_result(loaded=False))
         else:
             skipped_optional.append(name)
+            route_results.append(module.with_result(loaded=False, absent=True))
 
     print("# Memory Context Pack")
     print(f"Task: {args.task}")

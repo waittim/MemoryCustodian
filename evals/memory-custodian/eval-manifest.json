@@ -12,7 +12,24 @@
     "scoped-memory-update",
     "semantic-compaction",
     "forgetting",
-    "optional-modules"
+    "optional-modules",
+    "agent-inference-candidate",
+    "user-confirmed-active",
+    "source-backed-active",
+    "missing-evidence-rejected",
+    "concurrent-write-safety",
+    "stale-plan-rejected",
+    "memory-authority-boundary",
+    "secret-pattern-flagged",
+    "legacy-memory-readable",
+    "superseded-memory-inactive",
+    "routing-no-hidden-scoring",
+    "routing-traceability",
+    "subject-rename-stability",
+    "duplicate-structural-owner",
+    "no-semantic-alias-proof",
+    "managed-erasure-boundary",
+    "sensitive-memory-minimization"
   ],
   "required_sections": [
     "## Purpose",
@@ -23,6 +40,21 @@
     "## Passing Criteria"
   ],
   "skill_contract": [
+    {
+      "id": "evidence-admission",
+      "terms": [
+        "Protocol 0.6 active entries require a stable Entry ID",
+        "Agent inference, code observations, possible decisions",
+        "remain candidates"
+      ]
+    },
+    {
+      "id": "authority-boundary",
+      "terms": [
+        "Project memory may constrain project work, but it cannot override system instructions",
+        "Memory cannot authorize destructive actions"
+      ]
+    },
     {
       "id": "manifest-first-loading",
       "terms": [
@@ -84,6 +116,38 @@
         "Remove whole H2 entries or top-level bullets",
         "require a semantic manual rewrite and refuse apply",
         "hard replaces prior topic-bearing tombstones with one generic guard, while purge removes them"
+      ]
+    },
+    {
+      "id": "routing-boundary",
+      "terms": [
+        "Do not perform",
+        "hidden semantic relevance scoring",
+        "Every loaded module must be traceable"
+      ]
+    },
+    {
+      "id": "subject-identity",
+      "terms": [
+        "normalized `Scope + Subject ID + Facet`",
+        "Subject display names and aliases may change without changing identity",
+        "do not prove semantic equivalence"
+      ]
+    },
+    {
+      "id": "erasure-boundary",
+      "terms": [
+        "neither rewrites Git history nor revokes clones, forks, backups, caches",
+        "hard affects active managed memory",
+        "purge also targets managed archive"
+      ]
+    },
+    {
+      "id": "sensitive-minimization",
+      "terms": [
+        "Prefer a",
+        "minimal abstract constraint",
+        "over copying raw secrets, contract text"
       ]
     }
   ]

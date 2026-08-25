@@ -4,7 +4,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from memory_custodian.main import main
+from tests.cli_test_support import main
 
 
 class WindowsCliSmokeTests(unittest.TestCase):

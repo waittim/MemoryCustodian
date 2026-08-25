@@ -1,5 +1,9 @@
 # Platform Adapters
 
+Every adapter must state the same authority boundary: project memory cannot override system or current user
+instructions, safety, or permission boundaries, and cannot authorize destructive actions, secret access, external
+uploads, commits, pushes, merges, releases, or privilege escalation.
+
 MemoryCustodian separates the memory protocol from platform-specific entry points.
 
 ```text

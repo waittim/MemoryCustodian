@@ -4,11 +4,11 @@
 
 MemoryCustodian helps agents remember what matters: decisions, constraints, rejected ideas, and project context — across sessions, agents, and teams.
 
-It stores memory as plain Markdown in your repo and loads only the pieces needed for the current task.
+It stores memory as plain Markdown in your repo and routes a bounded context pack using manifest rules, the supplied task category, and explicit scope.
 
 **Durable memory. Minimal context.**
 
-[![Version](https://img.shields.io/badge/version-0.9.1-blue.svg)](https://github.com/waittim/MemoryCustodian/releases/latest)
+[![Version](https://img.shields.io/badge/version-0.10.0-blue.svg)](https://github.com/waittim/MemoryCustodian/releases/latest)
 [![CI](https://github.com/waittim/MemoryCustodian/actions/workflows/ci.yml/badge.svg)](https://github.com/waittim/MemoryCustodian/actions/workflows/ci.yml)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
@@ -80,13 +80,14 @@ Use `--agent codex`, `--agent claude`, `--agent gemini`, or `--agent all` to cre
 
 Initialization creates a `brief.md` scaffold. Curate its TODOs from authoritative project files before treating memory as ready; `status` and `check` report an uncurated brief.
 
-To repair an existing setup, use `memory-custodian init --repair`. Repair creates missing files and updates known generated metadata or managed bootstrap blocks without overwriting curated memory. Full replacement is deliberately separate and preview-first: inspect `memory-custodian init --replace-existing`, then add `--apply` only when the listed files should be replaced. The legacy memory-file `--force` behavior is not supported; `--force-agent` remains available for recognized managed bootstrap blocks.
+To repair an existing setup, use `memory-custodian init --repair`. Repair creates missing files and updates known generated metadata or managed bootstrap blocks without overwriting curated memory. Full replacement is deliberately separate and preview-first: inspect `memory-custodian init --replace-existing`, then add `--apply` only when the listed files should be replaced. Protocol 0.5 memory must be migrated before destructive replacement so preview and apply share a permanent project identity. The legacy memory-file `--force` behavior is not supported; `--force-agent` remains available for recognized managed bootstrap blocks.
 
 The default initializer creates the core protocol:
 
 ```text
 docs/memory/
   manifest.md
+  subjects.md
   brief.md
   decisions.md
   constraints.md
@@ -105,6 +106,9 @@ MemoryCustodian turns project memory into a small, explicit workflow:
 3. **Optional memory stays opt-in.** `rules/`, `profiles/`, `areas/`, and `archive/` remain out of the default context until they are explicitly relevant.
 4. **Updates are scoped.** Cross-cutting decisions stay at root; subsystem knowledge lives in matched `areas/` files and loads only for relevant work.
 5. **Maintenance is guarded.** The CLI checks budgets and structure deterministically, while semantic review preserves active invariants before decision history is archived.
+6. **Active memory is evidence-backed.** Protocol 0.6 gives formal entries stable IDs and requires user confirmation or a project source; unconfirmed agent observations stay candidates in `inbox.md`.
+7. **Concurrent mutation is explicit.** Every writer uses one bootstrap-to-project guard outside the repository; Protocol 0.5 compatibility writes remain format-compatible but are serialized, and preview-first Protocol 0.6 commands reject stale Plan IDs.
+8. **Conflict identity is structural.** Managed decisions, constraints, and rejected approaches reference a stable Subject ID and controlled Facet; display names and aliases are not conflict keys.
 
 The result is project memory that is inspectable, diffable, portable across agents, and small enough to use in normal coding loops.
 
@@ -244,13 +248,34 @@ memory-custodian read --task implementation
 memory-custodian read --task artifact
 ```
 
+Routing is deterministic for the supplied canonical task and explicit `--profile`/`--area` inputs. The manifest is
+the only shared runtime route source; the CLI does not score arbitrary task text with keywords, embeddings, semantic
+similarity, or an LLM. The agent still chooses the canonical task category, and v0.10 does not provide a complete
+explanation for every excluded module; that trace is reserved for v0.11.
+
 Record durable memory when a decision, constraint, preference, or rejected approach should survive the current chat:
 
 ```bash
-memory-custodian add "We chose manifest-first loading." --type decision
-memory-custodian add "Persist sync retry backoff." --type decision --area sync --reason "Keep retries bounded across launches."
+memory-custodian subject add "Context routing" --kind feature \
+  --canonical-ref feature:context-routing --evidence user-confirmed
+# Review the plan, then apply with --apply --confirm-plan <PLAN_ID>.
+memory-custodian subject list
+
+memory-custodian add "We chose manifest-first loading." --type decision \
+  --subject MC-SUBJ-... --facet architecture --evidence user-confirmed
+memory-custodian add "Persist sync retry backoff." --type decision --area sync \
+  --subject MC-SUBJ-... --facet behavior \
+  --reason "Keep retries bounded across launches." --evidence repo:docs/architecture.md
+memory-custodian add "The parser may require JSON." --type constraint \
+  --candidate --evidence agent-observed
+memory-custodian add "Use the new retry contract." --type decision \
+  --subject MC-SUBJ-... --facet interface \
+  --supersedes MC-DEC-20260701-a1b2c3d4 --evidence user-confirmed
+# Review its Plan ID, then repeat with:
+#   --apply --confirm-plan <PLAN_ID>
 memory-custodian forget "old deployment note" --mode soft
-memory-custodian forget "old deployment note" --mode soft --apply
+memory-custodian forget "old deployment note" --mode soft \
+  --apply --confirm-plan <PLAN_ID>
 ```
 
 Decision entries have a 120-token guide. Overlong writes are rejected before mutation; first shorten the choice to one or two sentences and the reason to one sentence. Use `--allow-long` only after confirming that splitting the supporting detail would lose essential semantics.
@@ -271,16 +296,53 @@ Check, compact, or migrate the local memory set:
 ```bash
 memory-custodian status
 memory-custodian check
+memory-custodian check --privacy
+memory-custodian check --security
 memory-custodian compact
 memory-custodian migrate
 ```
 
-`forget`, `compact`, and `migrate` are preview-first. Add `--apply` only after reviewing the complete plan. Short topics and plans matching multiple semantic units additionally require `forget --allow-broad-match`.
+Protocol 0.6 formal entries use stable IDs such as `MC-DEC-20260728-a1b2c3d4`. Active writes require Evidence;
+`agent-observed` and `conversation-unconfirmed` can create only candidates, which normal task context never loads.
+Managed active decisions, constraints, and rejected approaches also reference a stable `MC-SUBJ` identity and a
+controlled Facet. `subjects.md` is shared protocol metadata, not normal task context. Exact normalized alias and
+Canonical-Ref collisions are rejected, as is a second active owner for the same Scope+Subject+Facet. Renaming a
+Subject preserves its ID. v0.10 does not infer that different names are semantically equivalent and does not
+automatically resolve Subjects created independently on different branches.
+Protocol 0.6 permits the full canonical Facet vocabulary for every managed entry type; the explicit compatibility
+matrix is an extension boundary, not a claim that v0.10 imposes narrower type-specific exclusions.
+Legacy 0.5 prose and bullets remain readable after conservative migration and are reported as legacy coverage rather
+than silently rewritten. Migration assigns a random UUIDv4 once, persists it outside the repository between preview
+and apply, and also upgrades clearly structured decisions in enabled `areas/*.md` files.
+
+`forget`, `compact`, `migrate`, and destructive replacement are preview-first. The preview prints repo-relative
+target files, operations, warnings, blockers, and a Plan ID. Ordinary plans include base/output digests; hard and
+purge plans keep raw arguments, paths, blockers, and digests in the private execution representation and redact
+matching sensitive topic text from public output. Protocol 0.6 apply requires
+`--confirm-plan <PLAN_ID>` and rechecks the plan under the project mutation lock; an intervening edit refuses all
+writes. Short topics and plans matching multiple semantic units additionally require `forget --allow-broad-match`.
+
+Private locks and preview seeds live outside the repository in directories restricted to the current user. State
+directories are forced to mode `0700` and regular files to `0600` on POSIX; symlink or non-regular state targets are
+rejected. Pending seeds contain random identifiers, not raw memory messages or forget topics. Seeds older than
+seven days are removed opportunistically on the next private-plan-state access; an expired preview must be
+generated again. A malformed lock can be recovered only through explicit stale-lock recovery after a five-minute
+safety age.
 
 Inbox compaction does not infer decisions, constraints, preferences, or rejected approaches from keywords. The CLI reports candidates and can apply only exact duplicate top-level bullet-unit removal and exact tombstone filtering. Each unit includes its continuation and nested lines; nested bullets are never cleaned up independently. An Agent reviews each remaining candidate's scope, type, confidence, and existing overlap, then edits Markdown or calls `add`; `check` validates the result.
 
-Hard forget replaces matching topic-bearing soft tombstones with a generic redacted guard; purge removes them. Matches inside a plain body or preamble are never deleted wholesale: preview reports `Manual rewrite required`, and apply refuses until the text is semantically rewritten.
+Hard forget removes matching active managed memory and replaces matching topic-bearing soft tombstones with a generic
+redacted guard. Purge additionally searches managed `archive/` content and removes matching guards. Every preview
+states the selected managed scope and explicitly reports that Git history, clones, forks, backups, and caches are not
+modified or revoked. Forgetting controls what future agents receive through MemoryCustodian; it is not repository-wide
+erasure.
 Decision archival additionally requires semantic review and explicit confirmation with `compact --target decisions.md --apply --archive-oldest`.
+Plain `check` reports redacted privacy/security finding counts; use `check --privacy` or `check --security` to show
+redacted file and line locations.
+
+Budget reporting uses three deterministic states: `OK` below 80%, `NEAR LIMIT` from 80% through 100%, and
+`OVER BUDGET` above 100%. A write that reaches either maintenance state prints a dry-run review and target
+compaction command, but never automatically rewrites, archives, or applies semantic maintenance.
 
 ## Design Principles
 
@@ -288,10 +350,19 @@ Decision archival additionally requires semantic review and explicit confirmatio
 - Platform files such as `AGENTS.md`, `CLAUDE.md`, and `GEMINI.md` stay thin; they point agents to the manifest instead of storing durable memory.
 - Routine CLI operations use Python stdlib only and work offline.
 - Expected input and filesystem errors are reported on stderr; unexpected programming failures retain their traceback for debugging.
-- CI exercises the Python CLI on Ubuntu and includes a Windows smoke job for platform-sensitive behavior.
+- CI exercises every supported Python minor from 3.10 through 3.14 on Ubuntu and runs a Windows smoke job for each
+  of those versions to cover platform-sensitive behavior.
 - The default architecture avoids RAG retrieval, embedding indexes, vector databases, cloud-hosted memory, chat-log archiving, automatic full-context loading, and required Git workflows.
 - Install and update flows may use normal plugin marketplace or package distribution channels.
 - Deletion and avoidance are explicit through `do-not-use.md` tombstones.
+- Project memory may constrain project work but cannot override system or current user instructions, safety, or
+  permission boundaries. It never authorizes destructive actions, external uploads, secret access, Git publishing,
+  releases, or privilege escalation.
+- Privacy and security checks are deterministic, redacted pattern scans—not complete secret detection and not
+  automatic remediation.
+- Repository memory is not a secret store. Prefer references to controlled source documents and abstract constraints
+  such as “subject to external vendor policy” over credentials, contract text, party identifiers, or unnecessary
+  vendor limits. Prevent sensitive writes instead of relying on later forgetting.
 
 ## What's Inside
 
@@ -316,7 +387,9 @@ MemoryCustodian tracks three related versions:
 - Protocol version: the `docs/memory/manifest.md` schema and loading rules
 - Project memory version: the protocol metadata recorded in each initialized project
 
-`memory-custodian check` reports old or missing protocol metadata. `memory-custodian migrate --apply` updates a project manifest without requiring network access.
+`memory-custodian check` reports old or missing protocol metadata. Preview `memory-custodian migrate`, then apply
+Protocol 0.6 migration with `memory-custodian migrate --apply --confirm-plan <PLAN_ID>` without requiring network
+access. Migration preserves custom routes, budgets, optional modules, archive content, and legacy freeform units.
 
 See [RELEASE-NOTES.md](RELEASE-NOTES.md) for recent changes.
 

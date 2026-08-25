@@ -1,4 +1,6 @@
 """MemoryCustodian CLI package."""
 
-__version__ = "0.9.1"
-__protocol_version__ = "0.5"
+__version__ = "0.10.0"
+__protocol_version__ = "0.6"
+__entry_schema_version__ = "1"
+__subject_schema_version__ = "1"
