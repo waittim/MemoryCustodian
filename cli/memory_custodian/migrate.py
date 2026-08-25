@@ -187,8 +187,17 @@ def _migration_sources(memory_dir: Path, manifest: str) -> dict[str, str]:
     resolved_memory = memory_dir.resolve()
     for relative in sorted(relatives):
         path = memory_dir.joinpath(*Path(relative).parts)
+        # Reject symlinks before resolve(): Path.resolve() is non-strict by
+        # default and Python 3.13+ may return a path for self-referential loops
+        # instead of raising, which would hide the operand-type failure.
+        if path.exists() or path.is_symlink():
+            metadata = path.lstat()
+            if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+                raise ValueError(
+                    f"Migration operand must be a regular non-symlink file: {relative}"
+                )
         try:
-            resolved_path = path.resolve()
+            resolved_path = path.resolve(strict=path.exists())
         except (OSError, RuntimeError) as exc:
             raise ValueError(
                 f"Migration operand cannot be safely resolved: {relative}"
@@ -199,12 +208,7 @@ def _migration_sources(memory_dir: Path, manifest: str) -> dict[str, str]:
             raise ValueError(
                 f"Migration operand escapes the managed memory directory: {relative}"
             ) from exc
-        if path.exists() or path.is_symlink():
-            metadata = path.lstat()
-            if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
-                raise ValueError(
-                    f"Migration operand must be a regular non-symlink file: {relative}"
-                )
+        if path.exists():
             sources[relative] = read_managed_text(memory_dir, path)
     return sources
 

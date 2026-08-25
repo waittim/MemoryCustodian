@@ -956,7 +956,10 @@ class RoutingAndQualityReleaseTests(unittest.TestCase):
                 code, output, error = capture(["migrate", "--project-root", tmp])
             self.assertEqual(code, 2, output + error)
             self.assertNotIn("Traceback", error)
-            self.assertIn("cannot be safely resolved", error)
+            self.assertIn(
+                "Migration operand must be a regular non-symlink file: areas/loop.md",
+                error,
+            )
 
     def test_optional_and_task_topology_fail_closed(self):
         cases = (
