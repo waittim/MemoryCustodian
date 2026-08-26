@@ -25,6 +25,14 @@ class PartialMutationError(OSError):
         self.__cause__ = cause
 
 
+def _is_macos_private_alias(path: Path, canonical: Path) -> bool:
+    """Allow the system aliases macOS exposes as ``/private/<name>``."""
+
+    if path.anchor != "/" or path.parent != Path("/"):
+        return False
+    return canonical.parent == Path("/private") and canonical.name == path.name
+
+
 def _validate_write_target(path: Path) -> None:
     """Reject symlinked targets and ancestors before any directory creation."""
 
@@ -47,10 +55,26 @@ def _validate_write_target(path: Path) -> None:
             cursor = cursor.parent
             continue
         if stat.S_ISLNK(info.st_mode):
-            raise ValueError(f"Mutation target has an unsafe ancestor: {cursor}")
+            # Continue to the filesystem root instead of stopping at the
+            # first real directory.  A path such as ``docs -> /external``
+            # makes ``docs/memory`` look like a normal directory after the
+            # symlink is followed, so stopping there would still let an
+            # atomic replacement escape the project.  macOS exposes /var
+            # (and /tmp, /etc) as aliases to /private; these system aliases
+            # are safe and are the only symlinked ancestors exempted here.
+            try:
+                canonical = cursor.resolve(strict=False)
+            except (OSError, RuntimeError) as exc:
+                raise ValueError(f"Mutation target has an unsafe ancestor: {cursor}") from exc
+            if not _is_macos_private_alias(cursor, canonical):
+                raise ValueError(f"Mutation target has an unsafe ancestor: {cursor}")
+            cursor = cursor.parent
+            continue
         if not stat.S_ISDIR(info.st_mode):
             raise ValueError(f"Mutation target has a non-directory parent: {cursor}")
-        break
+        if cursor == cursor.parent:
+            break
+        cursor = cursor.parent
 
 
 def apply_mutations(mutations: list[TextMutation]) -> tuple[Path, ...]:

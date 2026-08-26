@@ -149,6 +149,19 @@ class AdversarialAuditRegressionTests(unittest.TestCase):
                 apply_mutations([TextMutation(target, "secret")])
             self.assertFalse((external_archive / "entry.md").exists())
 
+    @unittest.skipIf(os.name == "nt", "POSIX symlink semantics")
+    def test_mutation_refuses_docs_symlink_without_external_writes(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as outside:
+            root = Path(tmp)
+            external_memory = Path(outside) / "memory"
+            external_memory.mkdir()
+            target = root / "docs" / "memory" / "new.md"
+            (root / "docs").symlink_to(Path(outside), target_is_directory=True)
+
+            with self.assertRaisesRegex(ValueError, "unsafe ancestor"):
+                apply_mutations([TextMutation(target, "secret")])
+            self.assertFalse((external_memory / "new.md").exists())
+
     def test_merge_review_reports_deletion_against_target_modification(self):
         with tempfile.TemporaryDirectory() as tmp:
             self.assertEqual(run_cli(["init", "--project-root", tmp])[0], 0)
