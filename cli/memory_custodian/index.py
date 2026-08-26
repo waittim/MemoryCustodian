@@ -11,6 +11,7 @@ import re
 from .conflicts import canonical_entries
 from .entries import (
     StructuredEntry,
+    heading_entry_ids,
     parse_structured_entries,
     render_active_entry,
     structured_entry_schema_issues,
@@ -39,7 +40,11 @@ from .protocol import (
 )
 from .subjects import load_subjects, validate_subject_registry
 from .plans import digest_text
-from .structural import candidate_structural_operand_issues, subject_index
+from .structural import (
+    active_structural_operand_issues,
+    candidate_structural_operand_issues,
+    subject_index,
+)
 
 
 @dataclass(frozen=True)
@@ -255,6 +260,46 @@ def run_promote(args) -> int:
         raise ValueError("Promotion target escapes the managed memory directory.") from exc
     new_id = _promoted_id(candidate, active_kind)
     blockers: list[str] = []
+    shared_ids = memory_entry_ids(memory_dir)
+    try:
+        overlay = inspect_overlay(
+            project_root,
+            metadata["project_id"],
+            shared_ids=shared_ids,
+        )
+    except (OSError, RuntimeError, ValueError) as exc:
+        overlay = None
+        blockers.append(f"Local overlay could not be inspected safely: {exc}")
+    local_ids: set[str] = set()
+    local_dependencies: list[str] = []
+    if overlay is not None:
+        local_dependencies.append(f"status:{overlay.status.value}")
+        local_dependencies.extend(
+            f"warning:{warning}" for warning in overlay.warnings
+        )
+        if overlay.status == LocalStatus.REVIEW:
+            detail = "; ".join(overlay.warnings) or "manual review is required"
+            blockers.append(f"Local overlay requires review: {detail}")
+        if overlay.directory is not None:
+            for module in overlay.modules:
+                try:
+                    local_text = read_local_private_file(module)
+                    module_ids = heading_entry_ids(local_text)
+                except (OSError, RuntimeError, ValueError) as exc:
+                    blockers.append(
+                        f"Local overlay module {module.name} could not be inspected safely: {exc}"
+                    )
+                    continue
+                local_ids.update(module_ids)
+                relative_module = module.relative_to(overlay.directory).as_posix()
+                local_dependencies.append(
+                    f"module:{relative_module}:ids={','.join(sorted(item.casefold() for item in module_ids))}:"
+                    f"{digest_text(local_text)}"
+                )
+    if new_id.casefold() in {item.casefold() for item in local_ids}:
+        blockers.append(
+            f"Generated active Entry ID already exists in the bound local overlay: {new_id}"
+        )
     relative = candidate.source
     blockers.extend(structured_entry_schema_issues(candidate.structured, relative))
     blockers.extend(structured_entry_storage_issues(candidate.structured, relative))
@@ -344,6 +389,13 @@ def run_promote(args) -> int:
     if len(prospective_active) == 1:
         blockers.extend(structured_entry_schema_issues(prospective_active[0], target))
         blockers.extend(structured_entry_storage_issues(prospective_active[0], target))
+        if active_kind in {"decision", "constraint", "tombstone", "do-not-use", "area"}:
+            blockers.extend(
+                f"{issue.field}: {issue.message}"
+                for issue in active_structural_operand_issues(
+                    prospective_active[0], subject_index(subjects),
+                )
+            )
     if len(prospective_candidate) == 1 and len(prospective_active) == 1:
         blockers.extend(structured_relation_issues([prospective_candidate[0], prospective_active[0]]))
     blockers = sorted(set(blockers))
@@ -353,6 +405,10 @@ def run_promote(args) -> int:
         f"candidate:{candidate.source}:{digest_text(candidate.text)}",
         f"target:{target}:exists={target_exists}:{digest_text(target_baseline)}",
         f"resulting-manifest:{digest_text(updated_manifest)}",
+        *(
+            f"local-overlay:{part}"
+            for part in sorted(local_dependencies)
+        ),
     ]
     dependency_parts.extend(
         f"owner:{record.source}:{digest_text(record.text)}"
