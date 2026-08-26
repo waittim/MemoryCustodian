@@ -4336,6 +4336,43 @@ class MergeAndDeterminismReleaseTests(unittest.TestCase):
             self.assertIn("MC-MERGE-006", output)
             self.assertIn("duplicate Status", output)
 
+    def test_merge_review_does_not_skip_suffix_similar_managed_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = initialize_git_project(tmp)
+            subject_id = "MC-SUBJ-20260826-aaaaaaaa"
+            entry_id = "MC-DEC-20260826-bbbbbbbb"
+            (memory / "subjects.md").write_text(
+                "# Subject Registry\n\n" + subject_unit(subject_id, "Suffix review"),
+                encoding="utf-8",
+            )
+            git(tmp, "add", ".")
+            git(tmp, "commit", "-qm", "subject")
+            base = git(tmp, "rev-parse", "HEAD")
+            head_ref = git(tmp, "branch", "--show-current")
+
+            git(tmp, "checkout", "-qb", "suffix-target")
+            invalid_entry = render_active_entry(
+                "decision", entry_id, "Hidden invalid entry", "Target body.", None,
+                "project", ("user-confirmed",), subject=subject_id, facet="behavior",
+            ).replace("Evidence:\n", "Unknown: accepted\nEvidence:\n", 1)
+            (memory / "evil-subjects.md").write_text(
+                "# Evil Subjects\n\n" + invalid_entry + "\n", encoding="utf-8",
+            )
+            git(tmp, "add", ".")
+            git(tmp, "commit", "-qm", "invalid suffix-similar file")
+            target_ref = git(tmp, "branch", "--show-current")
+            git(tmp, "checkout", "-q", head_ref)
+
+            code, output, error = capture([
+                "check", "--conflicts", "--merge-base", target_ref,
+                "--project-root", tmp,
+            ])
+            self.assertEqual(code, 1, output + error)
+            self.assertIn("Merge review status: CONFLICT", output)
+            self.assertIn("MC-MERGE-006", output)
+            self.assertIn("evil-subjects.md", output)
+            self.assertIn("unknown field Unknown", output)
+
     def test_merge_review_detects_registry_collision_and_two_sided_custom_review(self):
         for canonical_ref, expected_status, expected_code in (
             ("feature:shared", "CONFLICT", "MC-MERGE-001"),

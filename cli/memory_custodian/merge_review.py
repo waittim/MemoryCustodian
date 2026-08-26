@@ -81,11 +81,11 @@ def _entries(
     result: list[StructuredEntry] = []
     issues: list[str] = []
     for relative in files:
-        if relative.endswith(("subjects.md", "reconciliations.md")):
-            continue
         text = _show(project_root, revision, relative)
         prefix = memory_relative.rstrip("/") + "/"
         memory_path = relative.removeprefix(prefix)
+        if memory_path in {"subjects.md", "reconciliations.md"}:
+            continue
         parsed, file_issues = parse_entry_inventory(
             Path(relative), text, memory_path, project_root,
             require_active_identity=not memory_path.startswith("archive/"),
