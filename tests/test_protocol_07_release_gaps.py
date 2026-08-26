@@ -3542,6 +3542,138 @@ class ForgetAndHistoryReleaseTests(unittest.TestCase):
             self.assertEqual(subjects.read_text(encoding="utf-8"), before_subjects)
             self.assertEqual(decisions.read_text(encoding="utf-8"), before_decisions)
 
+    def test_topic_forget_blocks_planned_superseded_source_removal(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            memory = Path(tmp) / "docs/memory"
+            subject_id = "MC-SUBJ-20260825-11111111"
+            old_id = "MC-DEC-20260825-22222222"
+            current_id = "MC-DEC-20260825-33333333"
+            (memory / "subjects.md").write_text(
+                "# Subject Registry\n\n" + subject_unit(subject_id, "Superseded source"),
+                encoding="utf-8",
+            )
+            old = render_active_entry(
+                "decision", old_id, "Superseded Topic source", "Historical body.", None,
+                "project", ("user-confirmed",), subject=subject_id, facet="behavior",
+            ).replace(
+                "Status: active",
+                f"Status: superseded\nSuperseded-By: {current_id}",
+                1,
+            )
+            current = render_active_entry(
+                "decision", current_id, "Current replacement", "Current body.", None,
+                "project", ("user-confirmed",), subject=subject_id, facet="behavior",
+                supersedes=old_id,
+            )
+            decisions = memory / "decisions.md"
+            decisions.write_text(
+                "# Decisions\n\n" + old + "\n\n" + current + "\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(analyze_conflicts(memory).status.value, "CLEAR")
+            before_decisions = decisions.read_text(encoding="utf-8")
+            before_tombstones = (memory / "do-not-use.md").read_text(encoding="utf-8")
+            args = [
+                "forget", "Superseded Topic", "--mode", "soft",
+                "--project-root", tmp,
+            ]
+            code, preview, error = capture(args)
+            self.assertEqual(code, 0, preview + error)
+            self.assertIn("MC-CONFLICT-008", preview)
+            self.assertIn("references missing entry", preview)
+            plan_id = re.search(r"Plan ID: ([0-9a-f]{16})", preview).group(1)
+            code, output, error = capture([
+                *args, "--apply", "--confirm-plan", plan_id,
+            ])
+            self.assertEqual(code, 1, output + error)
+            self.assertEqual(decisions.read_text(encoding="utf-8"), before_decisions)
+            self.assertEqual(
+                (memory / "do-not-use.md").read_text(encoding="utf-8"),
+                before_tombstones,
+            )
+
+    def test_topic_hard_forget_blocks_planned_merged_subject_removal(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            memory = Path(tmp) / "docs/memory"
+            source = "MC-SUBJ-20260825-44444444"
+            target = "MC-SUBJ-20260825-55555555"
+            source_unit = (
+                f"## {source} — Merged Topic source\n\n"
+                "Status: merged\nKind: concept\n"
+                f"Merged-Into: {target}\n"
+                "Evidence:\n- user-confirmed\n\n"
+                "Aliases:\n- merged topic source\n"
+            )
+            target_unit = (
+                subject_unit(target, "Canonical target")
+                + "\nMerged-From:\n"
+                f"- {source}\n"
+            )
+            subjects = memory / "subjects.md"
+            subjects.write_text(
+                "# Subject Registry\n\n" + source_unit + "\n" + target_unit,
+                encoding="utf-8",
+            )
+            self.assertEqual(analyze_conflicts(memory).status.value, "CLEAR")
+            before_subjects = subjects.read_text(encoding="utf-8")
+            before_tombstones = (memory / "do-not-use.md").read_text(encoding="utf-8")
+            args = [
+                "forget", "Merged Topic", "--mode", "hard",
+                "--project-root", tmp,
+            ]
+            code, preview, error = capture(args)
+            self.assertEqual(code, 0, preview + error)
+            self.assertIn("MC-CONFLICT-003", preview)
+            self.assertIn("Merged-From references a non-reciprocal source", preview)
+            plan_id = re.search(r"Plan ID: ([0-9a-f]{16})", preview).group(1)
+            code, output, error = capture([
+                *args, "--apply", "--confirm-plan", plan_id,
+            ])
+            self.assertEqual(code, 1, output + error)
+            self.assertEqual(subjects.read_text(encoding="utf-8"), before_subjects)
+            self.assertEqual(
+                (memory / "do-not-use.md").read_text(encoding="utf-8"),
+                before_tombstones,
+            )
+
+    def test_topic_forget_applies_when_planned_snapshot_remains_valid(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            memory = Path(tmp) / "docs/memory"
+            subject_id = "MC-SUBJ-20260825-66666666"
+            (memory / "subjects.md").write_text(
+                "# Subject Registry\n\n" + subject_unit(subject_id, "Valid topic"),
+                encoding="utf-8",
+            )
+            decisions = memory / "decisions.md"
+            decisions.write_text(
+                "# Decisions\n\n" + render_active_entry(
+                    "decision", "MC-DEC-20260825-77777777", "Valid Topic entry",
+                    "Remove this entry.", None, "project", ("user-confirmed",),
+                    subject=subject_id, facet="behavior",
+                ) + "\n",
+                encoding="utf-8",
+            )
+            args = [
+                "forget", "Valid Topic", "--mode", "soft",
+                "--project-root", tmp,
+            ]
+            code, preview, error = capture(args)
+            self.assertEqual(code, 0, preview + error)
+            self.assertNotIn("MC-CONFLICT-", preview)
+            plan_id = re.search(r"Plan ID: ([0-9a-f]{16})", preview).group(1)
+            code, output, error = capture([
+                *args, "--apply", "--confirm-plan", plan_id,
+            ])
+            self.assertEqual(code, 0, output + error)
+            self.assertNotIn("Valid Topic entry", decisions.read_text(encoding="utf-8"))
+            self.assertEqual(analyze_conflicts(memory).status.value, "CLEAR")
+
     def test_history_check_detected_and_not_detected_statuses(self):
         with tempfile.TemporaryDirectory() as tmp:
             initialize_git_project(tmp)

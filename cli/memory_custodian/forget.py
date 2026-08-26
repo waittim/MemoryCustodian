@@ -16,6 +16,7 @@ from .entries import (
     render_active_entry,
     render_markdown_bullet,
     line_safe_markdown_body,
+    structured_relation_issues,
 )
 from .locking import project_mutation_guard
 from .erasure import ErasureScope, render_apply_boundary, render_scope, scope_for_forget
@@ -31,6 +32,7 @@ from .plans import (
 from .protocol import (
     CURRENT_PROTOCOL_VERSION,
     MarkdownUnit,
+    canonical_memory_files,
     compare_versions,
     ensure_newline,
     managed_markdown_files,
@@ -43,7 +45,12 @@ from .protocol import (
     resolve_project_root,
     today,
 )
-from .subjects import SUBJECT_ID_RE
+from .reconciliations import parse_reconciliations, validate_reconciliations
+from .subjects import (
+    SUBJECT_ID_RE,
+    parse_subject_registry,
+    subject_registry_issues,
+)
 
 
 @dataclass(frozen=True)
@@ -326,6 +333,108 @@ def _public_text(value: str, topic: str, redact: bool) -> str:
     )
 
 
+def _snapshot_validation_issues(
+    memory_dir: Path,
+    project_root: Path,
+    planned_text: dict[Path, str],
+) -> list[str]:
+    """Validate one complete memory snapshot in memory.
+
+    Forget plans remove whole Markdown units, so a textual match can remove
+    one side of a lifecycle relation or one Subject that another Subject
+    still names.  The ordinary validators read from disk, which is too late
+    for a preview and would make an apply partially destructive.  Rebuild the
+    same inventories from the planned text overlay and report every resulting
+    structural issue as a deterministic blocker.
+    """
+
+    entries = []
+    canonical_paths = sorted(
+        canonical_memory_files(memory_dir, include_archive=True),
+        key=lambda path: path.relative_to(memory_dir).as_posix(),
+    )
+    for path in canonical_paths:
+        relative = path.relative_to(memory_dir).as_posix()
+        if relative in {"subjects.md", "reconciliations.md"}:
+            continue
+        text = planned_text.get(path, read_managed_text(memory_dir, path))
+        entries.extend(parse_structured_entries(path, text))
+
+    subjects_path = memory_dir / "subjects.md"
+    if subjects_path.exists() or subjects_path in planned_text:
+        subjects_text = planned_text.get(
+            subjects_path,
+            read_managed_text(memory_dir, subjects_path),
+        )
+        subjects, subject_parse_issues = parse_subject_registry(
+            subjects_path,
+            subjects_text,
+        )
+        subject_issues = subject_registry_issues(
+            subjects,
+            subject_parse_issues,
+            project_root,
+        )
+    else:
+        subjects = []
+        subject_issues = ["subjects.md: missing managed Subject registry"]
+
+    relation_issues = structured_relation_issues(
+        entries,
+        merged_subject_ids={
+            subject.subject_id
+            for subject in subjects
+            if subject.status == "merged"
+        },
+    )
+
+    reconciliation_issues = []
+    reconciliation_path = memory_dir / "reconciliations.md"
+    if reconciliation_path.exists() or reconciliation_path in planned_text:
+        reconciliation_text = planned_text.get(
+            reconciliation_path,
+            read_managed_text(memory_dir, reconciliation_path),
+        )
+        records, parse_issues = parse_reconciliations(
+            reconciliation_path,
+            reconciliation_text,
+            project_root,
+            include_invalid=True,
+        )
+        _valid, reconciliation_issues = validate_reconciliations(
+            records,
+            parse_issues,
+            tuple(entries),
+            tuple(subjects),
+        )
+
+    blockers = [
+        f"MC-CONFLICT-003 INVALID: {issue}"
+        for issue in subject_issues
+    ]
+    blockers.extend(
+        f"MC-CONFLICT-008 INVALID: Invalid Entry relation: {issue}"
+        for issue in relation_issues
+    )
+    blockers.extend(
+        "MC-CONFLICT-008 INVALID: Invalid or inconsistent reconciliation record: "
+        + (f"{issue.record_id}: " if issue.record_id else "")
+        + issue.message
+        for issue in reconciliation_issues
+    )
+    return list(dict.fromkeys(sorted(blockers)))
+
+
+def _planned_snapshot_blockers(
+    memory_dir: Path,
+    project_root: Path,
+    planned_text: dict[Path, str],
+) -> list[str]:
+    """Return integrity issues present in the planned post-mutation snapshot."""
+
+    return _snapshot_validation_issues(memory_dir, project_root, planned_text)
+
+
 def _subject_reference_blockers(
     memory_dir: Path,
     plans: list[FilePlan],
@@ -530,6 +639,11 @@ def _build_forget_mutation_plan(
         writes.append((tombstone_path, tombstone_updated))
     if changelog_updated is not None:
         writes.append((changelog_path, changelog_updated))
+    planned_text = {plan.path: plan.updated for plan in plans}
+    if tombstone_updated is not None:
+        planned_text[tombstone_path] = tombstone_updated
+    if changelog_updated is not None:
+        planned_text[changelog_path] = changelog_updated
     blockers = [
         f"{plan.path.relative_to(memory_dir).as_posix()}: "
         f"{unit.kind} contains non-removable matching content"
@@ -542,6 +656,9 @@ def _build_forget_mutation_plan(
     )
     blockers.extend(_subject_reference_blockers(memory_dir, plans, tombstone_updated))
     blockers.extend(_entry_reference_blockers(memory_dir, getattr(args, "entry_id", None)))
+    blockers.extend(
+        _planned_snapshot_blockers(memory_dir, project_root, planned_text)
+    )
     blockers.extend(extra_blockers)
     total_matches = sum(len(plan.matches) for plan in plans)
     manual_blockers = sum(len(plan.blockers) for plan in plans) + len(tombstone_blockers)
@@ -753,7 +870,11 @@ def run(args) -> int:
     structural_blockers = [
         blocker
         for blocker in public_blockers
-        if "cannot remove MC-SUBJ-" in blocker or "references selected Entry" in blocker
+        if (
+            "cannot remove MC-SUBJ-" in blocker
+            or "references selected Entry" in blocker
+            or blocker.startswith("MC-CONFLICT-")
+        )
     ]
     if structural_blockers:
         print(f"Manual rewrite required: {len(structural_blockers)} relationship blocker(s)")
