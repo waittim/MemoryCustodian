@@ -231,6 +231,123 @@ class AdversarialAuditRegressionTests(unittest.TestCase):
         )
         self.assertEqual(strict_protocol_metadata(manifest)["protocol_version"], "0.7")
 
+    def test_conflict_integrity_covers_live_and_archive_entries(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(run_cli(["init", "--project-root", tmp])[0], 0)
+            memory = Path(tmp) / "docs" / "memory"
+            subject_id = "MC-SUBJ-20260825-cccccccc"
+            (memory / "subjects.md").write_text(
+                "# Subject Registry\n\n"
+                f"## {subject_id} — Integrity subject\n\n"
+                "Status: active\nKind: concept\nEvidence:\n- user-confirmed\n\n"
+                "Aliases:\n- integrity subject\n",
+                encoding="utf-8",
+            )
+            live = render_active_entry(
+                "decision", "MC-DEC-20260825-dddddddd", "Live malformed",
+                "Live body.", None, "project", ("user-confirmed",),
+                subject=subject_id, facet="behavior",
+            ).replace("Evidence:\n", "Mystery: accepted\nEvidence:\n", 1)
+            live = live.replace("- user-confirmed", "", 1)
+            promoted = render_active_entry(
+                "decision", "MC-DEC-20260825-eeeeeeee", "Promoted missing target",
+                "Promoted body.", None, "project", ("user-confirmed",),
+                subject=subject_id, facet="interface",
+            ).replace("Status: active", "Status: promoted", 1)
+            (memory / "decisions.md").write_text(
+                "# Decisions\n\n" + live + "\n\n" + promoted + "\n",
+                encoding="utf-8",
+            )
+            archive = memory / "archive"
+            archive.mkdir()
+            archived = render_active_entry(
+                "decision", "MC-DEC-20260825-ffffffff", "Archive malformed",
+                "Archived body.", None, "project", ("user-confirmed",),
+                subject=subject_id, facet="workflow",
+            ).replace("Evidence:\n", "Unknown-Scalar: accepted\nEvidence:\n", 1)
+            (archive / "decisions-old.md").write_text(
+                "# Archived Decisions\n\n" + archived + "\n", encoding="utf-8",
+            )
+
+            result = analyze_conflicts(memory)
+            self.assertEqual(result.status.value, "INVALID")
+            messages = "\n".join(item.message for item in result.findings)
+            self.assertIn("unknown field Mystery", messages)
+            self.assertIn("Evidence", messages)
+            self.assertIn("promoted entry", messages)
+            self.assertIn("unknown field Unknown-Scalar", messages)
+
+            code, output, error = run_cli([
+                "read", "--task", "implementation", "--strict-routing",
+                "--names-only", "--project-root", tmp,
+            ])
+            self.assertEqual(code, 2, output + error)
+            self.assertIn("Conflict status: INVALID", output)
+
+    def test_merge_review_rejects_invalid_entries_relations_and_duplicate_ids(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(run_cli(["init", "--project-root", tmp])[0], 0)
+            git(tmp, "init", "-q")
+            git(tmp, "config", "user.email", "audit@example.invalid")
+            git(tmp, "config", "user.name", "Audit")
+            memory = Path(tmp) / "docs" / "memory"
+            subject_id = "MC-SUBJ-20260825-11111111"
+            base_id = "MC-DEC-20260825-22222222"
+            (memory / "subjects.md").write_text(
+                "# Subject Registry\n\n"
+                f"## {subject_id} — Merge subject\n\n"
+                "Status: active\nKind: concept\nEvidence:\n- user-confirmed\n\n"
+                "Aliases:\n- merge subject\n",
+                encoding="utf-8",
+            )
+            base_entry = render_active_entry(
+                "decision", base_id, "Base", "Base body.", None,
+                "project", ("user-confirmed",), subject=subject_id, facet="behavior",
+            )
+            (memory / "decisions.md").write_text(
+                "# Decisions\n\n" + base_entry + "\n", encoding="utf-8",
+            )
+            git(tmp, "add", ".")
+            git(tmp, "commit", "-qm", "base")
+            base = git(tmp, "rev-parse", "HEAD")
+            head_ref = git(tmp, "branch", "--show-current")
+            git(tmp, "checkout", "-qb", "audit-target", base)
+
+            target_entry = render_active_entry(
+                "decision", "MC-DEC-20260825-33333333", "Dangling and malformed",
+                "Target body.", None, "project", ("user-confirmed",),
+                subject=subject_id, facet="interface",
+                supersedes="MC-DEC-20260825-44444444",
+            ).replace("Evidence:\n", "Unknown: accepted\nEvidence:\n", 1)
+            target_entry = target_entry.replace("Subject: " + subject_id + "\n", "", 1)
+            (memory / "decisions.md").write_text(
+                "# Decisions\n\n" + base_entry + "\n\n" + target_entry + "\n",
+                encoding="utf-8",
+            )
+            (memory / "archive").mkdir()
+            duplicate_archive = render_active_entry(
+                "decision", base_id, "Duplicate archive copy", "Archive body.", None,
+                "project", ("user-confirmed",), subject=subject_id, facet="behavior",
+            )
+            (memory / "archive" / "decisions-old.md").write_text(
+                "# Archive\n\n" + duplicate_archive + "\n", encoding="utf-8",
+            )
+            git(tmp, "add", ".")
+            git(tmp, "commit", "-qm", "invalid target entries")
+            target_ref = git(tmp, "branch", "--show-current")
+            git(tmp, "checkout", "-q", head_ref)
+
+            code, output, error = run_cli([
+                "check", "--conflicts", "--merge-base", target_ref,
+                "--project-root", tmp,
+            ])
+            self.assertEqual(code, 1, output + error)
+            self.assertIn("Merge review status: CONFLICT", output)
+            self.assertIn("MC-MERGE-006", output)
+            self.assertIn("references missing entry", output)
+            self.assertIn("unknown field Unknown", output)
+            self.assertIn("duplicate Entry ID", output)
+
 
 if __name__ == "__main__":
     unittest.main()

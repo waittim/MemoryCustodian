@@ -63,6 +63,31 @@ LIFECYCLE_FIELDS = {
     "Promoted-From",
     "Promoted-To",
 }
+ENTRY_FIELDS = frozenset({
+    "Status",
+    "Scope",
+    "Subject",
+    "Facet",
+    "Evidence",
+    "Supersedes",
+    "Superseded-By",
+    "Promoted-From",
+    "Promoted-To",
+    "Exception-To",
+    "Candidate-Type",
+    "Provisional-Subject",
+    "Provisional-Facet",
+    "Promotion-Requirement",
+    "Reason",
+    *TYPED_BODY_FIELDS,
+})
+ENTRY_SCALAR_FIELDS = ENTRY_FIELDS - {
+    "Evidence",
+    "Reason",
+    "Promotion-Requirement",
+    *TYPED_BODY_FIELDS,
+}
+STRUCTURAL_ENTRY_CODES = frozenset({"DEC", "CON", "DNU", "AREA"})
 VALID_ENTRY_STATUSES = frozenset({"active", "candidate", "superseded", "promoted"})
 
 
@@ -512,15 +537,30 @@ def expected_typed_body(entry: StructuredEntry, relative_path: str) -> str | Non
 def structured_entry_schema_issues(
     entry: StructuredEntry,
     relative_path: str,
+    *,
+    require_active_identity: bool = False,
 ) -> list[str]:
     """Validate the declared Protocol 0.7 structure of one formal entry."""
 
     issues: list[str] = []
     prefix = f"{relative_path}: {entry.entry_id}"
+    for name in sorted(set(entry.field_counts) - ENTRY_FIELDS):
+        issues.append(f"{prefix} has unknown field {name}")
+
+    for name in sorted(set(entry.field_counts) & ENTRY_SCALAR_FIELDS):
+        if not entry.fields.get(name, "").strip():
+            issues.append(f"{prefix} {name} must not be empty")
+
     for name in ("Status", "Scope", "Evidence"):
         count = entry.field_counts.get(name, 0)
         if count != 1:
             issues.append(f"{prefix} must declare exactly one {name} field (found {count})")
+    if entry.field_counts.get("Evidence") == 1 and not entry.evidence:
+        issues.append(f"{prefix} Evidence must contain at least one non-empty item")
+    elif entry.field_counts.get("Evidence") == 1 and any(
+        not value.strip() for value in entry.evidence
+    ):
+        issues.append(f"{prefix} Evidence must not contain empty items")
 
     if entry.status not in VALID_ENTRY_STATUSES:
         issues.append(f"{prefix} has invalid Status {entry.status!r}")
@@ -564,6 +604,19 @@ def structured_entry_schema_issues(
         issues.append(f"{prefix} superseded lifecycle cannot declare Promoted-To")
     if entry.status == "promoted" and superseded_by:
         issues.append(f"{prefix} promoted lifecycle cannot declare Superseded-By")
+    if entry.status == "superseded" and not entry.fields.get("Superseded-By", "").strip():
+        issues.append(f"{prefix} superseded entry has no Superseded-By")
+    if entry.status == "promoted" and not entry.fields.get("Promoted-To", "").strip():
+        issues.append(f"{prefix} promoted entry has no Promoted-To")
+
+    if require_active_identity and entry.status == "active":
+        code = entry.entry_id.split("-", 2)[1].upper()
+        if code in STRUCTURAL_ENTRY_CODES and not relative_path.startswith(("rules/", "profiles/")):
+            for name in ("Subject", "Facet"):
+                if entry.field_counts.get(name) != 1 or not entry.fields.get(name, "").strip():
+                    issues.append(
+                        f"{prefix} active structural Entry must declare a non-empty {name}"
+                    )
 
     if entry.status in {"candidate", "promoted"}:
         candidate_type_count = entry.field_counts.get("Candidate-Type", 0)
@@ -609,10 +662,17 @@ def structured_entry_storage_issues(
     if relative_path == "inbox.md":
         if code != "INBOX":
             issues.append(f"{prefix} type does not match its storage location")
+        if entry.status not in {"candidate", "promoted"}:
+            issues.append(
+                f"{prefix} has Status {entry.status!r}; inbox entries must be candidate or promoted"
+            )
         return issues
 
     if code == "INBOX":
         issues.append(f"{prefix} must be stored in inbox.md")
+        return issues
+    if entry.status in {"candidate", "promoted"}:
+        issues.append(f"{prefix} {entry.status} Entry must be stored in inbox.md")
         return issues
 
     expected_codes = project_files.get(relative_path)
@@ -660,6 +720,8 @@ def parse_entry_inventory(
     text: str,
     relative_path: str,
     project_root: Path,
+    *,
+    require_active_identity: bool = False,
 ) -> tuple[tuple[StructuredEntry, ...], tuple[str, ...]]:
     """Parse entries together with the complete integrity issues for a file.
 
@@ -677,7 +739,13 @@ def parse_entry_inventory(
     except (TypeError, ValueError) as exc:
         return (), (f"{relative_path}: Markdown entry parsing failed: {exc}",)
     for entry in parsed:
-        issues.extend(structured_entry_schema_issues(entry, relative_path))
+        issues.extend(
+            structured_entry_schema_issues(
+                entry,
+                relative_path,
+                require_active_identity=require_active_identity,
+            )
+        )
         issues.extend(structured_entry_storage_issues(entry, relative_path))
         if entry.evidence:
             try:

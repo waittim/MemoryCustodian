@@ -6,7 +6,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 import subprocess
 
-from .entries import StructuredEntry, parse_entry_inventory, parse_structured_entries
+from .entries import (
+    StructuredEntry,
+    parse_entry_inventory,
+    parse_structured_entries,
+    structured_relation_issues,
+)
 from .reconciliations import (
     ReconciliationIssue,
     ReconciliationRecord,
@@ -18,6 +23,7 @@ from .subjects import (
     Subject, normalize_alias, normalize_canonical_ref, parse_subject_registry,
     subject_registry_issues,
 )
+from .structural import active_structural_operand_issues, subject_index
 
 
 @dataclass(frozen=True)
@@ -68,6 +74,9 @@ def _entries(
     revision: str,
     files: tuple[str, ...],
     memory_relative: str,
+    *,
+    subjects: tuple[Subject, ...] = (),
+    merged_subject_ids: set[str] | None = None,
 ) -> tuple[tuple[StructuredEntry, ...], tuple[str, ...]]:
     result: list[StructuredEntry] = []
     issues: list[str] = []
@@ -79,9 +88,30 @@ def _entries(
         memory_path = relative.removeprefix(prefix)
         parsed, file_issues = parse_entry_inventory(
             Path(relative), text, memory_path, project_root,
+            require_active_identity=not memory_path.startswith("archive/"),
         )
         result.extend(parsed)
         issues.extend(file_issues)
+    subject_map = subject_index(subjects)
+    prefix = memory_relative.rstrip("/") + "/"
+    for entry in result:
+        relative = entry.path.as_posix().removeprefix(prefix)
+        code = entry.entry_id.split("-", 2)[1].upper()
+        if (
+            entry.status == "active"
+            and code in {"DEC", "CON", "DNU", "AREA"}
+            and not relative.startswith("archive/")
+            and not relative.startswith(("rules/", "profiles/"))
+        ):
+            for issue in active_structural_operand_issues(entry, subject_map):
+                if issue.field in {"Subject", "Facet"}:
+                    issues.append(f"{relative}: {entry.entry_id} {issue.message}")
+    issues.extend(
+        f"{memory_relative}: {issue}"
+        for issue in structured_relation_issues(
+            result, merged_subject_ids=merged_subject_ids,
+        )
+    )
     return tuple(result), tuple(dict.fromkeys(issues))
 
 
@@ -114,6 +144,8 @@ def _reconciliations(
 
 def _by_id(
     values: tuple[StructuredEntry | Subject | ReconciliationRecord, ...],
+    *,
+    duplicate_ids: list[str] | None = None,
 ) -> dict[str, StructuredEntry | Subject | ReconciliationRecord]:
     result: dict[str, StructuredEntry | Subject | ReconciliationRecord] = {}
     for value in values:
@@ -123,7 +155,13 @@ def _by_id(
             identity = value.subject_id
         else:
             identity = value.record_id
-        result[identity.casefold()] = value
+        key = identity.casefold()
+        if key in result:
+            if duplicate_ids is None:
+                raise ValueError(f"Duplicate canonical ID {identity}; lookup is unsafe.")
+            duplicate_ids.append(identity)
+            continue
+        result[key] = value
     return result
 
 
@@ -160,18 +198,36 @@ def merge_review(project_root: Path, memory_dir: Path, target_ref: str) -> Merge
         )))
         registry = f"{memory_relative}/subjects.md"
         reconciliations = f"{memory_relative}/reconciliations.md"
-        base_entry_units, base_entry_issues = _entries(
-            project_root, base, all_files, memory_relative,
-        )
-        head_entry_units, head_entry_issues = _entries(
-            project_root, "HEAD", all_files, memory_relative,
-        )
-        target_entry_units, target_entry_issues = _entries(
-            project_root, target_ref, all_files, memory_relative,
-        )
         base_subject_units, _base_subject_issues = _subjects(project_root, base, registry)
         head_subject_units, head_subject_issues = _subjects(project_root, "HEAD", registry)
         target_subject_units, target_subject_issues = _subjects(project_root, target_ref, registry)
+        base_entry_units, base_entry_issues = _entries(
+            project_root, base, all_files, memory_relative,
+            subjects=base_subject_units,
+            merged_subject_ids={
+                subject.subject_id
+                for subject in base_subject_units
+                if subject.status == "merged"
+            },
+        )
+        head_entry_units, head_entry_issues = _entries(
+            project_root, "HEAD", all_files, memory_relative,
+            subjects=head_subject_units,
+            merged_subject_ids={
+                subject.subject_id
+                for subject in head_subject_units
+                if subject.status == "merged"
+            },
+        )
+        target_entry_units, target_entry_issues = _entries(
+            project_root, target_ref, all_files, memory_relative,
+            subjects=target_subject_units,
+            merged_subject_ids={
+                subject.subject_id
+                for subject in target_subject_units
+                if subject.status == "merged"
+            },
+        )
         base_records, _base_record_issues = _reconciliations(
             project_root, base, reconciliations, base_entry_units, base_subject_units,
         )
@@ -181,9 +237,20 @@ def merge_review(project_root: Path, memory_dir: Path, target_ref: str) -> Merge
         target_records, target_record_issues = _reconciliations(
             project_root, target_ref, reconciliations, target_entry_units, target_subject_units,
         )
-        base_entries = _by_id(base_entry_units)
-        head_entries = _by_id(head_entry_units)
-        target_entries = _by_id(target_entry_units)
+        duplicate_entry_ids: list[tuple[str, str]] = []
+
+        def index_entries(
+            label: str,
+            values: tuple[StructuredEntry, ...],
+        ) -> dict[str, StructuredEntry | Subject | ReconciliationRecord]:
+            duplicates: list[str] = []
+            indexed = _by_id(values, duplicate_ids=duplicates)
+            duplicate_entry_ids.extend((label, value) for value in duplicates)
+            return indexed
+
+        base_entries = index_entries("merge base", base_entry_units)
+        head_entries = index_entries("HEAD", head_entry_units)
+        target_entries = index_entries(target_ref, target_entry_units)
         base_subjects = _by_id(base_subject_units)
         head_subjects = _by_id(head_subject_units)
         target_subjects = _by_id(target_subject_units)
@@ -206,6 +273,11 @@ def merge_review(project_root: Path, memory_dir: Path, target_ref: str) -> Merge
     right_subjects = _changed(base_subjects, target_subjects)
     conflicts: list[str] = []
     reviews: list[str] = []
+    for label, entry_id in duplicate_entry_ids:
+        conflicts.append(
+            f"MC-MERGE-006 {label} has duplicate Entry ID {entry_id}; "
+            "canonical lookup is unsafe"
+        )
     for side, issues in (("HEAD", head_subject_issues), (target_ref, target_subject_issues)):
         for issue in issues:
             conflicts.append(f"MC-MERGE-006 {side} has invalid Subject registry: {issue}")

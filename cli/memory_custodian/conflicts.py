@@ -137,10 +137,12 @@ def analyze_conflicts(
     entries = canonical_entries(memory_dir)
     relation_entries = canonical_entries(memory_dir, include_archive=True)
     canonical_paths = set(canonical_memory_files(memory_dir))
-    for path in canonical_paths:
+    integrity_paths = set(canonical_memory_files(memory_dir, include_archive=True))
+    for path in integrity_paths:
         relative = path.relative_to(memory_dir).as_posix()
         parsed, entry_issues = parse_entry_inventory(
             path, read_managed_text(memory_dir, path), relative, project_root,
+            require_active_identity=not relative.startswith("archive/"),
         )
         findings.extend(
             ConflictFinding(
