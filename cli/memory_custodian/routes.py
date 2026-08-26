@@ -370,6 +370,10 @@ def parse_optional_module_index(manifest: str, *, legacy_compatible: bool = Fals
         if current_path is None or current_type is None:
             return
         module_id = normalize_module_identity(current_path)
+        if module_id.rsplit("/", 1)[-1].casefold() == "readme.md":
+            raise ValueError(
+                f"{module_id}: README.md is reserved documentation, not a managed module"
+            )
         expected_prefix = current_type + "/"
         if not module_id.startswith(expected_prefix) or "/" in module_id[len(expected_prefix):]:
             raise ValueError(f"{module_id}: module path does not match {current_type}/")

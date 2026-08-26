@@ -265,7 +265,12 @@ def _reconcile_preview(args) -> int:
     )
     path = memory_dir / "reconciliations.md"
     existing, parse_issues = (
-        parse_reconciliations(path, read_managed_text(memory_dir, path)) if path.exists() else ((), ())
+        parse_reconciliations(
+            path,
+            read_managed_text(memory_dir, path),
+            project_root,
+            include_invalid=True,
+        ) if path.exists() else ((), ())
     )
     entries = canonical_entries(memory_dir)
     _valid, issues = validate_reconciliations(

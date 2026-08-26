@@ -19,6 +19,7 @@ from .protocol import (
     parse_markdown_units,
     parse_manifest_task_file_specs,
     read_managed_text,
+    read_no_follow_text,
     protocol_contract_metadata,
     protocol_metadata,
     resolve_manifest_memory_path,
@@ -63,7 +64,7 @@ from .local_overlay import (
 
 
 def _read(path: Path) -> str:
-    return path.read_text(encoding="utf-8") if path.exists() else ""
+    return read_no_follow_text(path, required=False) if path.exists() else ""
 
 
 def _check_agent_entry(path: Path) -> list[str]:

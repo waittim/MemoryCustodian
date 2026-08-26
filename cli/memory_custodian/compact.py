@@ -493,22 +493,34 @@ def _render_archive_document(
             rendered += "\n\n" + body
         return rendered.rstrip() + "\n"
 
-    sections = [*archived_sections, *retained]
-    sections = _merge_changelog_sections(sections)
-    covered = {
-        index
-        for unit_range in grouped_ranges
-        for index in range(unit_range.start, unit_range.end)
-    }
-    preserved = "\n".join(
-        line
-        for index, line in enumerate(existing_lines)
-        if index not in covered
-    ).strip()
-    rendered = _join_h2_sections(_archive_preamble(target).rstrip().splitlines(), sections)
-    if preserved:
-        rendered = rendered.rstrip() + "\n\n" + preserved + "\n"
-    return rendered
+    # Changelog prose is intentionally not a semantic unit.  Attach each gap
+    # between date sections to the section immediately before it, then merge
+    # duplicate dates.  This keeps prose in its source neighbourhood instead
+    # of collecting every non-H2 line at the end of the archive.
+    if grouped_ranges:
+        preamble = existing_lines[:grouped_ranges[0].start]
+        retained_with_gaps: list[list[str]] = []
+        for position, unit_range in enumerate(grouped_ranges):
+            section = existing_lines[unit_range.start:unit_range.end]
+            next_start = (
+                grouped_ranges[position + 1].start
+                if position + 1 < len(grouped_ranges)
+                else len(existing_lines)
+            )
+            gap = existing_lines[unit_range.end:next_start]
+            if _is_legacy_archive_wrapper(section, target):
+                continue
+            if any(line.strip() for line in gap):
+                section = [*section, "", *gap]
+            retained_with_gaps.append(section)
+    else:
+        preamble = existing_lines
+        retained_with_gaps = []
+    sections = _merge_changelog_sections([*archived_sections, *retained_with_gaps])
+    return _join_h2_sections(
+        _archive_preamble(target).rstrip().splitlines()[0:4] + preamble,
+        sections,
+    )
 
 
 def _archive_preamble(target: str) -> str:

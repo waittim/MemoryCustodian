@@ -80,25 +80,21 @@ def _migrate_decisions(
     document = parse_markdown_units(text)
     changed = 0
     manual = 0
-    updated: list[MarkdownUnit] = []
+    replacements: list[tuple[int, int, int, str]] = []
     generated_ids: list[str] = []
     for index, unit in enumerate(document.units):
         if unit.kind != "h2":
-            updated.append(unit)
             continue
         section = unit.text
         if ENTRY_ID_RE.search(section.splitlines()[0]):
-            updated.append(unit)
             continue
         visible = {line.index: line.text for line in visible_lines(section)}
         if not any(line.strip() == "Decision:" for line in visible.values()):
             manual += 1
-            updated.append(unit)
             continue
         entry_id = _legacy_id(relative, section, index, code, suffixes)
         if entry_id.casefold() in occupied_ids:
             manual += 1
-            updated.append(unit)
             continue
         lines = section.splitlines()
         title = re.sub(r"^##\s+(?:\d{4}-\d{2}-\d{2}\s+-\s+)?", "", lines[0]).strip()
@@ -123,7 +119,6 @@ def _migrate_decisions(
         parsed = parse_structured_entries(Path(relative), migrated)
         if len(parsed) != 1 or parsed[0].entry_id.casefold() != entry_id.casefold():
             manual += 1
-            updated.append(unit)
             continue
         validation_issues = [
             *structured_entry_schema_issues(parsed[0], relative),
@@ -131,13 +126,22 @@ def _migrate_decisions(
         ]
         if validation_issues:
             manual += 1
-            updated.append(unit)
             continue
         generated_ids.append(entry_id)
         occupied_ids.add(entry_id.casefold())
-        updated.append(MarkdownUnit("h2", migrated, migrated.splitlines()[0][3:].strip()))
+        replacements.append((unit.start_line, unit.end_line, len(section.splitlines()), migrated))
         changed += 1
-    rendered = render_markdown_document(document, updated) if changed else text
+    rendered = text
+    if replacements:
+        source_lines = text.splitlines(keepends=True)
+        for start, end, old_line_count, replacement in sorted(replacements, reverse=True):
+            if start < 0 or end > len(source_lines) or start + old_line_count > end:
+                raise ValueError("Migration source changed while building an exact-range mutation.")
+            trailing = source_lines[start + old_line_count:end]
+            eol = "\r\n" if any(line.endswith("\r\n") for line in source_lines[start:end]) else "\n"
+            replacement_lines = [line + eol for line in replacement.splitlines()]
+            source_lines[start:end] = [*replacement_lines, *trailing]
+        rendered = "".join(source_lines)
     return (
         rendered,
         changed,

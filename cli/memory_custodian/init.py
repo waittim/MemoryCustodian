@@ -19,6 +19,7 @@ from .protocol import (
     managed_markdown_files,
     project_id_from_manifest,
     protocol_metadata,
+    read_no_follow_text,
     read_managed_text,
     resolve_memory_dir,
     resolve_project_root,
@@ -62,7 +63,7 @@ Keep this file short. MemoryCustodian is the source of truth for durable project
 
 def _snippet_update(path: Path, snippet: str, force: bool) -> tuple[str, str | None]:
     if path.exists():
-        existing = path.read_text(encoding="utf-8")
+        existing = read_no_follow_text(path)
         starts = existing.count(BLOCK_START)
         ends = existing.count(BLOCK_END)
         if starts != ends:

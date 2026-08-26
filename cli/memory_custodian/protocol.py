@@ -301,11 +301,22 @@ def strict_protocol_metadata(
     atx_trace_count = sum(
         1
         for line in visible
-        if line.text.strip().startswith("#")
+        if not line.indented_code
+        and line.text.strip().startswith("#")
         and line.text.strip().lstrip("#").strip().strip("#").strip().casefold()
         == PROTOCOL_SECTION_NAME
     )
-    visible_by_index = {line.index: line for line in visible}
+    indented_trace_count = sum(
+        1
+        for line in visible
+        if line.indented_code
+        and line.text.strip().startswith("#")
+        and line.text.strip().lstrip("#").strip().strip("#").strip().casefold()
+        == PROTOCOL_SECTION_NAME
+    )
+    visible_by_index = {
+        line.index: line for line in visible if not line.indented_code
+    }
     setext_trace_count = sum(
         1
         for line in visible
@@ -314,9 +325,16 @@ def strict_protocol_metadata(
         and re.fullmatch(r" {0,3}(?:=+|-+)[ \t]*", visible_by_index[line.index + 1].text)
     )
     heading_trace_count = atx_trace_count + setext_trace_count
-    if section_count == 0 and heading_trace_count == 0 and allow_missing_section:
+    if (
+        section_count == 0
+        and heading_trace_count == 0
+        and indented_trace_count == 0
+        and allow_missing_section
+    ):
         return {}
-    if section_count != 1 or heading_trace_count != 1:
+    if (
+        section_count == 0 and (heading_trace_count or indented_trace_count)
+    ) or section_count != 1 or heading_trace_count != 1:
         raise ValueError(
             "manifest.md must contain exactly one MemoryCustodian Protocol heading, "
             "written as an H2 with canonical whitespace"
@@ -327,11 +345,15 @@ def strict_protocol_metadata(
     for line in visible:
         if not start <= line.index < end:
             continue
+        # Four-space/tab-indented lines are Markdown code, not Protocol
+        # metadata.  They must not become a second parser dialect or a fake
+        # scalar; required unindented fields are enforced by the contract
+        # validator below.
+        if line.indented_code:
+            continue
         stripped = line.text.strip()
         if not stripped:
             continue
-        if line.indented_code:
-            raise ValueError(f"Malformed protocol metadata line: {line.text!r}")
         match = PROTOCOL_BULLET_RE.fullmatch(stripped)
         if not match:
             raise ValueError(f"Malformed protocol metadata line: {stripped!r}")
@@ -379,6 +401,13 @@ def protocol_contract_metadata(
         allow_missing_section=allow_missing_section,
     )
     if not metadata:
+        if any(
+            heading.level == 2 and heading.title == PROTOCOL_SECTION_NAME
+            for heading in markdown_headings(manifest)
+        ):
+            raise ValueError(
+                "Protocol metadata section requires protocol_version"
+            )
         return {}
     version = metadata.get("protocol_version")
     if not version:
@@ -660,10 +689,19 @@ def managed_markdown_files(memory_dir: Path) -> tuple[Path, ...]:
         for entry in entries:
             path = Path(entry.path)
             if entry.is_symlink():
-                raise ValueError(
-                    f"Managed memory path must not be a symlink: "
-                    f"{path.relative_to(memory_dir).as_posix()}"
-                )
+                # Only Markdown is managed authority.  An unrelated symlink
+                # (for example a tooling cache or a lock file) must not make
+                # every read/status command fail closed; a Markdown symlink
+                # remains an integrity error because it could redirect a
+                # managed operand.
+                if path.suffix.casefold() == ".md" or entry.name.casefold() in {
+                    "areas", "rules", "profiles", "archive"
+                }:
+                    raise ValueError(
+                        f"Managed memory path must not be a symlink: "
+                        f"{path.relative_to(memory_dir).as_posix()}"
+                    )
+                continue
             if entry.is_dir(follow_symlinks=False):
                 try:
                     path.resolve().relative_to(root)
@@ -674,13 +712,105 @@ def managed_markdown_files(memory_dir: Path) -> tuple[Path, ...]:
                 pending.append(path)
                 continue
             if not entry.is_file(follow_symlinks=False):
-                raise ValueError(
-                    f"Managed memory path must be a regular file: "
-                    f"{path.relative_to(memory_dir).as_posix()}"
-                )
+                if path.suffix.casefold() == ".md":
+                    raise ValueError(
+                        f"Managed memory path must be a regular file: "
+                        f"{path.relative_to(memory_dir).as_posix()}"
+                    )
+                continue
             if path.suffix.casefold() == ".md":
                 found.append(path)
     return tuple(sorted(found, key=lambda path: path.relative_to(memory_dir).as_posix()))
+
+
+def read_no_follow_text(
+    path: Path,
+    *,
+    root: Path | None = None,
+    required: bool = True,
+) -> str:
+    """Read a regular file without following a final (or managed ancestor) symlink."""
+
+    # ``Path.resolve`` is useful for containment, but it erases the lexical
+    # symlink components we must reject before opening the file.  Keep a
+    # normalized-but-not-resolved spelling for the no-follow walk and use the
+    # resolved spelling only for the escape check.
+    candidate = path.expanduser()
+    if not candidate.is_absolute():
+        candidate = Path.cwd() / candidate
+    candidate = Path(os.path.abspath(str(candidate)))
+    if root is not None:
+        root = Path(os.path.abspath(str(root.expanduser())))
+        try:
+            root_info = root.lstat()
+        except FileNotFoundError:
+            root_info = None
+        if root_info is not None and (
+            stat.S_ISLNK(root_info.st_mode) or not stat.S_ISDIR(root_info.st_mode)
+        ):
+            raise ValueError(f"File root is not a real directory: {root}")
+        canonical_root = root.resolve()
+        canonical_candidate = candidate.resolve(strict=False)
+        try:
+            canonical_candidate.relative_to(canonical_root)
+        except ValueError as exc:
+            raise ValueError(f"File operand escapes its root: {candidate}") from exc
+        cursor = candidate.parent
+        while True:
+            # macOS commonly exposes /var as a system symlink to /private/var.
+            # Permit aliases that lead to the configured root, but reject any
+            # symlink at or below that root (including an escaping ancestor).
+            try:
+                canonical_cursor = cursor.resolve(strict=False)
+            except (OSError, RuntimeError):
+                canonical_cursor = cursor
+            if canonical_cursor == canonical_root:
+                break
+            try:
+                info = cursor.lstat()
+            except FileNotFoundError:
+                info = None
+            if info is not None and stat.S_ISLNK(info.st_mode):
+                try:
+                    root_is_below = canonical_root.is_relative_to(canonical_cursor)
+                except AttributeError:
+                    root_is_below = str(canonical_root).startswith(str(canonical_cursor) + "/")
+                if not root_is_below:
+                    raise ValueError(f"File operand has an unsafe ancestor: {cursor}")
+            if info is not None and not stat.S_ISDIR(info.st_mode):
+                raise ValueError(f"File operand has a non-directory parent: {cursor}")
+            if cursor == root:
+                break
+            if cursor == cursor.parent:
+                raise ValueError(f"File operand is outside its root: {candidate}")
+            cursor = cursor.parent
+    try:
+        before = candidate.lstat()
+    except FileNotFoundError:
+        if required:
+            raise
+        return ""
+    except NotADirectoryError as exc:
+        raise ValueError(f"File operand has a non-directory parent: {candidate}") from exc
+    if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode):
+        raise ValueError(f"File operand must be a regular non-symlink file: {candidate}")
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(candidate, flags)
+    except OSError as exc:
+        raise ValueError(f"File operand could not be opened safely: {candidate}") from exc
+    try:
+        opened = os.fstat(descriptor)
+        if not stat.S_ISREG(opened.st_mode) or (
+            before.st_dev, before.st_ino
+        ) != (opened.st_dev, opened.st_ino):
+            raise ValueError(f"File operand changed during safe open: {candidate}")
+        with os.fdopen(descriptor, "r", encoding="utf-8") as handle:
+            descriptor = -1
+            return handle.read()
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
 
 
 def read_managed_text(
@@ -694,47 +824,15 @@ def read_managed_text(
     root = memory_dir.resolve()
     candidate = path if path.is_absolute() else memory_dir / path
     try:
-        candidate.absolute().relative_to(memory_dir.absolute())
-        candidate.parent.resolve().relative_to(root)
-    except (OSError, RuntimeError, ValueError) as exc:
-        raise ValueError(f"Managed memory operand escapes its root: {candidate}") from exc
-    try:
-        before = candidate.lstat()
-    except FileNotFoundError:
-        if required:
-            raise
-        return ""
-    except NotADirectoryError as exc:
+        return read_no_follow_text(candidate, root=root, required=required)
+    except ValueError as exc:
+        try:
+            display = candidate.relative_to(memory_dir).as_posix()
+        except ValueError:
+            display = str(candidate)
         raise ValueError(
-            f"Managed memory operand has a non-directory parent: {candidate}"
+            str(exc).replace(str(candidate), display)
         ) from exc
-    if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode):
-        raise ValueError(
-            "Managed memory operand must be a regular non-symlink file: "
-            + candidate.relative_to(memory_dir).as_posix()
-        )
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
-    try:
-        descriptor = os.open(candidate, flags)
-    except OSError as exc:
-        raise ValueError(
-            f"Managed memory operand could not be opened safely: {candidate}"
-        ) from exc
-    try:
-        opened = os.fstat(descriptor)
-        if not stat.S_ISREG(opened.st_mode) or (
-            before.st_dev, before.st_ino
-        ) != (opened.st_dev, opened.st_ino):
-            raise ValueError(
-                "Managed memory operand changed during safe open: "
-                + candidate.relative_to(memory_dir).as_posix()
-            )
-        with os.fdopen(descriptor, "r", encoding="utf-8") as handle:
-            descriptor = -1
-            return handle.read()
-    finally:
-        if descriptor >= 0:
-            os.close(descriptor)
 
 
 def canonical_memory_files(
@@ -760,9 +858,11 @@ def canonical_memory_files(
     selected: list[Path] = []
     for path in inventory:
         relative = path.relative_to(memory_dir).as_posix()
-        if relative in root_storage or relative in declared:
+        if (
+            relative in root_storage or relative in declared
+        ) and path.name.casefold() != "readme.md":
             selected.append(path)
-        elif include_archive and relative.startswith("archive/") and path.name != "README.md":
+        elif include_archive and relative.startswith("archive/") and path.name.casefold() != "readme.md":
             selected.append(path)
     return tuple(selected)
 
@@ -801,7 +901,11 @@ def count_inbox_items(text: str) -> int:
         if unit.kind == "h2"
         and unit.heading is not None
         and re.search(r"\bMC-INBOX-\d{8}-[0-9a-f]{8}\b", unit.heading, re.I)
-        and re.search(r"(?m)^Status:\s*candidate\s*$", unit.text, re.I)
+        and any(
+            re.fullmatch(r"Status:\s*candidate\s*", line.text, re.I)
+            for line in visible_lines(unit.text)
+            if not line.indented_code
+        )
     )
     legacy = sum(1 for unit in units if unit.kind == "bullet")
     return structured + legacy
@@ -818,7 +922,11 @@ def decision_entry_sizes(text: str) -> list[tuple[str, int]]:
     for unit in parse_markdown_units(text).units:
         if unit.kind != "h2" or unit.heading is None:
             continue
-        if re.search(r"(?m)^Decision:[ \t]*$", unit.text) is None:
+        if not any(
+            re.fullmatch(r"Decision:[ \t]*", line.text)
+            for line in visible_lines(unit.text)
+            if not line.indented_code
+        ):
             continue
         entries.append((unit.heading, estimate_tokens(unit.text)))
     return entries
@@ -984,7 +1092,11 @@ def is_indexable_optional_path(relative_path: str) -> bool:
     if len(parts) != 2:
         return False
     folder, name = parts
-    return folder in OPTIONAL_INDEX_SECTIONS and name != "README.md" and name.endswith(".md")
+    return (
+        folder in OPTIONAL_INDEX_SECTIONS
+        and name.casefold() != "readme.md"
+        and name.endswith(".md")
+    )
 
 
 def default_optional_trigger(relative_path: str) -> str:

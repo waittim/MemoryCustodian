@@ -103,6 +103,8 @@ def _requested(values: list[str] | tuple[str, ...]) -> tuple[str, ...]:
         candidate = value.strip()
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", candidate):
             raise ValueError(f"Invalid explicit module name: {value}")
+        if candidate.casefold() == "readme":
+            raise ValueError("README.md is reserved documentation, not a managed module")
         normalized.append(candidate)
     return tuple(sorted(dict.fromkeys(normalized)))
 
