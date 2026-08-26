@@ -11,6 +11,7 @@ import re
 import stat
 
 from .entries import (
+    entry_unit_issues,
     generate_entry_id,
     heading_entry_ids,
     LIFECYCLE_FIELDS,
@@ -19,6 +20,8 @@ from .entries import (
     structured_entry_schema_issues,
     validate_evidence,
 )
+from .markdown import headings as markdown_headings
+from .markdown import visible_lines
 from .locking import (
     ensure_private_directory,
     existing_private_state_directory,
@@ -235,6 +238,21 @@ def enable_overlay(
 
 def _parse_manifest(path: Path, expected_project_id: str) -> tuple[Path, ...]:
     text = read_local_private_file(path)
+    # A local manifest is a small Markdown document, not an unordered bag of
+    # allowed lines.  Count only real (non-fenced, non-indented) headings so a
+    # code example cannot satisfy or duplicate the manifest topology.
+    visible_lines(text)
+    headings = markdown_headings(text)
+    expected_headings = (
+        (1, "local memory overlay"),
+        (2, "preferences"),
+        (2, "profiles"),
+    )
+    if tuple((heading.level, heading.title) for heading in headings) != expected_headings:
+        raise ValueError(
+            "Local overlay manifest must contain exactly one `# Local Memory Overlay`, "
+            "then one `## Preferences` and one `## Profiles` section."
+        )
     schemas = re.findall(r"(?m)^- local_overlay_schema_version:\s*(\S+)\s*$", text)
     projects = re.findall(r"(?m)^- project_id:\s*(\S+)\s*$", text)
     if len(schemas) != 1 or schemas[0] != LOCAL_SCHEMA_VERSION:
@@ -247,20 +265,42 @@ def _parse_manifest(path: Path, expected_project_id: str) -> tuple[Path, ...]:
         "## Profiles",
     }
     module_lines: list[str] = []
+    section: str | None = None
     for line in text.splitlines():
         stripped = line.strip()
         if not stripped:
             continue
         if line in allowed_lines:
+            if line == "## Preferences":
+                section = "preferences"
+            elif line == "## Profiles":
+                section = "profiles"
             continue
         if re.fullmatch(r"- (?:local_overlay_schema_version|project_id):\s*\S+\s*", line):
+            if section is not None:
+                raise ValueError(
+                    "Local overlay metadata must appear before module sections."
+                )
             continue
         module = re.fullmatch(
             r"- ((?:preferences\.md)|(?:profiles/[A-Za-z0-9][A-Za-z0-9._-]*\.md))",
             line,
         )
         if module:
-            module_lines.append(module.group(1))
+            declared = module.group(1)
+            if section is None:
+                raise ValueError(
+                    f"Local overlay module declaration is outside a section: {line!r}"
+                )
+            if section == "preferences" and declared != "preferences.md":
+                raise ValueError(
+                    f"Profile module declaration must be under `## Profiles`: {line!r}"
+                )
+            if section == "profiles" and declared == "preferences.md":
+                raise ValueError(
+                    f"Preferences module declaration must be under `## Preferences`: {line!r}"
+                )
+            module_lines.append(declared)
             continue
         raise ValueError(f"Local overlay manifest contains an invalid declaration: {line!r}")
     if len(module_lines) != len(set(module_lines)):
@@ -296,9 +336,15 @@ def _local_module_issues(
     identifiers: dict[str, list[str]] = {}
     for path in modules:
         relative = path.relative_to(directory).as_posix()
-        text = read_local_private_file(path)
-        entries = parse_structured_entries(path, text)
-        for value in heading_entry_ids(text):
+        try:
+            text = read_local_private_file(path)
+            issues.extend(entry_unit_issues(text, relative))
+            entries = parse_structured_entries(path, text)
+            values = heading_entry_ids(text)
+        except (OSError, RuntimeError, TypeError, ValueError) as exc:
+            issues.append(f"{relative}: Markdown entry parsing failed: {exc}")
+            continue
+        for value in values:
             identifiers.setdefault(value.casefold(), []).append(relative)
         for entry in entries:
             issues.extend(structured_entry_schema_issues(entry, relative))
@@ -355,12 +401,21 @@ def _cross_storage_id_issues(
     shared_ids: set[str] | None,
 ) -> list[str]:
     normalized_shared = {value.casefold() for value in (shared_ids or set())}
-    return [
-        f"duplicate Entry ID across shared/local storage: {entry_id}"
-        for path in modules
-        for entry_id in heading_entry_ids(read_local_private_file(path))
-        if entry_id.casefold() in normalized_shared
-    ]
+    issues: list[str] = []
+    for path in modules:
+        try:
+            values = heading_entry_ids(read_local_private_file(path))
+        except (OSError, RuntimeError, TypeError, ValueError):
+            # The module parser already reports malformed Markdown.  Do not
+            # turn that diagnostic into an uncaught exception while checking
+            # the cross-storage ID index.
+            continue
+        issues.extend(
+            f"duplicate Entry ID across shared/local storage: {entry_id}"
+            for entry_id in values
+            if entry_id.casefold() in normalized_shared
+        )
+    return issues
 
 
 def inspect_overlay(
@@ -491,9 +546,20 @@ def add_local_preference(
     findings = scan_text(path, message)
     if any(item.category == "security" for item in findings):
         raise ValueError("Local memory may not store credential-like secrets.")
-    existing_ids = set(re.findall(r"MC-PREF-\d{8}-[0-9a-f]{8}", existing, re.I))
+    existing_ids: set[str] = set()
+    for module in overlay.modules:
+        try:
+            existing_ids.update(
+                heading_entry_ids(read_local_private_file(module))
+            )
+        except (OSError, RuntimeError, TypeError, ValueError) as exc:
+            raise ValueError(
+                f"Local overlay cannot allocate an Entry ID while {module.name} is invalid: {exc}"
+            ) from exc
     existing_ids.update(shared_ids or ())
     entry_id = generate_entry_id("preference", existing_ids)
+    if entry_id.casefold() in {value.casefold() for value in existing_ids}:
+        raise ValueError(f"Entry ID collision in local overlay: {entry_id}")
     entry = render_active_entry(
         "preference", entry_id, "Local preference", message, None,
         "local-user", evidence,

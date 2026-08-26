@@ -12,9 +12,9 @@ from .local_overlay import (
     LocalOverlay,
     LocalStatus,
     inspect_overlay,
-    project_identity,
     read_local_private_file,
     render_overlay_status,
+    validated_project_identity,
 )
 from .protocol import budget_for, resolve_memory_dir, resolve_project_root
 from .routes import ModuleDisposition, RouteReason, RoutedModule, RoutingCompleteness
@@ -114,16 +114,22 @@ def run(args) -> int:
             areas=args.area,
             error=exc,
         )
-    overlay = (
-        LocalOverlay(LocalStatus.DISABLED, Path("."), "")
-        if routing_invalid
-        else inspect_overlay(
-            project_root,
-            project_identity(memory_dir),
-            disabled=getattr(args, "no_local", False),
-            shared_ids=memory_entry_ids(memory_dir),
-        )
-    )
+    overlay = LocalOverlay(LocalStatus.DISABLED, Path("."), "")
+    if not routing_invalid and not getattr(args, "no_local", False):
+        try:
+            # Local state is project-scoped and must never be selected from a
+            # permissively parsed legacy/invalid manifest.  A valid shared
+            # routing result may still represent a pre-metadata project, in
+            # which case local overlay loading remains disabled.
+            overlay_project_id = validated_project_identity(memory_dir)
+        except (OSError, ValueError):
+            overlay_project_id = None
+        if overlay_project_id is not None:
+            overlay = inspect_overlay(
+                project_root,
+                overlay_project_id,
+                shared_ids=memory_entry_ids(memory_dir),
+            )
     local_contents: list[tuple[str, str]] = []
     local_scope_warnings: list[str] = []
     if overlay.status == LocalStatus.BOUND:

@@ -2840,6 +2840,112 @@ class RoutingAndQualityReleaseTests(unittest.TestCase):
                 self.assertIn("Local overlay status: REVIEW", output)
                 self.assertIn("invalid declaration", output)
 
+    def test_local_manifest_topology_and_unclosed_modules_fail_closed(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as state:
+            with patch.dict(os.environ, {"XDG_STATE_HOME": state}):
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["init", "--project-root", tmp]), 0)
+                    self.assertEqual(main(["local", "enable", "--project-root", tmp]), 0)
+                    self.assertEqual(main(["local", "link", "--project-root", tmp]), 0)
+                shared = Path(tmp) / "docs/memory/manifest.md"
+                project_id = re.search(
+                    r"(?m)^- project_id: (\S+)", shared.read_text(encoding="utf-8"),
+                ).group(1)
+                directory = Path(state) / "memory-custodian/projects" / project_id / "local"
+                local_manifest = directory / "manifest.md"
+                original = local_manifest.read_text(encoding="utf-8")
+
+                local_manifest.write_text(original + "\n## Preferences\n", encoding="utf-8")
+                code, output, error = capture(["local", "status", "--project-root", tmp])
+                self.assertEqual(code, 0, error)
+                self.assertIn("Local overlay status: REVIEW", output)
+                self.assertIn("exactly one", output)
+
+                local_manifest.write_text(
+                    original.replace("# Local Memory Overlay", "## Local Memory Overlay", 1),
+                    encoding="utf-8",
+                )
+                code, output, error = capture(["local", "status", "--project-root", tmp])
+                self.assertEqual(code, 0, error)
+                self.assertIn("Local overlay status: REVIEW", output)
+
+                local_manifest.write_text(original, encoding="utf-8")
+                preferences = directory / "preferences.md"
+                preferences.write_text(
+                    "# Local Preferences\n\n```python\nunterminated\n",
+                    encoding="utf-8",
+                )
+                code, output, error = capture(["local", "status", "--project-root", tmp])
+                self.assertEqual(code, 0, error)
+                self.assertIn("Local overlay status: REVIEW", output)
+                self.assertIn("Markdown entry parsing failed", output)
+                self.assertIn("Unclosed fenced code block", output)
+
+    def test_local_formal_entry_heading_errors_are_reviewed(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as state:
+            with patch.dict(os.environ, {"XDG_STATE_HOME": state}):
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["init", "--project-root", tmp]), 0)
+                    self.assertEqual(main(["local", "enable", "--project-root", tmp]), 0)
+                    self.assertEqual(main(["local", "link", "--project-root", tmp]), 0)
+                shared = Path(tmp) / "docs/memory/manifest.md"
+                project_id = re.search(
+                    r"(?m)^- project_id: (\S+)", shared.read_text(encoding="utf-8"),
+                ).group(1)
+                preferences = Path(state) / "memory-custodian/projects" / project_id / "local/preferences.md"
+                preferences.write_text(
+                    "# Local Preferences\n\n"
+                    "## MC-PREF-20260825-deadbeef\n\n"
+                    "Status: active\nScope: local-user\nEvidence:\n- user-confirmed\n\n"
+                    "Preference:\nMalformed heading must not load.\n",
+                    encoding="utf-8",
+                )
+                code, output, error = capture(["local", "status", "--project-root", tmp])
+                self.assertEqual(code, 0, error)
+                self.assertIn("Local overlay status: REVIEW", output)
+                self.assertIn("malformed Entry heading", output)
+
+    def test_local_preference_id_allocation_reserves_profile_ids(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as state:
+            with patch.dict(os.environ, {"XDG_STATE_HOME": state}):
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["init", "--project-root", tmp]), 0)
+                    self.assertEqual(main(["local", "enable", "--project-root", tmp]), 0)
+                    self.assertEqual(main(["local", "link", "--project-root", tmp]), 0)
+                shared = Path(tmp) / "docs/memory/manifest.md"
+                project_id = re.search(
+                    r"(?m)^- project_id: (\S+)", shared.read_text(encoding="utf-8"),
+                ).group(1)
+                directory = Path(state) / "memory-custodian/projects" / project_id / "local"
+                profile = directory / "profiles" / "git.md"
+                profile_id = "MC-AREA-20260825-deadbeef"
+                profile.write_text(
+                    render_active_entry(
+                        "profile", profile_id, "Git profile", "Profile body.", None,
+                        "local-user", ("user-confirmed",),
+                    ) + "\n",
+                    encoding="utf-8",
+                )
+                profile.chmod(0o600)
+                local_manifest = directory / "manifest.md"
+                local_manifest.write_text(
+                    local_manifest.read_text(encoding="utf-8") + "- profiles/git.md\n",
+                    encoding="utf-8",
+                )
+                with patch(
+                    "memory_custodian.local_overlay.generate_entry_id",
+                    return_value=profile_id,
+                ):
+                    code, output, error = capture([
+                        "local", "add", "Do not reuse profile ID.",
+                        "--type", "preference", "--evidence", "user-confirmed",
+                        "--project-root", tmp,
+                    ])
+                self.assertEqual(code, 2, output + error)
+                self.assertIn("Entry ID", error)
+                self.assertIn("collision", error)
+                self.assertNotIn("Do not reuse profile ID.", (directory / "preferences.md").read_text(encoding="utf-8"))
+
 
 class ForgetAndHistoryReleaseTests(unittest.TestCase):
     def test_ambiguous_tail_bullet_blocks_forget(self):
