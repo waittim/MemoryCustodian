@@ -97,7 +97,7 @@ def reachability_findings(memory_dir: Path) -> tuple[QualityFinding, ...]:
     findings: list[QualityFinding] = []
     canonical_paths = set(canonical_memory_files(memory_dir))
     for path in managed_markdown_files(memory_dir):
-        if path in canonical_paths or path.name == "README.md":
+        if path in canonical_paths or path.name.casefold() == "readme.md":
             continue
         if path.relative_to(memory_dir).as_posix().startswith("archive/"):
             continue
@@ -126,7 +126,11 @@ def reachability_findings(memory_dir: Path) -> tuple[QualityFinding, ...]:
                     "ERROR", "MC-REACH-002",
                     f"Area constraint {entry.entry_id} has no valid path or explicit activation.",
                 ))
-    return tuple(sorted(findings, key=lambda item: (item.severity, item.code, item.message)))
+    unique = {
+        (item.severity, item.code, item.message): item
+        for item in findings
+    }
+    return tuple(sorted(unique.values(), key=lambda item: (item.severity, item.code, item.message)))
 
 
 def _head_revision(project_root: Path) -> str | None:
@@ -175,12 +179,17 @@ def freshness_findings(project_root: Path, memory_dir: Path) -> tuple[QualityFin
                             "WARNING", "MC-FRESH-002",
                             f"{entry.entry_id} Evidence revision differs from current Git HEAD.",
                         ))
-    findings.extend(
-        QualityFinding("ERROR", "MC-FRESH-004", issue + ".")
-        for issue in structured_relation_issues(all_entries)
-    )
     from .subjects import load_subjects
     subjects = {item.subject_id.casefold(): item for item in load_subjects(memory_dir)}
+    findings.extend(
+        QualityFinding("ERROR", "MC-FRESH-004", issue + ".")
+        for issue in structured_relation_issues(
+            all_entries,
+            merged_subject_ids={
+                item.subject_id for item in subjects.values() if item.status == "merged"
+            },
+        )
+    )
     for subject in subjects.values():
         if subject.status == "merged" and (
             not subject.merged_into
@@ -195,6 +204,7 @@ def freshness_findings(project_root: Path, memory_dir: Path) -> tuple[QualityFin
         freshness_code = {
             "MC-CONFLICT-005": "MC-FRESH-005",
             "MC-CONFLICT-006": "MC-FRESH-004",
+            "MC-CONFLICT-007": "MC-FRESH-004",
         }.get(conflict.code)
         if conflict.code == "MC-CONFLICT-008" and "reconciliation" in conflict.message.casefold():
             freshness_code = "MC-FRESH-006"
@@ -207,7 +217,11 @@ def freshness_findings(project_root: Path, memory_dir: Path) -> tuple[QualityFin
             "INFO", "MC-FRESH-003",
             "Git is unavailable; revision-backed Evidence was not freshness-checked.",
         ))
-    return tuple(sorted(findings, key=lambda item: (item.severity, item.code, item.message)))
+    unique = {
+        (item.severity, item.code, item.message): item
+        for item in findings
+    }
+    return tuple(sorted(unique.values(), key=lambda item: (item.severity, item.code, item.message)))
 
 
 def render_quality(title: str, findings: tuple[QualityFinding, ...]) -> int:

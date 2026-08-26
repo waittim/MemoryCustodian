@@ -31,6 +31,8 @@ class ReconciliationRecord:
     entries: tuple[str, ...]
     evidence: tuple[str, ...]
     text: str
+    valid: bool = True
+    parse_issues: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -44,6 +46,9 @@ def reconciliation_pairs(
     record: ReconciliationRecord,
 ) -> tuple[frozenset[str], ...]:
     """Return only the exact Entry pairs acknowledged by a valid record."""
+
+    if not record.valid:
+        return ()
 
     return tuple(
         frozenset((left.casefold(), right.casefold()))
@@ -97,19 +102,30 @@ def _subject_merged_pair_valid(
 def parse_reconciliations(
     path: Path,
     text: str,
+    project_root: Path | None = None,
+    *,
+    include_invalid: bool = False,
 ) -> tuple[tuple[ReconciliationRecord, ...], tuple[str, ...]]:
-    """Parse every H2 record, returning valid records and deterministic issues."""
+    """Parse every visible H2 record and retain invalid records for inventory."""
 
     records: list[ReconciliationRecord] = []
     issues: list[str] = []
+    evidence_root = (project_root or path.parent).resolve()
     for unit in parse_markdown_units(text).units:
         if unit.kind != "h2":
             continue
         section = unit.text
-        section_lines = [line.text for line in visible_lines(section)]
+        section_lines = [line.text for line in visible_lines(section) if not line.indented_code]
         heading = canonical_h2_parts(section_lines[0], REC_ID_RE)
         if not heading:
-            issues.append(f"{path.name}: malformed reconciliation heading {section_lines[0]!r}")
+            match = REC_ID_RE.search(section_lines[0])
+            if match and include_invalid:
+                records.append(ReconciliationRecord(
+                    match.group(0), "(invalid heading)", "invalid", "", (), (),
+                    section, False, (f"malformed reconciliation heading {section_lines[0]!r}",),
+                ))
+            else:
+                issues.append(f"{path.name}: malformed reconciliation heading {section_lines[0]!r}")
             continue
 
         record_id, title = heading
@@ -158,21 +174,24 @@ def parse_reconciliations(
         if any(ENTRY_ID_RE.fullmatch(value) is None for value in entries):
             record_issues.append("Entries contains an invalid Entry ID")
         try:
-            validate_evidence(evidence, Path.cwd(), allow_missing=True)
+            validate_evidence(evidence, evidence_root, allow_missing=True)
         except ValueError:
             record_issues.append("Evidence is missing or invalid")
-        if record_issues:
-            issues.append(f"{record_id}: " + "; ".join(dict.fromkeys(record_issues)))
-            continue
-        records.append(ReconciliationRecord(
+        record = ReconciliationRecord(
             record_id,
             title,
-            scalars["Status"],
-            scalars["Resolution"],
+            scalars.get("Status", ""),
+            scalars.get("Resolution", ""),
             entries,
             evidence,
             section,
-        ))
+            not bool(record_issues),
+            tuple(dict.fromkeys(record_issues)),
+        )
+        if record.valid or include_invalid:
+            records.append(record)
+        elif record.parse_issues:
+            issues.append(f"{record_id}: " + "; ".join(record.parse_issues))
     return tuple(records), tuple(issues)
 
 
@@ -199,6 +218,13 @@ def validate_reconciliations(
     record_ids: set[str] = set()
 
     for record in records:
+        if not record.valid:
+            issues.append(ReconciliationIssue(
+                "; ".join(record.parse_issues) or "invalid reconciliation record",
+                record.record_id,
+                record.entries,
+            ))
+            continue
         duplicate_id = record.record_id.casefold() in record_ids
         record_ids.add(record.record_id.casefold())
         identity = tuple(value.casefold() for value in record.entries)

@@ -70,7 +70,7 @@ def _target_files(memory_dir: Path, mode: str, *, include_do_not_use: bool = Fal
     if mode == "purge":
         candidates = managed_markdown_files(memory_dir)
         return sorted(
-            {path for path in candidates if path.name != "README.md" and path.relative_to(memory_dir).as_posix() not in excluded}
+            {path for path in candidates if path.name.casefold() != "readme.md" and path.relative_to(memory_dir).as_posix() not in excluded}
         )
 
     manifest = read_managed_text(memory_dir, memory_dir / "manifest.md")
@@ -85,7 +85,7 @@ def _target_files(memory_dir: Path, mode: str, *, include_do_not_use: bool = Fal
             candidates.add(path)
     return sorted(
         path for path in candidates
-        if path.name != "README.md" and (include_do_not_use or path.name != "do-not-use.md")
+        if path.name.casefold() != "readme.md" and (include_do_not_use or path.name != "do-not-use.md")
     )
 
 
@@ -384,24 +384,18 @@ def _entry_reference_blockers(memory_dir: Path, entry_id: str | None) -> list[st
         text = read_managed_text(memory_dir, reconciliation_path)
         from .reconciliations import parse_reconciliations
 
-        records, parse_issues = parse_reconciliations(reconciliation_path, text)
+        project_root = next(
+            (parent.parent for parent in (memory_dir, *memory_dir.parents) if parent.name == "docs"),
+            memory_dir.parent.parent,
+        )
+        records, parse_issues = parse_reconciliations(
+            reconciliation_path, text, project_root, include_invalid=True
+        )
         for record in records:
             if any(value.casefold() == entry_id.casefold() for value in record.entries):
                 blockers.append(
                     f"reconciliations.md:{record.record_id} Entries references selected Entry {entry_id}"
                 )
-        raw_references = sum(
-            match.group(0).casefold() == entry_id.casefold()
-            for match in ENTRY_ID_RE.finditer(text)
-        )
-        valid_references = sum(
-            value.casefold() == entry_id.casefold()
-            for record in records for value in record.entries
-        )
-        if parse_issues and raw_references > valid_references:
-            blockers.append(
-                f"reconciliations.md contains selected Entry {entry_id} in an invalid record"
-            )
     return sorted(blockers)
 
 

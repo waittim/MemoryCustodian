@@ -63,6 +63,7 @@ LIFECYCLE_FIELDS = {
     "Promoted-From",
     "Promoted-To",
 }
+VALID_ENTRY_STATUSES = frozenset({"active", "candidate", "superseded", "promoted"})
 
 
 def generate_entry_id(kind: str, existing_ids: set[str] | None = None, *, day: date | None = None) -> str:
@@ -217,11 +218,33 @@ def line_safe_markdown_body(value: str) -> str:
     """Serialize body text without creating column-zero protocol structure."""
 
     safe: list[str] = []
+    fence_character: str | None = None
+    fence_length = 0
     for line in value.splitlines():
+        if fence_character is not None:
+            safe.append(line)
+            if re.fullmatch(
+                rf" {{0,3}}{re.escape(fence_character)}{{{fence_length},}}[ \t]*",
+                line,
+            ):
+                fence_character = None
+                fence_length = 0
+            continue
+        opening = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", line)
+        if opening:
+            marker = opening.group(1)
+            if marker[0] == "`" and "`" in opening.group(2):
+                raise ValueError("Backtick fence info strings must not contain backticks")
+            fence_character = marker[0]
+            fence_length = len(marker)
+            safe.append(line)
+            continue
         if FIELD_RE.match(line) or line.startswith(("## ", "- ", "* ", "+ ")):
             safe.append("    " + line)
         else:
             safe.append(line)
+    if fence_character is not None:
+        raise ValueError("Body contains an unclosed fenced code block.")
     return "\n".join(safe)
 
 
@@ -235,7 +258,12 @@ def render_markdown_bullet(value: str) -> str:
 
 
 def _normalized_body(value: str) -> str:
-    return "\n".join(line.strip() for line in value.splitlines() if line.strip())
+    lines = [line for line in value.splitlines() if line.strip()]
+    if any(re.match(r"^ {0,3}(`{3,}|~{3,})", line) for line in lines):
+        # Fenced code is opaque content.  Preserve indentation and punctuation
+        # so a renderer cannot silently rewrite executable examples.
+        return "\n".join(line.rstrip() for line in lines).strip()
+    return "\n".join(line.strip() for line in lines)
 
 
 def _validate_rendered_entry(
@@ -406,7 +434,9 @@ def parse_structured_entries(path: Path, text: str) -> list[StructuredEntry]:
             current_field = None
             current_body = []
 
-        visible_by_index = {line.index: line for line in visible_lines(section)}
+        visible_by_index = {
+            line.index: line for line in visible_lines(section) if not line.indented_code
+        }
         for line_index, raw_line in enumerate(lines):
             if line_index == 0:
                 continue
@@ -432,12 +462,12 @@ def parse_structured_entries(path: Path, text: str) -> list[StructuredEntry]:
                 current_body.append(line.strip())
         flush_field()
         field_bodies = {
-            key: "\n".join(
+            key: _normalized_body("\n".join(
                 line
                 for occurrence in occurrences
                 for line in occurrence
                 if line.strip()
-            ).strip()
+            ))
             for key, occurrences in occurrence_bodies.items()
         }
         title = heading[1]
@@ -491,6 +521,11 @@ def structured_entry_schema_issues(
         count = entry.field_counts.get(name, 0)
         if count != 1:
             issues.append(f"{prefix} must declare exactly one {name} field (found {count})")
+
+    if entry.status not in VALID_ENTRY_STATUSES:
+        issues.append(f"{prefix} has invalid Status {entry.status!r}")
+    if VALID_SCOPES_RE.fullmatch(entry.scope) is None:
+        issues.append(f"{prefix} has invalid Scope {entry.scope!r}")
 
     for name, count in sorted(entry.field_counts.items()):
         if count > 1:
@@ -620,10 +655,57 @@ def structured_entry_storage_issues(
     return issues
 
 
-def structured_relation_issues(entries: list[StructuredEntry]) -> list[str]:
+def parse_entry_inventory(
+    path: Path,
+    text: str,
+    relative_path: str,
+    project_root: Path,
+) -> tuple[tuple[StructuredEntry, ...], tuple[str, ...]]:
+    """Parse entries together with the complete integrity issues for a file.
+
+    Readers that make safety decisions (conflict and merge review in
+    particular) must not silently discard malformed formal units.  The normal
+    check command already reports these components independently; this helper
+    gives read-only decision paths the same evidence without introducing a
+    second schema implementation.
+    """
+
+    issues: list[str] = []
+    try:
+        issues.extend(entry_unit_issues(text, relative_path))
+        parsed = tuple(parse_structured_entries(path, text))
+    except (TypeError, ValueError) as exc:
+        return (), (f"{relative_path}: Markdown entry parsing failed: {exc}",)
+    for entry in parsed:
+        issues.extend(structured_entry_schema_issues(entry, relative_path))
+        issues.extend(structured_entry_storage_issues(entry, relative_path))
+        if entry.evidence:
+            try:
+                validate_evidence(
+                    entry.evidence,
+                    project_root,
+                    candidate=entry.status in {"candidate", "promoted"},
+                    allow_missing=True,
+                    allow_internal=entry.status not in {"candidate", "promoted"},
+                )
+            except ValueError as exc:
+                # Keep diagnostics deterministic and avoid echoing arbitrary
+                # evidence payloads (which may contain sensitive text).
+                issues.append(
+                    f"{relative_path}: {entry.entry_id} has invalid Evidence schema or unsafe source path"
+                )
+    return parsed, tuple(dict.fromkeys(issues))
+
+
+def structured_relation_issues(
+    entries: list[StructuredEntry],
+    *,
+    merged_subject_ids: set[str] | None = None,
+) -> list[str]:
     """Validate reciprocal lifecycle relations and preserved structural identity."""
 
     by_id: dict[str, list[StructuredEntry]] = {}
+    merged_subjects = {value.casefold() for value in (merged_subject_ids or set())}
     for entry in entries:
         by_id.setdefault(entry.entry_id.casefold(), []).append(entry)
     issues: set[str] = set()
@@ -657,6 +739,29 @@ def structured_relation_issues(entries: list[StructuredEntry]) -> list[str]:
                 issues.add(
                     f"{entry.entry_id} {relation} target {target_id} resolves to "
                     f"{len(matches)} entries; relation targets must be unique"
+                )
+
+        exception_target_id = entry.fields.get("Exception-To", "")
+        if exception_target_id:
+            target_matches = by_id.get(exception_target_id.casefold(), [])
+            if (
+                entry.status != "active"
+                or not entry.scope.casefold().startswith("area:")
+                or len(target_matches) != 1
+                or target_matches[0].status != "active"
+                or target_matches[0].scope.casefold() != "project"
+                or bool(target_matches[0].fields.get("Exception-To"))
+                or (
+                    entry.fields.get("Subject", "").casefold()
+                    != target_matches[0].fields.get("Subject", "").casefold()
+                )
+                or (
+                    entry.fields.get("Facet", "").casefold()
+                    != target_matches[0].fields.get("Facet", "").casefold()
+                )
+            ):
+                issues.add(
+                    f"{entry.entry_id} Exception-To relation is invalid; it must point from an active area owner to a matching project owner"
                 )
 
         previous_id = entry.fields.get("Supersedes", "")
@@ -743,7 +848,13 @@ def structured_relation_issues(entries: list[StructuredEntry]) -> list[str]:
             continue
         replacement_id = entry.fields.get("Superseded-By", "")
         if not replacement_id:
-            issues.add(f"{entry.entry_id} supersession chain does not terminate at an active replacement")
+            # A historical Entry whose Subject was merged is terminal by the
+            # Subject lifecycle, not by an active Entry replacement.  Other
+            # superseded entries still require an explicit successor.
+            if entry.fields.get("Subject", "").casefold() not in merged_subjects:
+                issues.add(
+                    f"{entry.entry_id} supersession chain does not terminate at an active replacement"
+                )
             continue
         if unique(replacement_id) is not None:
             successor[entry.entry_id.casefold()] = replacement_id.casefold()
@@ -778,21 +889,25 @@ def structured_relation_issues(entries: list[StructuredEntry]) -> list[str]:
     return sorted(issues)
 
 
-def supersede_entry(text: str, old_id: str, new_id: str) -> str:
+def supersede_entry(
+    text: str,
+    old_id: str,
+    new_id: str,
+    *,
+    relative_path: str = "__supersession__.md",
+) -> str:
     from .markdown import visible_lines
-    from .protocol import MarkdownUnit, parse_markdown_units, render_markdown_document
+    from .protocol import parse_markdown_units
 
     document = parse_markdown_units(text)
+    source_lines = text.splitlines(keepends=True)
     changed = False
-    updated: list[MarkdownUnit] = []
     for unit in document.units:
         if unit.kind != "h2":
-            updated.append(unit)
             continue
         section = unit.text
-        parsed = parse_structured_entries(Path("__supersession__.md"), section)
+        parsed = parse_structured_entries(Path(relative_path), section)
         if len(parsed) != 1 or parsed[0].entry_id.casefold() != old_id.casefold():
-            updated.append(unit)
             continue
         entry = parsed[0]
         if entry.status == "superseded":
@@ -801,7 +916,6 @@ def supersede_entry(text: str, old_id: str, new_id: str) -> str:
             raise ValueError(f"{old_id} is already superseded{suffix}.")
         if entry.status != "active" or entry.field_counts.get("Status") != 1:
             raise ValueError(f"{old_id} is not an active entry.")
-        lines = section.splitlines()
         status_indices = [
             line.index
             for line in visible_lines(section)
@@ -810,18 +924,35 @@ def supersede_entry(text: str, old_id: str, new_id: str) -> str:
         if len(status_indices) != 1:
             raise ValueError(f"{old_id} has no unique visible active Status field.")
         status_index = status_indices[0]
+        lines = section.splitlines()
         lines[status_index:status_index + 1] = [
             "Status: superseded",
             f"Superseded-By: {new_id}",
         ]
         section = "\n".join(lines)
-        resulting = parse_structured_entries(Path("__supersession__.md"), section)
-        if len(resulting) != 1 or structured_entry_schema_issues(
-            resulting[0], "__supersession__.md"
+        resulting = parse_structured_entries(Path(relative_path), section)
+        if len(resulting) != 1 or (
+            structured_entry_schema_issues(resulting[0], relative_path)
+            or (
+                relative_path != "__supersession__.md"
+                and structured_entry_storage_issues(resulting[0], relative_path)
+            )
         ):
             raise ValueError(f"Supersession would make {old_id} structurally invalid.")
-        updated.append(MarkdownUnit("h2", section, section.splitlines()[0][3:].strip()))
+        absolute_status_index = unit.start_line + status_index
+        if absolute_status_index >= len(source_lines):
+            raise ValueError("Supersession source changed while building mutation.")
+        original_line = source_lines[absolute_status_index]
+        line_ending = (
+            "\r\n" if original_line.endswith("\r\n")
+            else "\n" if original_line.endswith("\n")
+            else ""
+        )
+        source_lines[absolute_status_index] = (
+            "Status: superseded" + line_ending
+            + f"Superseded-By: {new_id}" + line_ending
+        )
         changed = True
     if not changed:
         raise ValueError(f"Entry ID not found: {old_id}")
-    return render_markdown_document(document, updated)
+    return "".join(source_lines)

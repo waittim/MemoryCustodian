@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 import subprocess
 
-from .entries import StructuredEntry, parse_structured_entries
+from .entries import StructuredEntry, parse_entry_inventory, parse_structured_entries
 from .reconciliations import (
     ReconciliationIssue,
     ReconciliationRecord,
@@ -24,6 +24,16 @@ from .subjects import (
 class MergeReviewResult:
     text: str
     blocking: bool
+
+
+@dataclass(frozen=True)
+class _DeletedEntry:
+    entry_id: str
+    path: Path
+    text: str = ""
+    status: str = "deleted"
+    scope: str = ""
+    fields: dict[str, str] = field(default_factory=dict)
 
 
 def _git(project_root: Path, *args: str) -> str:
@@ -47,22 +57,32 @@ def _files(project_root: Path, revision: str, memory_relative: str) -> tuple[str
     output = _git(project_root, "ls-tree", "-r", "--name-only", revision, "--", memory_relative)
     return tuple(sorted(
         line for line in output.splitlines()
-        if line.endswith(".md") and (
-            line.endswith(("constraints.md", "decisions.md", "do-not-use.md", "subjects.md", "reconciliations.md"))
-            or f"/{memory_relative.strip('/')}/areas/" in f"/{line}"
-            or line.startswith(memory_relative.rstrip("/") + "/areas/")
-        )
+        if line.endswith(".md")
+        and Path(line).name.casefold() != "readme.md"
+        and line.startswith(memory_relative.rstrip("/") + "/")
     ))
 
 
-def _entries(project_root: Path, revision: str, files: tuple[str, ...]) -> tuple[StructuredEntry, ...]:
+def _entries(
+    project_root: Path,
+    revision: str,
+    files: tuple[str, ...],
+    memory_relative: str,
+) -> tuple[tuple[StructuredEntry, ...], tuple[str, ...]]:
     result: list[StructuredEntry] = []
+    issues: list[str] = []
     for relative in files:
         if relative.endswith(("subjects.md", "reconciliations.md")):
             continue
         text = _show(project_root, revision, relative)
-        result.extend(parse_structured_entries(Path(relative), text))
-    return tuple(result)
+        prefix = memory_relative.rstrip("/") + "/"
+        memory_path = relative.removeprefix(prefix)
+        parsed, file_issues = parse_entry_inventory(
+            Path(relative), text, memory_path, project_root,
+        )
+        result.extend(parsed)
+        issues.extend(file_issues)
+    return tuple(result), tuple(dict.fromkeys(issues))
 
 
 def _subjects(
@@ -85,7 +105,8 @@ def _reconciliations(
     subjects: tuple[Subject, ...],
 ) -> tuple[tuple[ReconciliationRecord, ...], tuple[ReconciliationIssue, ...]]:
     records, parse_issues = parse_reconciliations(
-        Path(relative), _show(project_root, revision, relative)
+        Path(relative), _show(project_root, revision, relative), project_root,
+        include_invalid=True,
     )
     valid, issues = validate_reconciliations(records, parse_issues, entries, subjects)
     return (() if issues else valid), issues
@@ -106,8 +127,20 @@ def _by_id(
     return result
 
 
-def _changed(base: dict[str, object], side: dict[str, object]) -> dict[str, object]:
-    return {key: value for key, value in side.items() if key not in base or getattr(base[key], "text") != getattr(value, "text")}
+def _changed(
+    base: dict[str, object], side: dict[str, object], *, include_deleted: bool = False,
+) -> dict[str, object]:
+    if include_deleted:
+        return {
+            key: _DeletedEntry(value.entry_id, value.path)
+            for key, value in base.items()
+            if key not in side and isinstance(value, StructuredEntry)
+        }
+    changed = {
+        key: value for key, value in side.items()
+        if key not in base or getattr(base[key], "text") != getattr(value, "text")
+    }
+    return changed
 
 
 def _changed_files(project_root: Path, base: str, revision: str) -> set[str]:
@@ -127,9 +160,15 @@ def merge_review(project_root: Path, memory_dir: Path, target_ref: str) -> Merge
         )))
         registry = f"{memory_relative}/subjects.md"
         reconciliations = f"{memory_relative}/reconciliations.md"
-        base_entry_units = _entries(project_root, base, all_files)
-        head_entry_units = _entries(project_root, "HEAD", all_files)
-        target_entry_units = _entries(project_root, target_ref, all_files)
+        base_entry_units, base_entry_issues = _entries(
+            project_root, base, all_files, memory_relative,
+        )
+        head_entry_units, head_entry_issues = _entries(
+            project_root, "HEAD", all_files, memory_relative,
+        )
+        target_entry_units, target_entry_issues = _entries(
+            project_root, target_ref, all_files, memory_relative,
+        )
         base_subject_units, _base_subject_issues = _subjects(project_root, base, registry)
         head_subject_units, head_subject_issues = _subjects(project_root, "HEAD", registry)
         target_subject_units, target_subject_issues = _subjects(project_root, target_ref, registry)
@@ -161,6 +200,8 @@ def merge_review(project_root: Path, memory_dir: Path, target_ref: str) -> Merge
 
     left_entries = _changed(base_entries, head_entries)
     right_entries = _changed(base_entries, target_entries)
+    left_deleted = _changed(base_entries, head_entries, include_deleted=True)
+    right_deleted = _changed(base_entries, target_entries, include_deleted=True)
     left_subjects = _changed(base_subjects, head_subjects)
     right_subjects = _changed(base_subjects, target_subjects)
     conflicts: list[str] = []
@@ -174,6 +215,13 @@ def merge_review(project_root: Path, memory_dir: Path, target_ref: str) -> Merge
             conflicts.append(
                 f"MC-MERGE-006 {side} has invalid reconciliation{identity}: {issue.message}"
             )
+    for side, issues in (
+        ("merge base", base_entry_issues),
+        ("HEAD", head_entry_issues),
+        (target_ref, target_entry_issues),
+    ):
+        for issue in issues:
+            conflicts.append(f"MC-MERGE-006 {side} has invalid Entry: {issue}")
 
     left_refs: dict[str, str] = {}
     left_aliases: dict[str, str] = {}
@@ -220,6 +268,16 @@ def merge_review(project_root: Path, memory_dir: Path, target_ref: str) -> Merge
             conflicts.append(
                 f"MC-MERGE-003 concurrent structural owner {key}: {left.entry_id}, {right.entry_id}"
             )
+
+    for deleted, changed, label in (
+        (left_deleted, right_entries, "HEAD deletion while target changes"),
+        (right_deleted, left_entries, "target deletion while HEAD changes"),
+    ):
+        for entry_id, marker in deleted.items():
+            if entry_id in changed:
+                reviews.append(
+                    f"MC-MERGE-REVIEW-006 {label}: {marker.entry_id}"
+                )
 
     resolved_pairs = {
         pair for record in resolution_records for pair in reconciliation_pairs(record)

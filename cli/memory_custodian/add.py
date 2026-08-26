@@ -125,6 +125,8 @@ def _target(args) -> tuple[str, str]:
             raise ValueError(f"--name is required when --type is {kind}")
         if not is_safe_memory_name(args.name):
             raise ValueError(f"Invalid {kind} name: {args.name}")
+        if args.name.casefold() == "readme":
+            raise ValueError("README.md is reserved documentation, not a managed module")
         folder = "rules" if kind == "rule" else f"{kind}s"
         return f"{folder}/{args.name}.md", f"area:{args.name}" if kind == "area" else "project"
     return TARGETS[kind], "project"
@@ -164,7 +166,10 @@ def _report_budget(memory_dir: Path, path: Path, target: str) -> None:
 def _find_entry(memory_dir: Path, entry_id: str):
     matches = []
     for path in managed_markdown_files(memory_dir):
-        if path.relative_to(memory_dir).as_posix().startswith("archive/"):
+        if (
+            path.relative_to(memory_dir).as_posix().startswith("archive/")
+            or path.name.casefold() == "readme.md"
+        ):
             continue
         matches.extend(
             entry for entry in parse_structured_entries(path, read_managed_text(memory_dir, path))
@@ -360,11 +365,22 @@ def _build_mutations(
     if args.supersedes:
         old = _find_entry(memory_dir, args.supersedes)
         if old.path == target_path:
-            mutations[0] = TextMutation(target_path, supersede_entry(updated, old.entry_id, new_id))
+            mutations[0] = TextMutation(
+                target_path,
+                supersede_entry(
+                    updated,
+                    old.entry_id,
+                    new_id,
+                    relative_path=target,
+                ),
+            )
         else:
             mutations.append(
                 TextMutation(old.path, supersede_entry(
-                    read_managed_text(memory_dir, old.path), old.entry_id, new_id
+                    read_managed_text(memory_dir, old.path),
+                    old.entry_id,
+                    new_id,
+                    relative_path=old.path.relative_to(memory_dir).as_posix(),
                 ))
             )
 

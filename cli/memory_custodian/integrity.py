@@ -12,7 +12,7 @@ from .entries import (
 )
 from .local_overlay import LocalStatus, inspect_overlay
 from .protocol import managed_markdown_files, optional_index_paths, read_managed_text
-from .subjects import validate_subject_registry
+from .subjects import load_subjects, validate_subject_registry
 
 
 def cross_unit_integrity_findings(
@@ -36,12 +36,21 @@ def cross_unit_integrity_findings(
     managed_paths = managed_markdown_files(memory_dir)
     for path in managed_paths:
         relative = path.relative_to(memory_dir).as_posix()
-        if relative in {"manifest.md", "subjects.md", "reconciliations.md"} or path.name == "README.md":
+        if relative in {"manifest.md", "subjects.md", "reconciliations.md"} or path.name.casefold() == "readme.md":
             continue
         relation_entries.extend(parse_structured_entries(
             path, read_managed_text(memory_dir, path)
         ))
-    issues.extend(structured_relation_issues(relation_entries))
+    issues.extend(
+        structured_relation_issues(
+            relation_entries,
+            merged_subject_ids={
+                subject.subject_id
+                for subject in load_subjects(memory_dir)
+                if subject.status == "merged"
+            },
+        )
+    )
 
     # Pre-0.7 migration input may legitimately lack Subject/Facet owner
     # metadata. Its renderer preserves those units as legacy memory.
@@ -60,7 +69,7 @@ def cross_unit_integrity_findings(
         folder_paths = [
             path for path in managed_paths
             if path.relative_to(memory_dir).as_posix().startswith(folder + "/")
-            and path.name != "README.md"
+            and path.name.casefold() != "readme.md"
         ]
         if directory.exists() and folder + "/" not in manifest:
             issues.append(
@@ -81,4 +90,3 @@ def cross_unit_integrity_findings(
             target = issues if overlay.corrupt else warnings
             target.extend(f"local overlay: {warning}" for warning in overlay.warnings)
     return issues, warnings
-

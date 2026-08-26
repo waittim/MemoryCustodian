@@ -56,7 +56,7 @@ def _legacy_records(memory_dir: Path, *, include_archive: bool) -> list[IndexedE
     records: list[IndexedEntry] = []
     for path in iter_markdown_files(memory_dir, include_archive=include_archive):
         relative = path.relative_to(memory_dir).as_posix()
-        if relative in {"manifest.md", "subjects.md", "brief.md", "reconciliations.md"} or path.name == "README.md":
+        if relative in {"manifest.md", "subjects.md", "brief.md", "reconciliations.md"} or path.name.casefold() == "readme.md":
             continue
         document = parse_markdown_units(read_managed_text(memory_dir, path))
         semantic_ordinal = 0
@@ -95,7 +95,9 @@ def build_index(
         from .reconciliations import parse_reconciliations, validate_reconciliations
 
         text = read_managed_text(memory_dir, reconciliation)
-        reconciliation_records, parse_issues = parse_reconciliations(reconciliation, text)
+        reconciliation_records, parse_issues = parse_reconciliations(
+            reconciliation, text, project_root, include_invalid=True
+        )
         valid_records, validation_issues = validate_reconciliations(
             reconciliation_records,
             parse_issues,
@@ -194,10 +196,8 @@ def run_show(args) -> int:
             subjects = {item.subject_id.casefold(): item for item in load_subjects(memory_dir)}
             subject = subjects.get(subject_id.casefold())
             current = subject_id
-            if subject:
-                merged = re.search(r"(?m)^Merged-Into:\s*(MC-SUBJ-\S+)", subject.text)
-                if merged:
-                    current = merged.group(1)
+            if subject and subject.status == "merged" and subject.merged_into:
+                current = subject.merged_into
             print(f"Historical Subject ID: {subject_id}")
             print(f"Current canonical Subject ID: {current}")
     print(record.text)

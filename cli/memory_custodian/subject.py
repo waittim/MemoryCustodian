@@ -379,6 +379,9 @@ def _rename(args) -> int:
             subject.canonical_ref,
             subject.aliases,
             subject.evidence,
+            status=subject.status,
+            merged_into=subject.merged_into,
+            merged_from=subject.merged_from,
         )
         original = read_managed_text(memory_dir, registry)
         updated = _replace_subject(original, subject, updated_entry)
@@ -424,6 +427,9 @@ def _add_alias(args) -> int:
             subject.canonical_ref,
             aliases,
             subject.evidence,
+            status=subject.status,
+            merged_into=subject.merged_into,
+            merged_from=subject.merged_from,
         )
         original = read_managed_text(memory_dir, registry)
         updated = _replace_subject(original, subject, updated_entry)

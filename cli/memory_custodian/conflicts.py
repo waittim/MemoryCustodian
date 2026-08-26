@@ -7,7 +7,12 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
-from .entries import StructuredEntry, parse_structured_entries
+from .entries import (
+    StructuredEntry,
+    parse_entry_inventory,
+    parse_structured_entries,
+    structured_relation_issues,
+)
 from .reconciliations import parse_reconciliations, validate_reconciliations
 from .structural import active_structural_operand_issues, subject_index
 from .subjects import (
@@ -54,7 +59,13 @@ def canonical_entries(memory_dir: Path, *, include_archive: bool = False) -> tup
         return ()
     for path in canonical_memory_files(memory_dir, include_archive=include_archive):
         relative = path.relative_to(memory_dir).as_posix()
-        entries.extend(parse_structured_entries(path, read_managed_text(memory_dir, path)))
+        try:
+            entries.extend(parse_structured_entries(path, read_managed_text(memory_dir, path)))
+        except ValueError:
+            # The integrity pass in analyze_conflicts emits the actionable
+            # finding; index consumers should still be able to inventory the
+            # remaining valid units.
+            continue
     return tuple(entries)
 
 
@@ -121,8 +132,20 @@ def analyze_conflicts(
     structural_subjects = subject_index(subject_records)
     entries = canonical_entries(memory_dir)
     canonical_paths = set(canonical_memory_files(memory_dir))
+    for path in canonical_paths:
+        relative = path.relative_to(memory_dir).as_posix()
+        parsed, entry_issues = parse_entry_inventory(
+            path, read_managed_text(memory_dir, path), relative, project_root,
+        )
+        findings.extend(
+            ConflictFinding(
+                "MC-CONFLICT-007", ConflictStatus.INVALID, issue,
+                tuple(entry.entry_id for entry in parsed if entry.entry_id),
+            )
+            for issue in entry_issues
+        )
     for path in managed_markdown_files(memory_dir):
-        if path in canonical_paths or path.name == "README.md":
+        if path in canonical_paths or path.name.casefold() == "readme.md":
             continue
         if path.relative_to(memory_dir).as_posix().startswith("archive/"):
             continue
@@ -142,10 +165,39 @@ def analyze_conflicts(
                 "Duplicate Entry ID prevents deterministic relation resolution.",
                 tuple(entry.entry_id for entry in matches),
             ))
+    merged_subject_ids = {
+        subject.subject_id
+        for subject in subject_records
+        if subject.status == "merged"
+    }
+    for issue in structured_relation_issues(
+        list(entries), merged_subject_ids=merged_subject_ids,
+    ):
+        entry_ids = tuple(
+            entry.entry_id
+            for entry in entries
+            if entry.entry_id.casefold() in issue.casefold()
+        )
+        findings.append(ConflictFinding(
+            "MC-CONFLICT-008", ConflictStatus.INVALID,
+            f"Invalid Entry relation: {issue}", entry_ids,
+        ))
     owners: dict[tuple[str, str, str], list[StructuredEntry]] = {}
     by_subject_facet: dict[tuple[str, str], list[StructuredEntry]] = {}
 
     for entry in entries:
+        if entry.status == "active" and entry.fields.get("Subject"):
+            operand_issues = active_structural_operand_issues(entry, structural_subjects)
+            if operand_issues:
+                for issue in operand_issues:
+                    if issue.field == "Status":
+                        continue
+                    code = "MC-CONFLICT-005" if issue.field == "Subject" else "MC-CONFLICT-007"
+                    findings.append(ConflictFinding(
+                        code, ConflictStatus.INVALID, issue.message,
+                        (entry.entry_id,), entry.fields.get("Subject", ""),
+                        entry.fields.get("Facet", ""), (entry.scope,),
+                    ))
         if entry.status != "active":
             continue
         code = entry.entry_id.split("-", 2)[1].upper()
@@ -180,6 +232,30 @@ def analyze_conflicts(
                 "Exception-To is valid only on an active area-scoped entry.",
                 (entry.entry_id, entry.fields["Exception-To"]), subject_id, facet,
                 (entry.scope,),
+            ))
+
+    for entry in entries:
+        if entry.status != "active" or not entry.fields.get("Exception-To"):
+            continue
+        target_matches = by_id.get(entry.fields["Exception-To"].casefold(), [])
+        valid = (
+            entry.scope.startswith("area:")
+            and len(target_matches) == 1
+            and target_matches[0].status == "active"
+            and target_matches[0].scope == "project"
+            and not target_matches[0].fields.get("Exception-To")
+            and entry.fields.get("Subject", "").casefold()
+            == target_matches[0].fields.get("Subject", "").casefold()
+            and entry.fields.get("Facet", "").casefold()
+            == target_matches[0].fields.get("Facet", "").casefold()
+        )
+        if not valid:
+            findings.append(ConflictFinding(
+                "MC-CONFLICT-006", ConflictStatus.INVALID,
+                "Invalid Exception-To relation.",
+                (entry.entry_id, entry.fields["Exception-To"]),
+                entry.fields.get("Subject", ""), entry.fields.get("Facet", ""),
+                (entry.scope, "project"),
             ))
 
     for (scope, subject_id, facet), matches in sorted(owners.items()):
@@ -251,8 +327,12 @@ def _reconciliation_findings(
     path = memory_dir / "reconciliations.md"
     if not path.exists():
         return []
+    project_root = next(
+        (parent.parent for parent in (memory_dir, *memory_dir.parents) if parent.name == "docs"),
+        memory_dir.parent.parent,
+    )
     records, parse_issues = parse_reconciliations(
-        path, read_managed_text(memory_dir, path)
+        path, read_managed_text(memory_dir, path), project_root, include_invalid=True
     )
     all_entries = tuple(entry for matches in entries.values() for entry in matches)
     _valid, issues = validate_reconciliations(

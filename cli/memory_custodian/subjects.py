@@ -180,6 +180,8 @@ def parse_subject_registry(path: Path, text: str) -> tuple[list[Subject], list[s
         merged_from: list[str] = []
         list_field: str | None = None
         for visible in visible_lines(section):
+            if visible.indented_code:
+                continue
             if visible.index == 0:
                 continue
             line = visible.text
@@ -262,6 +264,10 @@ def render_subject(
     canonical_ref: str | None,
     aliases: tuple[str, ...],
     evidence: tuple[str, ...],
+    *,
+    status: str = "active",
+    merged_into: str | None = None,
+    merged_from: tuple[str, ...] = (),
 ) -> str:
     normalized_title = " ".join(title.split())
     normalized_aliases = tuple(
@@ -270,22 +276,28 @@ def render_subject(
     lines = [
         render_canonical_h2(subject_id, normalized_title),
         "",
-        "Status: active",
+        f"Status: {status}",
         f"Kind: {kind}",
     ]
     if canonical_ref:
         lines.append(f"Canonical-Ref: {canonical_ref}")
+    if merged_into:
+        lines.append(f"Merged-Into: {merged_into}")
     lines.extend(["Evidence:", *(f"- {item}" for item in evidence), "", "Aliases:"])
     lines.extend(f"- {item}" for item in normalized_aliases)
+    if merged_from:
+        lines.extend(["", "Merged-From:"])
+        lines.extend(f"- {item}" for item in merged_from)
     rendered = "\n".join(lines)
     parsed = parse_subjects(Path("__rendered_subject__.md"), rendered)
     if (
         len(parsed) != 1
         or parsed[0].subject_id.casefold() != subject_id.casefold()
-        or parsed[0].status != "active"
-        or parsed[0].merged_into is not None
+        or parsed[0].status != status
+        or parsed[0].merged_into != merged_into
         or parsed[0].title != normalized_title
         or parsed[0].aliases != normalized_aliases
+        or parsed[0].merged_from != merged_from
     ):
         raise ValueError("Rendered Subject did not round-trip safely.")
     return rendered
@@ -344,6 +356,8 @@ def subject_registry_issues(
             issues.append(f"subjects.md: {subject.subject_id} active Subject cannot declare Merged-Into")
         if subject.status == "merged" and subject.merged_from:
             issues.append(f"subjects.md: {subject.subject_id} merged Subject cannot declare Merged-From")
+        if len({item.casefold() for item in subject.merged_from}) != len(subject.merged_from):
+            issues.append(f"subjects.md: {subject.subject_id} has duplicate Merged-From values")
         try:
             validate_subject_kind(subject.kind)
         except ValueError as exc:
@@ -376,13 +390,21 @@ def subject_registry_issues(
             refs[normalized_ref] = subject.subject_id
     by_id = {item.subject_id.casefold(): item for item in subjects}
     for subject in subjects:
-        if subject.status != "merged" or not subject.merged_into:
-            continue
-        target = by_id.get(subject.merged_into.casefold())
-        if target is None or target.status != "active" or target.subject_id.casefold() == subject.subject_id.casefold():
-            issues.append(
-                f"subjects.md: {subject.subject_id} Merged-Into must reference a different active Subject"
-            )
+        if subject.status == "merged":
+            if not subject.merged_into:
+                continue
+            target = by_id.get(subject.merged_into.casefold())
+            if target is None or target.status != "active" or target.subject_id.casefold() == subject.subject_id.casefold():
+                issues.append(
+                    f"subjects.md: {subject.subject_id} Merged-Into must reference a different active Subject"
+                )
+        elif subject.status == "active" and subject.merged_from:
+            for source_id in subject.merged_from:
+                source = by_id.get(source_id.casefold())
+                if source is None or source.status != "merged" or (source.merged_into or "").casefold() != subject.subject_id.casefold():
+                    issues.append(
+                        f"subjects.md: {subject.subject_id} Merged-From references a non-reciprocal source {source_id}"
+                    )
     return issues
 
 
