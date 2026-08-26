@@ -1852,6 +1852,65 @@ class RoutingAndQualityReleaseTests(unittest.TestCase):
             second_plan = re.search(r"Plan ID: ([0-9a-f]{16})", second).group(1)
             self.assertNotEqual(first_plan, second_plan)
 
+    def test_promotion_binds_bound_local_overlay_inventory_and_blocks_id_collision(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as state:
+            with patch.dict(os.environ, {"XDG_STATE_HOME": state}):
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["init", "--project-root", tmp]), 0)
+                memory = Path(tmp) / "docs/memory"
+                subject_id = "MC-SUBJ-20260826-aaaaaaaa"
+                candidate_id = "MC-INBOX-20260826-aaaaaaaa"
+                (memory / "subjects.md").write_text(
+                    "# Subject Registry\n\n" + subject_unit(subject_id, "Local promotion"),
+                    encoding="utf-8",
+                )
+                candidate = render_candidate_entry(
+                    candidate_id, "Local collision", "preference", "Candidate body.",
+                    "project", ("user-confirmed",), None,
+                )
+                (memory / "inbox.md").write_text(
+                    "# Memory Inbox\n\n" + candidate + "\n", encoding="utf-8",
+                )
+                command = [
+                    "promote", candidate_id, "--type", "preference",
+                    "--evidence", "user-confirmed", "--project-root", tmp,
+                ]
+                code, first, error = capture(command)
+                self.assertEqual(code, 0, first + error)
+                generated_id = re.search(
+                    r"New active Entry ID: (MC-PREF-\S+)", first,
+                ).group(1)
+                first_plan = re.search(r"Plan ID: ([0-9a-f]{16})", first).group(1)
+
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["local", "enable", "--project-root", tmp]), 0)
+                    self.assertEqual(main(["local", "link", "--project-root", tmp]), 0)
+                project_id = re.search(
+                    r"(?m)^- project_id: (\S+)",
+                    (memory / "manifest.md").read_text(encoding="utf-8"),
+                ).group(1)
+                local_preferences = (
+                    Path(state) / "memory-custodian/projects" / project_id
+                    / "local/preferences.md"
+                )
+                local_entry = render_active_entry(
+                    "preference", generated_id, "Collision", "Already local.", None,
+                    "local-user", ("user-confirmed",),
+                )
+                local_preferences.write_text(
+                    local_preferences.read_text(encoding="utf-8") + "\n" + local_entry + "\n",
+                    encoding="utf-8",
+                )
+                code, second, error = capture(command)
+                self.assertEqual(code, 0, second + error)
+                self.assertIn(
+                    "Generated active Entry ID already exists in the bound local overlay",
+                    second,
+                )
+                self.assertNotIn("Blockers:\n- none", second)
+                second_plan = re.search(r"Plan ID: ([0-9a-f]{16})", second).group(1)
+                self.assertNotEqual(first_plan, second_plan)
+
     def test_supersession_cycle_diagnostic_preserves_real_edge_order(self):
         with tempfile.TemporaryDirectory() as tmp:
             with redirect_stdout(StringIO()):
