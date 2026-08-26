@@ -4336,6 +4336,35 @@ class MergeAndDeterminismReleaseTests(unittest.TestCase):
             self.assertIn("MC-MERGE-006", output)
             self.assertIn("duplicate Status", output)
 
+    def test_merge_review_rejects_duplicate_subject_id_revision(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = initialize_git_project(tmp)
+            subject_id = "MC-SUBJ-20260826-aaaaaaaa"
+            valid_registry = "# Subject Registry\n\n" + subject_unit(subject_id, "Duplicate subject")
+            (memory / "subjects.md").write_text(valid_registry, encoding="utf-8")
+            git(tmp, "add", ".")
+            git(tmp, "commit", "-qm", "valid subject")
+            base = git(tmp, "rev-parse", "HEAD")
+
+            git(tmp, "checkout", "-qb", "right")
+            (memory / "subjects.md").write_text(
+                valid_registry + "\n" + subject_unit(subject_id, "Duplicate subject"),
+                encoding="utf-8",
+            )
+            git(tmp, "add", ".")
+            git(tmp, "commit", "-qm", "duplicate subject")
+            target_ref = git(tmp, "branch", "--show-current")
+            git(tmp, "checkout", "-qb", "left", base)
+
+            code, output, error = capture([
+                "check", "--conflicts", "--merge-base", target_ref,
+                "--project-root", tmp,
+            ])
+            self.assertEqual(code, 1, output + error)
+            self.assertIn("Merge review status: CONFLICT", output)
+            self.assertIn("MC-MERGE-006", output)
+            self.assertIn("duplicate Subject ID", output)
+
     def test_merge_review_does_not_skip_suffix_similar_managed_file(self):
         with tempfile.TemporaryDirectory() as tmp:
             memory = initialize_git_project(tmp)

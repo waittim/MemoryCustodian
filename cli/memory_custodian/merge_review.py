@@ -238,6 +238,7 @@ def merge_review(project_root: Path, memory_dir: Path, target_ref: str) -> Merge
             project_root, target_ref, reconciliations, target_entry_units, target_subject_units,
         )
         duplicate_entry_ids: list[tuple[str, str]] = []
+        duplicate_subject_ids: list[tuple[str, str]] = []
 
         def index_entries(
             label: str,
@@ -251,9 +252,19 @@ def merge_review(project_root: Path, memory_dir: Path, target_ref: str) -> Merge
         base_entries = index_entries("merge base", base_entry_units)
         head_entries = index_entries("HEAD", head_entry_units)
         target_entries = index_entries(target_ref, target_entry_units)
-        base_subjects = _by_id(base_subject_units)
-        head_subjects = _by_id(head_subject_units)
-        target_subjects = _by_id(target_subject_units)
+
+        def index_subjects(
+            label: str,
+            values: tuple[Subject, ...],
+        ) -> dict[str, StructuredEntry | Subject | ReconciliationRecord]:
+            duplicates: list[str] = []
+            indexed = _by_id(values, duplicate_ids=duplicates)
+            duplicate_subject_ids.extend((label, value) for value in duplicates)
+            return indexed
+
+        base_subjects = index_subjects("merge base", base_subject_units)
+        head_subjects = index_subjects("HEAD", head_subject_units)
+        target_subjects = index_subjects(target_ref, target_subject_units)
         changed_head_records = _changed(_by_id(base_records), _by_id(head_records))
         changed_target_records = _changed(_by_id(base_records), _by_id(target_records))
         resolution_records = (*changed_head_records.values(), *changed_target_records.values())
@@ -276,6 +287,11 @@ def merge_review(project_root: Path, memory_dir: Path, target_ref: str) -> Merge
     for label, entry_id in duplicate_entry_ids:
         conflicts.append(
             f"MC-MERGE-006 {label} has duplicate Entry ID {entry_id}; "
+            "canonical lookup is unsafe"
+        )
+    for label, subject_id in duplicate_subject_ids:
+        conflicts.append(
+            f"MC-MERGE-006 {label} has duplicate Subject ID {subject_id}; "
             "canonical lookup is unsafe"
         )
     for side, issues in (("HEAD", head_subject_issues), (target_ref, target_subject_issues)):
