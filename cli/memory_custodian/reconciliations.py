@@ -148,6 +148,16 @@ def parse_reconciliations(
                 elif key in blocks:
                     if value.strip():
                         record_issues.append(f"{key} block heading must not contain a value")
+                        if key == "Entries":
+                            # Keep exact visible Entry operands even when the
+                            # block heading is malformed.  Forget/reference
+                            # preflight must protect an Entry named by an
+                            # invalid record, but must not harvest examples
+                            # from fenced or indented code (already excluded
+                            # by visible_lines above).
+                            blocks[key].extend(
+                                match.group(0) for match in ENTRY_ID_RE.finditer(value)
+                            )
                     if key in seen_blocks:
                         record_issues.append(f"duplicate {key} block")
                     seen_blocks.add(key)

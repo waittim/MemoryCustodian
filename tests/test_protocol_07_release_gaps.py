@@ -1986,6 +1986,76 @@ class RoutingAndQualityReleaseTests(unittest.TestCase):
             self.assertEqual(code, 0, output + error)
             self.assertIn("Conflict status: CLEAR", output)
 
+    def test_archive_lifecycle_is_used_by_reconciliation_consumers(self):
+        """Reconciliation validation sees archive history without listing it by default."""
+        with tempfile.TemporaryDirectory() as tmp:
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            memory = Path(tmp) / "docs/memory"
+            subject_id = "MC-SUBJ-20260825-eeeeeeee"
+            old_id = "MC-DEC-20260729-ffffffff"
+            current_id = "MC-DEC-20260825-11111111"
+            record_id = "MC-REC-20260825-22222222"
+            (memory / "subjects.md").write_text(
+                "# Subject Registry\n\n" + subject_unit(subject_id, "Archive reconciliation"),
+                encoding="utf-8",
+            )
+            historical = render_active_entry(
+                "decision", old_id, "Historical", "Historical body.", None,
+                "project", ("user-confirmed",), subject=subject_id, facet="architecture",
+            ).replace(
+                "Status: active",
+                f"Status: superseded\nSuperseded-By: {current_id}",
+                1,
+            )
+            current = render_active_entry(
+                "decision", current_id, "Current", "Current body.", None,
+                "project", ("user-confirmed",), subject=subject_id, facet="architecture",
+                supersedes=old_id,
+            )
+            (memory / "decisions.md").write_text(
+                "# Decisions\n\n" + current + "\n", encoding="utf-8",
+            )
+            archive = memory / "archive"
+            archive.mkdir()
+            (archive / "decisions-old.md").write_text(
+                "# Archived Decisions\n\n" + historical + "\n", encoding="utf-8",
+            )
+
+            preview_args = [
+                "reconcile", "preview", "--entry", old_id, "--entry", current_id,
+                "--resolution", "superseded", "--title", "Archive acknowledgement",
+                "--evidence", "user-confirmed", "--project-root", tmp,
+            ]
+            code, preview, error = capture(preview_args)
+            self.assertEqual(code, 0, preview + error)
+            self.assertIn("Blockers:\n- none", preview)
+            self.assertIn("archive/decisions-old.md", preview)
+
+            record = (
+                f"## {record_id} — Archive acknowledgement\n\n"
+                "Status: active\nEntries:\n"
+                f"- {old_id}\n- {current_id}\n"
+                "Resolution: superseded\nEvidence:\n- user-confirmed\n"
+            )
+            (memory / "reconciliations.md").write_text(
+                "# Reconciliations\n\n" + record, encoding="utf-8",
+            )
+            code, output, error = capture(["check", "--conflicts", "--project-root", tmp])
+            self.assertEqual(code, 0, output + error)
+            self.assertIn("Conflict status: CLEAR", output)
+
+            listed = capture(["list", "--project-root", tmp])[1]
+            self.assertIn(f"{record_id} [active; project] reconciliations.md", listed)
+            self.assertIn(current_id, listed)
+            self.assertNotIn(old_id, listed)
+            shown_code, shown, shown_error = capture([
+                "show", record_id, "--project-root", tmp,
+            ])
+            self.assertEqual(shown_code, 0, shown + shown_error)
+            self.assertIn(record_id, shown)
+            self.assertIn(old_id, shown)
+
     def test_add_supersedes_rejects_structurally_invalid_operand(self):
         with tempfile.TemporaryDirectory() as tmp:
             with redirect_stdout(StringIO()):
@@ -3060,6 +3130,94 @@ class ForgetAndHistoryReleaseTests(unittest.TestCase):
             self.assertEqual(apply_code, 1)
             self.assertEqual(decisions.read_text(encoding="utf-8"), before)
 
+    def test_id_forget_blocks_archive_lifecycle_references(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            memory = Path(tmp) / "docs/memory"
+            subject_id = "MC-SUBJ-20260825-33333333"
+            old_id = "MC-DEC-20260825-44444444"
+            current_id = "MC-DEC-20260825-55555555"
+            (memory / "subjects.md").write_text(
+                "# Subject Registry\n\n" + subject_unit(subject_id, "Archive blocker"),
+                encoding="utf-8",
+            )
+            historical = render_active_entry(
+                "decision", old_id, "Historical", "Historical body.", None,
+                "project", ("user-confirmed",), subject=subject_id, facet="behavior",
+            ).replace(
+                "Status: active",
+                f"Status: superseded\nSuperseded-By: {current_id}",
+                1,
+            )
+            current = render_active_entry(
+                "decision", current_id, "Current", "Current body.", None,
+                "project", ("user-confirmed",), subject=subject_id, facet="behavior",
+                supersedes=old_id,
+            )
+            (memory / "decisions.md").write_text(
+                "# Decisions\n\n" + current + "\n", encoding="utf-8",
+            )
+            (memory / "archive").mkdir()
+            (memory / "archive/decisions-old.md").write_text(
+                "# Archived Decisions\n\n" + historical + "\n", encoding="utf-8",
+            )
+            before = (memory / "decisions.md").read_text(encoding="utf-8")
+            args = [
+                "forget", "--id", current_id, "--mode", "hard",
+                "--project-root", tmp,
+            ]
+            code, output, error = capture(args)
+            self.assertEqual(code, 0, output + error)
+            self.assertIn(f"archive/decisions-old.md:{old_id} Superseded-By", output)
+            plan_id = re.search(r"Plan ID: ([0-9a-f]{16})", output).group(1)
+            apply_code, apply_output, apply_error = capture([
+                *args, "--apply", "--confirm-plan", plan_id,
+            ])
+            self.assertEqual(apply_code, 1, apply_output + apply_error)
+            self.assertEqual((memory / "decisions.md").read_text(encoding="utf-8"), before)
+
+    def test_id_forget_blocks_exact_entry_from_invalid_reconciliation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            memory = Path(tmp) / "docs/memory"
+            subject_id = "MC-SUBJ-20260825-66666666"
+            target_id = "MC-DEC-20260825-77777777"
+            (memory / "subjects.md").write_text(
+                "# Subject Registry\n\n" + subject_unit(subject_id, "Invalid record blocker"),
+                encoding="utf-8",
+            )
+            target = render_active_entry(
+                "decision", target_id, "Selected", "Selected body.", None,
+                "project", ("user-confirmed",), subject=subject_id, facet="behavior",
+            )
+            decisions = memory / "decisions.md"
+            decisions.write_text("# Decisions\n\n" + target + "\n", encoding="utf-8")
+            (memory / "reconciliations.md").write_text(
+                "# Reconciliations\n\n"
+                "## MC-REC-20260825-88888888 — Malformed inline entries\n\n"
+                f"Status: active\nEntries: {target_id}\n"
+                "Resolution: distinct\nEvidence:\n- user-confirmed\n\n"
+                "```markdown\nEntries: MC-DEC-20260825-99999999\n```\n",
+                encoding="utf-8",
+            )
+            before = decisions.read_text(encoding="utf-8")
+            args = [
+                "forget", "--id", target_id, "--mode", "hard",
+                "--project-root", tmp,
+            ]
+            code, output, error = capture(args)
+            self.assertEqual(code, 0, output + error)
+            self.assertIn("reconciliations.md:MC-REC-20260825-88888888", output)
+            self.assertIn(f"Entries references selected Entry {target_id}", output)
+            plan_id = re.search(r"Plan ID: ([0-9a-f]{16})", output).group(1)
+            apply_code, apply_output, apply_error = capture([
+                *args, "--apply", "--confirm-plan", plan_id,
+            ])
+            self.assertEqual(apply_code, 1, apply_output + apply_error)
+            self.assertEqual(decisions.read_text(encoding="utf-8"), before)
+
     def test_id_forget_is_exact_and_blocks_live_relations(self):
         with tempfile.TemporaryDirectory() as tmp:
             with redirect_stdout(StringIO()):
@@ -3099,6 +3257,82 @@ class ForgetAndHistoryReleaseTests(unittest.TestCase):
             ])
             self.assertEqual(apply_code, 1)
             self.assertEqual(decisions.read_text(encoding="utf-8"), before)
+
+    def test_hard_forget_covers_subject_and_reconciliation_authorities(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            memory = Path(tmp) / "docs/memory"
+            topic = "SensitiveGovernanceMarker"
+            subject_id = "MC-SUBJ-20260825-99999999"
+            (memory / "subjects.md").write_text(
+                "# Subject Registry\n\n"
+                + subject_unit(subject_id, f"{topic} Subject"),
+                encoding="utf-8",
+            )
+            (memory / "reconciliations.md").write_text(
+                "# Reconciliations\n\n"
+                "## MC-REC-20260825-aaaaaaaa — " + topic + " record\n\n"
+                "Status: active\nEntries:\n"
+                "- MC-DEC-20260825-aaaaaaaa\n- MC-DEC-20260825-bbbbbbbb\n"
+                "Resolution: distinct\nEvidence:\n- user-confirmed\n",
+                encoding="utf-8",
+            )
+            args = [
+                "forget", topic, "--mode", "hard", "--allow-broad-match",
+                "--project-root", tmp,
+            ]
+            code, preview, error = capture(args)
+            self.assertEqual(code, 0, preview + error)
+            self.assertIn("subjects.md", preview)
+            self.assertIn("reconciliations.md", preview)
+            self.assertNotIn(topic, preview)
+            plan_id = re.search(r"Plan ID: ([0-9a-f]{16})", preview).group(1)
+            code, output, error = capture([
+                *args, "--apply", "--confirm-plan", plan_id,
+            ])
+            self.assertEqual(code, 0, output + error)
+            self.assertNotIn(topic, output)
+            self.assertNotIn(topic.casefold(), (memory / "subjects.md").read_text(encoding="utf-8").casefold())
+            self.assertNotIn(topic.casefold(), (memory / "reconciliations.md").read_text(encoding="utf-8").casefold())
+
+    def test_hard_forget_subject_reference_blocker_preserves_authority(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            memory = Path(tmp) / "docs/memory"
+            topic = "ReferencedGovernanceMarker"
+            subject_id = "MC-SUBJ-20260825-aaaaaaaa"
+            entry_id = "MC-DEC-20260825-bbbbbbbb"
+            subjects = memory / "subjects.md"
+            subjects.write_text(
+                "# Subject Registry\n\n" + subject_unit(subject_id, f"{topic} Subject"),
+                encoding="utf-8",
+            )
+            decisions = memory / "decisions.md"
+            decisions.write_text(
+                "# Decisions\n\n" + render_active_entry(
+                    "decision", entry_id, "Referencing entry", "Keep it.", None,
+                    "project", ("user-confirmed",), subject=subject_id, facet="behavior",
+                ) + "\n",
+                encoding="utf-8",
+            )
+            before_subjects = subjects.read_text(encoding="utf-8")
+            before_decisions = decisions.read_text(encoding="utf-8")
+            args = [
+                "forget", topic, "--mode", "hard", "--allow-broad-match",
+                "--project-root", tmp,
+            ]
+            code, preview, error = capture(args)
+            self.assertEqual(code, 0, preview + error)
+            self.assertIn("cannot remove", preview)
+            plan_id = re.search(r"Plan ID: ([0-9a-f]{16})", preview).group(1)
+            code, output, error = capture([
+                *args, "--apply", "--confirm-plan", plan_id,
+            ])
+            self.assertEqual(code, 1, output + error)
+            self.assertEqual(subjects.read_text(encoding="utf-8"), before_subjects)
+            self.assertEqual(decisions.read_text(encoding="utf-8"), before_decisions)
 
     def test_history_check_detected_and_not_detected_statuses(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -4220,6 +4454,29 @@ class MarkdownUnitBoundaryAuditTests(unittest.TestCase):
         records, issues = parse_reconciliations(Path("reconciliations.md"), text)
         self.assertEqual(records, ())
         self.assertTrue(any("Evidence is missing or invalid" in issue for issue in issues))
+
+    def test_invalid_reconciliation_preserves_only_visible_exact_entry_operands(self):
+        target_id = "MC-DEC-20260825-aaaaaaaa"
+        fenced_id = "MC-DEC-20260825-bbbbbbbb"
+        indented_id = "MC-DEC-20260825-cccccccc"
+        text = (
+            "## MC-REC-20260825-dddddddd — Malformed Entries\n\n"
+            f"Status: active\nEntries: {target_id}\n"
+            "Resolution: distinct\nEvidence:\n- user-confirmed\n\n"
+            "```markdown\n"
+            f"Entries: {fenced_id}\n"
+            "```\n"
+            f"    Entries: {indented_id}\n"
+        )
+        records, issues = parse_reconciliations(
+            Path("reconciliations.md"), text, include_invalid=True,
+        )
+        self.assertEqual(len(records), 1)
+        self.assertFalse(records[0].valid)
+        self.assertEqual(records[0].entries, (target_id,))
+        self.assertTrue(any("block heading must not contain a value" in issue for issue in records[0].parse_issues))
+        self.assertNotIn(fenced_id, records[0].entries)
+        self.assertNotIn(indented_id, records[0].entries)
 
     def test_direct_operands_use_no_follow_reads(self):
         with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as outside:

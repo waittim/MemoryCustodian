@@ -76,6 +76,11 @@ def _target_files(memory_dir: Path, mode: str, *, include_do_not_use: bool = Fal
     manifest = read_managed_text(memory_dir, memory_dir / "manifest.md")
     enabled = optional_index_paths(manifest)
     active_core = {"brief.md", "decisions.md", "constraints.md", "preferences.md", "inbox.md", "changelog.md"}
+    if mode == "hard":
+        # Hard erasure covers the active governance authorities as well as
+        # ordinary memory.  Purge already inventories every managed Markdown
+        # file; soft forget deliberately remains scoped to memory content.
+        active_core.update({"subjects.md", "reconciliations.md"})
     candidates: set[Path] = set()
     for path in managed_markdown_files(memory_dir):
         relative = path.relative_to(memory_dir).as_posix()
@@ -370,7 +375,7 @@ def _entry_reference_blockers(memory_dir: Path, entry_id: str | None) -> list[st
         "Supersedes", "Superseded-By", "Promoted-From", "Promoted-To", "Exception-To"
     )
     blockers: list[str] = []
-    for entry in canonical_entries(memory_dir):
+    for entry in canonical_entries(memory_dir, include_archive=True):
         if entry.entry_id.casefold() == entry_id.casefold():
             continue
         for field in relation_fields:

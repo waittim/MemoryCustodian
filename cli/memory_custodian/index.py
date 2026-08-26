@@ -82,6 +82,7 @@ def build_index(
     include_archive: bool = False,
     include_local: bool = False,
 ) -> tuple[IndexedEntry, ...]:
+    relation_entries = canonical_entries(memory_dir, include_archive=True)
     records = [
         IndexedEntry(
             entry.entry_id, entry.status, entry.scope,
@@ -101,7 +102,7 @@ def build_index(
         valid_records, validation_issues = validate_reconciliations(
             reconciliation_records,
             parse_issues,
-            tuple(record.structured for record in records if record.structured),
+            relation_entries,
             tuple(load_subjects(memory_dir)),
         )
         valid_ids = {record.record_id.casefold() for record in valid_records}

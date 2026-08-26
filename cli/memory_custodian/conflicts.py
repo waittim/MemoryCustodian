@@ -316,7 +316,11 @@ def analyze_conflicts(
                 tuple(sorted(matched_scopes)),
             ))
 
-    findings.extend(_reconciliation_findings(memory_dir, by_id))
+    # Reconciliation records may acknowledge a live Entry against its
+    # historical replacement in archive/.  Validate those records against
+    # the same full lifecycle inventory used above, while keeping `entries`
+    # (and therefore owner/conflict analysis) live-only.
+    findings.extend(_reconciliation_findings(memory_dir, relation_by_id))
     unique = {
         (item.code, item.status, item.message, item.entry_ids, item.subject_id, item.facet, item.scopes): item
         for item in findings

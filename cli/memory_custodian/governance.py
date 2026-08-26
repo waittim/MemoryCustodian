@@ -272,7 +272,11 @@ def _reconcile_preview(args) -> int:
             include_invalid=True,
         ) if path.exists() else ((), ())
     )
-    entries = canonical_entries(memory_dir)
+    # A reconciliation may explicitly cover a live Entry and its historical
+    # replacement under archive/.  The archive participates in relation
+    # validation and preview inventory, but remains excluded from ordinary
+    # context/owner consumers.
+    entries = canonical_entries(memory_dir, include_archive=True)
     _valid, issues = validate_reconciliations(
         (*existing, proposed), parse_issues, entries, load_subjects(memory_dir),
     )
