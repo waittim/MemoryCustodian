@@ -303,11 +303,11 @@ def merge_review(project_root: Path, memory_dir: Path, target_ref: str) -> Merge
             conflicts.append(
                 f"MC-MERGE-006 {side} has invalid reconciliation{identity}: {issue.message}"
             )
-    for side, issues in (
-        ("merge base", base_entry_issues),
-        ("HEAD", head_entry_issues),
-        (target_ref, target_entry_issues),
-    ):
+    # The merge base is historical input, so an Entry issue there may have
+    # been repaired (or removed) independently on both sides.  Only the two
+    # result snapshots are authoritative for integrity blockers; an invalid
+    # Entry that survives on either side is still reported below.
+    for side, issues in (("HEAD", head_entry_issues), (target_ref, target_entry_issues)):
         for issue in issues:
             conflicts.append(f"MC-MERGE-006 {side} has invalid Entry: {issue}")
 

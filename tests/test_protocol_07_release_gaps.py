@@ -4402,6 +4402,62 @@ class MergeAndDeterminismReleaseTests(unittest.TestCase):
             self.assertIn("evil-subjects.md", output)
             self.assertIn("unknown field Unknown", output)
 
+    def test_merge_review_ignores_repaired_merge_base_entry_issues(self):
+        for repair_target in (True, False):
+            with self.subTest(repair_target=repair_target), tempfile.TemporaryDirectory() as tmp:
+                memory = initialize_git_project(tmp)
+                subject_id = "MC-SUBJ-20260826-aaaaaaaa"
+                entry_id = "MC-DEC-20260826-bbbbbbbb"
+                (memory / "subjects.md").write_text(
+                    "# Subject Registry\n\n" + subject_unit(subject_id, "Base repair"),
+                    encoding="utf-8",
+                )
+                valid_entry = render_active_entry(
+                    "decision", entry_id, "Repairable entry", "Base body.", None,
+                    "project", ("user-confirmed",), subject=subject_id, facet="behavior",
+                )
+                decisions = memory / "decisions.md"
+                decisions.write_text("# Decisions\n\n" + valid_entry + "\n", encoding="utf-8")
+                git(tmp, "add", ".")
+                git(tmp, "commit", "-qm", "valid entry")
+
+                invalid_entry = valid_entry.replace(
+                    "Evidence:\n", "Unknown: invalid merge-base field\nEvidence:\n", 1,
+                )
+                decisions.write_text("# Decisions\n\n" + invalid_entry + "\n", encoding="utf-8")
+                git(tmp, "add", ".")
+                git(tmp, "commit", "-qm", "invalid merge base")
+                base = git(tmp, "rev-parse", "HEAD")
+
+                git(tmp, "checkout", "-qb", "left")
+                decisions.write_text("# Decisions\n\n" + valid_entry + "\n", encoding="utf-8")
+                git(tmp, "add", ".")
+                git(tmp, "commit", "-qm", "repair on HEAD")
+
+                git(tmp, "checkout", "-qb", "right", base)
+                if repair_target:
+                    decisions.write_text(
+                        "# Decisions\n\n" + valid_entry + "\n", encoding="utf-8",
+                    )
+                    git(tmp, "add", ".")
+                    git(tmp, "commit", "-qm", "repair on target")
+                target_ref = git(tmp, "branch", "--show-current")
+                git(tmp, "checkout", "-q", "left")
+
+                code, output, error = capture([
+                    "check", "--conflicts", "--merge-base", target_ref,
+                    "--project-root", tmp,
+                ])
+                if repair_target:
+                    self.assertEqual(code, 0, output + error)
+                    self.assertIn("Merge review status: CLEAR", output)
+                    self.assertNotIn("merge base has invalid Entry", output)
+                else:
+                    self.assertEqual(code, 1, output + error)
+                    self.assertIn("Merge review status: CONFLICT", output)
+                    self.assertIn("MC-MERGE-006", output)
+                    self.assertIn(f"{target_ref} has invalid Entry", output)
+
     def test_merge_review_detects_registry_collision_and_two_sided_custom_review(self):
         for canonical_ref, expected_status, expected_code in (
             ("feature:shared", "CONFLICT", "MC-MERGE-001"),
