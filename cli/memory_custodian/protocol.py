@@ -139,14 +139,49 @@ def resolve_memory_dir(project_root: Path, memory_dir: str | None = None) -> Pat
     path = Path(memory).expanduser()
     if not path.is_absolute():
         path = project_root / path
-    resolved = path.resolve()
-    docs_root = (project_root / DOCS_MEMORY_ROOT).resolve()
+    # Keep the lexical path for the write boundary.  Resolving it before the
+    # containment check would turn ``project/docs -> /external`` into an
+    # apparently valid memory directory and make every later mutation write
+    # outside the project.  Missing components are allowed for ``init``; any
+    # component that already exists must be a real directory, not a symlink.
+    resolved = Path(os.path.abspath(str(path)))
+    project_root = Path(os.path.abspath(str(project_root.expanduser())))
+    docs_root = project_root / DOCS_MEMORY_ROOT
     try:
         relative = resolved.relative_to(docs_root)
     except ValueError as exc:
         raise ValueError("Memory directory must live under docs/, such as docs/memory.") from exc
     if not relative.parts:
         raise ValueError("Memory directory must be a subdirectory of docs/, such as docs/memory.")
+    cursor = resolved
+    while True:
+        try:
+            info = cursor.lstat()
+        except FileNotFoundError:
+            info = None
+        except NotADirectoryError as exc:
+            raise ValueError(
+                f"Memory directory has a non-directory ancestor: {cursor}"
+            ) from exc
+        if info is not None:
+            if stat.S_ISLNK(info.st_mode):
+                try:
+                    display = cursor.relative_to(project_root).as_posix()
+                except ValueError:
+                    display = str(cursor)
+                raise ValueError(
+                    f"Memory directory must not use a symlinked path component: {display}"
+                )
+            if cursor != resolved and not stat.S_ISDIR(info.st_mode):
+                raise ValueError(
+                    f"Memory directory has a non-directory ancestor: {cursor}"
+                )
+        if cursor == project_root:
+            break
+        parent = cursor.parent
+        if parent == cursor:
+            raise ValueError(f"Memory directory is outside the project root: {resolved}")
+        cursor = parent
     return resolved
 
 

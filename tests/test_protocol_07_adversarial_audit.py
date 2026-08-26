@@ -104,6 +104,27 @@ class AdversarialAuditRegressionTests(unittest.TestCase):
             self.assertTrue(agent.is_symlink())
 
     @unittest.skipIf(os.name == "nt", "POSIX symlink semantics")
+    def test_init_and_repair_refuse_symlinked_docs_without_external_writes(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as outside:
+            root = Path(tmp)
+            external_memory = Path(outside) / "memory"
+            external_memory.mkdir()
+            sentinel = external_memory / "sentinel.md"
+            sentinel.write_text("do not modify\n", encoding="utf-8")
+            (root / "docs").symlink_to(external_memory.parent, target_is_directory=True)
+
+            for arguments in (
+                ["init", "--project-root", tmp],
+                ["init", "--repair", "--project-root", tmp],
+            ):
+                code, output, error = run_cli(arguments)
+                self.assertEqual(code, 2, output + error)
+                self.assertIn("symlinked path component", error)
+                self.assertEqual(sentinel.read_text(encoding="utf-8"), "do not modify\n")
+                self.assertFalse((root / "AGENTS.md").exists())
+            self.assertEqual(tuple(external_memory.iterdir()), (sentinel,))
+
+    @unittest.skipIf(os.name == "nt", "POSIX symlink semantics")
     def test_mutation_refuses_symlinked_ancestor(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -112,6 +133,21 @@ class AdversarialAuditRegressionTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "unsafe ancestor"):
                 apply_mutations([TextMutation(root / "archive" / "entry.md", "secret")])
             self.assertFalse((root / "areas" / "entry.md").exists())
+
+    @unittest.skipIf(os.name == "nt", "POSIX symlink semantics")
+    def test_mutation_refuses_memory_ancestor_symlink_without_external_writes(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as outside:
+            root = Path(tmp)
+            memory = root / "docs" / "memory"
+            memory.mkdir(parents=True)
+            external_archive = Path(outside) / "archive"
+            external_archive.mkdir()
+            target = memory / "archive" / "entry.md"
+            (memory / "archive").symlink_to(external_archive, target_is_directory=True)
+
+            with self.assertRaisesRegex(ValueError, "unsafe ancestor"):
+                apply_mutations([TextMutation(target, "secret")])
+            self.assertFalse((external_archive / "entry.md").exists())
 
     def test_merge_review_reports_deletion_against_target_modification(self):
         with tempfile.TemporaryDirectory() as tmp:
