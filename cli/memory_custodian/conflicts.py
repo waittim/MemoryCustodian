@@ -130,7 +130,12 @@ def analyze_conflicts(
     ]
     findings.extend(_subject_findings(subject_records))
     structural_subjects = subject_index(subject_records)
+    # Keep live entries as the owner/context universe.  Lifecycle relations
+    # and Entry-ID uniqueness, however, span the managed archive as well: a
+    # current Entry may legitimately supersede a historical Entry that has
+    # already been moved out of the live canonical file.
     entries = canonical_entries(memory_dir)
+    relation_entries = canonical_entries(memory_dir, include_archive=True)
     canonical_paths = set(canonical_memory_files(memory_dir))
     for path in canonical_paths:
         relative = path.relative_to(memory_dir).as_posix()
@@ -158,7 +163,8 @@ def analyze_conflicts(
                 ))
     selected_modules = set(included_modules) if included_modules is not None else None
     by_id = _entry_index(entries)
-    for matches in by_id.values():
+    relation_by_id = _entry_index(relation_entries)
+    for matches in relation_by_id.values():
         if len(matches) > 1:
             findings.append(ConflictFinding(
                 "MC-CONFLICT-008", ConflictStatus.INVALID,
@@ -171,11 +177,11 @@ def analyze_conflicts(
         if subject.status == "merged"
     }
     for issue in structured_relation_issues(
-        list(entries), merged_subject_ids=merged_subject_ids,
+        list(relation_entries), merged_subject_ids=merged_subject_ids,
     ):
         entry_ids = tuple(
             entry.entry_id
-            for entry in entries
+            for entry in relation_entries
             if entry.entry_id.casefold() in issue.casefold()
         )
         findings.append(ConflictFinding(

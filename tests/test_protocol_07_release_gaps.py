@@ -1937,6 +1937,55 @@ class RoutingAndQualityReleaseTests(unittest.TestCase):
             self.assertEqual(code, 1, output + error)
             self.assertIn("relation targets must be unique", output)
 
+    def test_conflicts_resolve_live_supersession_to_archive(self):
+        """Archive history participates in lifecycle resolution, not ownership."""
+        with tempfile.TemporaryDirectory() as tmp:
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            memory = Path(tmp) / "docs/memory"
+            subject_id = "MC-SUBJ-20260825-aaaaaaaa"
+            old_id = "MC-DEC-20260729-bbbbbbbb"
+            new_id = "MC-DEC-20260825-cccccccc"
+            (memory / "subjects.md").write_text(
+                "# Subject Registry\n\n" + subject_unit(subject_id, "Archive relation"),
+                encoding="utf-8",
+            )
+            old = render_active_entry(
+                "decision", old_id, "Historical decision", "Historical body.", None,
+                "project", ("user-confirmed",), subject=subject_id, facet="architecture",
+            ).replace(
+                "Status: active",
+                f"Status: superseded\nSuperseded-By: {new_id}",
+                1,
+            )
+            current = render_active_entry(
+                "decision", new_id, "Current decision", "Current body.", None,
+                "project", ("user-confirmed",), subject=subject_id, facet="architecture",
+                supersedes=old_id,
+            )
+            (memory / "decisions.md").write_text(
+                "# Decisions\n\n" + current + "\n", encoding="utf-8",
+            )
+            archive = memory / "archive"
+            archive.mkdir()
+            (archive / "decisions-2026-08-25.md").write_text(
+                "# Archived Decisions\n\n" + old + "\n", encoding="utf-8",
+            )
+
+            code, output, error = capture([
+                "check", "--conflicts", "--project-root", tmp,
+            ])
+            self.assertEqual(code, 0, output + error)
+            self.assertIn("Conflict status: CLEAR", output)
+            self.assertNotIn("references missing entry", output)
+
+            code, output, error = capture([
+                "read", "--task", "implementation", "--strict-routing",
+                "--names-only", "--project-root", tmp,
+            ])
+            self.assertEqual(code, 0, output + error)
+            self.assertIn("Conflict status: CLEAR", output)
+
     def test_add_supersedes_rejects_structurally_invalid_operand(self):
         with tempfile.TemporaryDirectory() as tmp:
             with redirect_stdout(StringIO()):
