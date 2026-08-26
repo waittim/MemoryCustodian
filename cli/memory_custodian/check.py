@@ -405,6 +405,8 @@ def run(args) -> int:
 
     all_ids: dict[str, list[str]] = {}
     for path in managed_markdown_files(memory_dir):
+        if path.name.casefold() == "readme.md":
+            continue
         for value in heading_entry_ids(read_managed_text(memory_dir, path)):
             all_ids.setdefault(value.casefold(), []).append(path.relative_to(memory_dir).as_posix())
     for value, paths in all_ids.items():

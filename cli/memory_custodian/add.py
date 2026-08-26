@@ -431,7 +431,10 @@ def _supersede_fingerprint(args, project_id: str, memory_dir: Path) -> str:
         *args.evidence,
     ]
     for path in managed_markdown_files(memory_dir):
-        if not path.relative_to(memory_dir).as_posix().startswith("archive/"):
+        if (
+            not path.relative_to(memory_dir).as_posix().startswith("archive/")
+            and path.name.casefold() != "readme.md"
+        ):
             values.extend([str(path.relative_to(memory_dir)), digest_path(path)])
     return hashlib.sha256("\0".join(values).encode("utf-8")).hexdigest()[:24]
 

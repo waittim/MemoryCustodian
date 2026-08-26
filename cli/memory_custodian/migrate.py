@@ -241,6 +241,8 @@ def _validate_existing_formal_entries(project_root: Path, memory_dir: Path) -> N
     id_counts: dict[str, int] = {}
     for path in managed_markdown_files(memory_dir):
         relative = path.relative_to(memory_dir).as_posix()
+        if path.name.casefold() == "readme.md":
+            continue
         text = read_managed_text(memory_dir, path)
         issues.extend(entry_unit_issues(text, relative))
         for entry_id in heading_entry_ids(text):

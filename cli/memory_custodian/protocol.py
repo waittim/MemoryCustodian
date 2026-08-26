@@ -840,7 +840,10 @@ def read_no_follow_text(
             before.st_dev, before.st_ino
         ) != (opened.st_dev, opened.st_ino):
             raise ValueError(f"File operand changed during safe open: {candidate}")
-        with os.fdopen(descriptor, "r", encoding="utf-8") as handle:
+        # Keep source line endings intact for range-local mutations.  Parsers
+        # use splitlines(), while writers can now preserve CRLF/CR in
+        # untouched portions of a managed document.
+        with os.fdopen(descriptor, "r", encoding="utf-8", newline="") as handle:
             descriptor = -1
             return handle.read()
     finally:
@@ -1007,7 +1010,11 @@ class MarkdownDocument:
 def parse_markdown_units(text: str) -> MarkdownDocument:
     """Parse ordered H2 and legacy-bullet units without merging mixed formats."""
 
-    lines = text.rstrip().splitlines()
+    # Do not call rstrip(): trailing spaces are meaningful source content and
+    # range-local writers must be able to preserve them.  splitlines removes
+    # line terminators while retaining line text and the semantic parser still
+    # trims only separator newlines at unit boundaries below.
+    lines = text.splitlines()
     title = lines[0] if lines and lines[0].startswith("# ") else ""
     start = 1 if title else 0
     ranges = semantic_unit_ranges("\n".join(lines), start=start)
@@ -1130,7 +1137,7 @@ def is_indexable_optional_path(relative_path: str) -> bool:
     return (
         folder in OPTIONAL_INDEX_SECTIONS
         and name.casefold() != "readme.md"
-        and name.endswith(".md")
+        and name.casefold().endswith(".md")
     )
 
 

@@ -112,31 +112,51 @@ def _pending_subject_id(project_id: str, registry: Path, normalized_args: str) -
 
 
 def _replace_subject(text: str, subject: Subject, replacement: str) -> str:
-    lines = text.rstrip("\n").splitlines()
+    """Replace one Subject range while preserving all unrelated source text."""
+
+    lines = text.splitlines(keepends=True)
     if subject.start_line < 0 or subject.end_line > len(lines):
         raise ValueError(f"Subject changed while building mutation: {subject.subject_id}")
     source_lines = lines[subject.start_line:subject.end_line]
-    current = "\n".join(source_lines).strip("\n")
-    if current != subject.text:
+    source_content = [line.rstrip("\r\n") for line in source_lines]
+    while source_content and source_content[-1] == "":
+        source_content.pop()
+    if "\n".join(source_content) != subject.text:
         raise ValueError(f"Subject changed while building mutation: {subject.subject_id}")
-    trailing_blanks = len(source_lines) - len(list(_trimmed_trailing(source_lines)))
-    replacement_lines = [
-        *replacement.strip("\n").splitlines(),
-        *([""] * trailing_blanks),
-    ]
-    return "\n".join([
+    line_ending = next(
+        (
+            "\r\n" if line.endswith("\r\n") else "\n" if line.endswith("\n") else "\r"
+            for line in source_lines
+            if line.endswith(("\r\n", "\n", "\r"))
+        ),
+        next(
+            (
+                "\r\n" if line.endswith("\r\n") else "\n" if line.endswith("\n") else "\r"
+                for line in lines
+                if line.endswith(("\r\n", "\n", "\r"))
+            ),
+            "\n",
+        ),
+    )
+    content_count = len(source_content)
+    content_lines = source_lines[:content_count]
+    separator_lines = source_lines[content_count:]
+    replacement_lines = replacement.rstrip("\r\n").splitlines()
+    replacement_text = line_ending.join(replacement_lines)
+    if content_lines:
+        terminal = content_lines[-1]
+        if terminal.endswith("\r\n"):
+            replacement_text += "\r\n"
+        elif terminal.endswith("\n"):
+            replacement_text += "\n"
+        elif terminal.endswith("\r"):
+            replacement_text += "\r"
+    replacement_text += "".join(separator_lines)
+    return "".join([
         *lines[:subject.start_line],
-        *replacement_lines,
+        replacement_text,
         *lines[subject.end_line:],
-    ]).rstrip() + "\n"
-
-
-def _trimmed_trailing(lines: list[str]):
-    end = len(lines)
-    while end and not lines[end - 1].strip():
-        end -= 1
-    return lines[:end]
-
+    ])
 
 def _validate_registry_text(project_root: Path, registry: Path, text: str) -> None:
     subjects, parse_issues = parse_subject_registry(registry, text)
@@ -263,7 +283,7 @@ def _show(args) -> int:
     print("Referenced by:")
     references = []
     for path in managed_markdown_files(memory_dir):
-        if path.name == "subjects.md":
+        if path.name == "subjects.md" or path.name.casefold() == "readme.md":
             continue
         for entry in parse_structured_entries(path, read_managed_text(memory_dir, path)):
             if any(

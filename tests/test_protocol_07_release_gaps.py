@@ -55,6 +55,7 @@ from memory_custodian.subjects import (
     parse_subjects,
     validate_subject_registry,
 )
+from memory_custodian.subject import _replace_subject
 
 
 def capture(argv: list[str]) -> tuple[int, str, str]:
@@ -4425,7 +4426,7 @@ class MarkdownUnitBoundaryAuditTests(unittest.TestCase):
         self.assertNotIn("## 2020-01-02", updated)
 
     def test_fenced_typed_body_round_trips_as_source_content(self):
-        message = '```python\nprint("visible memory")\n```'
+        message = '```python\nif True:  \n    print("visible memory")\n\n    # preserve this indentation\n```'
         rendered = render_active_entry(
             "decision", "MC-DEC-20200101-aaaaaaaa", "Code invariant",
             message, None, "project", ("user-confirmed",),
@@ -4434,6 +4435,59 @@ class MarkdownUnitBoundaryAuditTests(unittest.TestCase):
         self.assertEqual(len(parsed), 1)
         self.assertEqual(parsed[0].field_bodies["Decision"], message)
         self.assertFalse(structured_entry_schema_issues(parsed[0], "decisions.md"))
+
+    def test_subject_source_range_preserves_crlf_and_unmodified_formatting(self):
+        subject_id = "MC-SUBJ-20200101-cccccccc"
+        other_id = "MC-SUBJ-20200101-dddddddd"
+        first = subject_unit(subject_id, "Original")
+        second = subject_unit(other_id, "Other").replace(
+            "Status: active\n", "Status: active  \n"
+        )
+        text = "# Subject Registry\r\n\r\n" + first.replace("\n", "\r\n") + "\r\n" + second.replace("\n", "\r\n")
+        subjects, issues = parse_subject_registry(Path("subjects.md"), text)
+        self.assertFalse(issues)
+        replacement = first.replace("— Original", "— Renamed").rstrip("\n")
+        updated = _replace_subject(text, subjects[0], replacement)
+        self.assertNotIn("\n", updated.replace("\r\n", ""))
+        self.assertIn(f"## {subject_id} — Renamed\r\n", updated)
+        self.assertIn("Status: active  \r\n", updated)
+
+    def test_readme_examples_do_not_reserve_ids_or_become_inventory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            memory = Path(tmp) / "docs/memory"
+            example_id = "MC-DEC-20200101-eeeeeeee"
+            (memory / "README.md").write_text(
+                "# Documentation\n\n" + render_active_entry(
+                    "decision", example_id, "Example", "Documentation only.",
+                    None, "project", ("user-confirmed",),
+                ),
+                encoding="utf-8",
+            )
+            self.assertNotIn(example_id, {value for value in memory_entry_ids(memory)})
+            code, output, error = capture([
+                "add", "Real entry", "--type", "preference",
+                "--evidence", "user-confirmed", "--project-root", tmp,
+            ])
+            self.assertEqual(code, 0, output + error)
+            self.assertNotIn(example_id, output)
+
+    def test_changelog_archive_keeps_prose_between_date_ranges(self):
+        existing = (
+            "# Archived Memory: changelog.md\n\n"
+            "Complete historical entries moved from active memory after reviewed compaction.\n"
+            "This file is explicit-only and is not part of normal task context.\n\n"
+            "## 2026-08-02\n- newer\n\n"
+            "marker between dates\n\n"
+            "## 2026-08-01\n- older\n"
+        )
+        rendered = _render_archive_document(
+            "changelog.md", existing,
+            [["## 2026-08-03", "- archived"]],
+        )
+        self.assertLess(rendered.index("## 2026-08-02"), rendered.index("marker between dates"))
+        self.assertLess(rendered.index("marker between dates"), rendered.index("## 2026-08-01"))
 
     def test_supersession_and_subject_rename_only_replace_visible_source_ranges(self):
         old_id = "MC-DEC-20200101-aaaaaaaa"

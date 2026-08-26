@@ -142,12 +142,16 @@ def entry_unit_issues(text: str, relative_path: str) -> list[str]:
 
 
 def memory_entry_ids(memory_dir: Path) -> set[str]:
-    from .protocol import managed_markdown_files, read_managed_text
+    from .protocol import canonical_memory_files, read_managed_text
 
     found: set[str] = set()
     if not memory_dir.exists():
         return found
-    for path in managed_markdown_files(memory_dir):
+    # README files are documentation, even when they happen to contain an
+    # Entry-looking example.  Inventory only manifest-authorized canonical
+    # storage (including archive for ID uniqueness); this also keeps examples
+    # from reserving IDs or becoming relation operands.
+    for path in canonical_memory_files(memory_dir, include_archive=True):
         for value in heading_entry_ids(read_managed_text(memory_dir, path)):
             found.add(value)
     return found
@@ -156,12 +160,12 @@ def memory_entry_ids(memory_dir: Path) -> set[str]:
 def memory_entry_id_counts(memory_dir: Path) -> dict[str, int]:
     """Count canonical heading IDs across all shared managed-memory storage."""
 
-    from .protocol import managed_markdown_files, read_managed_text
+    from .protocol import canonical_memory_files, read_managed_text
 
     counts: dict[str, int] = {}
     if not memory_dir.exists():
         return counts
-    for path in managed_markdown_files(memory_dir):
+    for path in canonical_memory_files(memory_dir, include_archive=True):
         for value in heading_entry_ids(read_managed_text(memory_dir, path)):
             key = value.casefold()
             counts[key] = counts.get(key, 0) + 1
@@ -283,12 +287,43 @@ def render_markdown_bullet(value: str) -> str:
 
 
 def _normalized_body(value: str) -> str:
-    lines = [line for line in value.splitlines() if line.strip()]
-    if any(re.match(r"^ {0,3}(`{3,}|~{3,})", line) for line in lines):
-        # Fenced code is opaque content.  Preserve indentation and punctuation
-        # so a renderer cannot silently rewrite executable examples.
-        return "\n".join(line.rstrip() for line in lines).strip()
-    return "\n".join(line.strip() for line in lines)
+    """Normalize line endings without changing body content.
+
+    Field bodies are parsed from Markdown source ranges.  Blank lines,
+    indentation, and trailing spaces inside a fenced example are data, not
+    formatting that the protocol may silently discard.  The parser already
+    removes the separator blank lines around a field, so the only
+    normalization left here is the platform line ending.
+    """
+
+    normalized = value.replace("\r\n", "\n").replace("\r", "\n")
+    result: list[str] = []
+    fence_character: str | None = None
+    fence_length = 0
+    for line in normalized.splitlines():
+        if fence_character is not None:
+            # Fenced content is opaque: retain blank lines, indentation, and
+            # trailing spaces exactly as authored.
+            result.append(line)
+            if re.fullmatch(
+                rf" {{0,3}}{re.escape(fence_character)}{{{fence_length},}}[ \t]*",
+                line,
+            ):
+                fence_character = None
+                fence_length = 0
+            continue
+        opening = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", line)
+        if opening:
+            result.append(line)
+            fence_character = opening.group(1)[0]
+            fence_length = len(opening.group(1))
+            continue
+        # The serializer indents protocol-shaped body lines by four spaces;
+        # normalize only non-fenced lines so that this safety indentation does
+        # not become part of the round-trip comparison.
+        if line.strip():
+            result.append(line.strip())
+    return "\n".join(result)
 
 
 def _validate_rendered_entry(
@@ -491,7 +526,6 @@ def parse_structured_entries(path: Path, text: str) -> list[StructuredEntry]:
                 line
                 for occurrence in occurrences
                 for line in occurrence
-                if line.strip()
             ))
             for key, occurrences in occurrence_bodies.items()
         }

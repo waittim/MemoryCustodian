@@ -349,7 +349,7 @@ def _subject_reference_blockers(
         planned_text[memory_dir / "do-not-use.md"] = tombstone_updated
     references: dict[str, list[str]] = {subject_id: [] for subject_id in removed_ids}
     for path in managed_markdown_files(memory_dir):
-        if path.name == "subjects.md":
+        if path.name == "subjects.md" or path.name.casefold() == "readme.md":
             continue
         text = planned_text.get(path, read_managed_text(memory_dir, path))
         for entry in parse_structured_entries(path, text):
