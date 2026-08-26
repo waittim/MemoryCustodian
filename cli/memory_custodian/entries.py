@@ -290,40 +290,41 @@ def _normalized_body(value: str) -> str:
     """Normalize line endings without changing body content.
 
     Field bodies are parsed from Markdown source ranges.  Blank lines,
-    indentation, and trailing spaces inside a fenced example are data, not
-    formatting that the protocol may silently discard.  The parser already
-    removes the separator blank lines around a field, so the only
-    normalization left here is the platform line ending.
+    indentation, and trailing spaces are data, not formatting that the
+    protocol may silently discard.  The parser removes separator blank lines
+    around a field; apply the same boundary rule to bodies supplied to a
+    renderer or validator so the two paths compare the same representation.
     """
 
     normalized = value.replace("\r\n", "\n").replace("\r", "\n")
-    result: list[str] = []
-    fence_character: str | None = None
-    fence_length = 0
-    for line in normalized.splitlines():
-        if fence_character is not None:
-            # Fenced content is opaque: retain blank lines, indentation, and
-            # trailing spaces exactly as authored.
-            result.append(line)
-            if re.fullmatch(
-                rf" {{0,3}}{re.escape(fence_character)}{{{fence_length},}}[ \t]*",
-                line,
-            ):
-                fence_character = None
-                fence_length = 0
-            continue
-        opening = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", line)
-        if opening:
-            result.append(line)
-            fence_character = opening.group(1)[0]
-            fence_length = len(opening.group(1))
-            continue
-        # The serializer indents protocol-shaped body lines by four spaces;
-        # normalize only non-fenced lines so that this safety indentation does
-        # not become part of the round-trip comparison.
-        if line.strip():
-            result.append(line.strip())
-    return "\n".join(result)
+    # split("\n") intentionally keeps interior and terminal empty lines.  A
+    # terminal empty line is the field separator in a structured Entry, while
+    # interior empty lines are paragraph content and must survive.
+    lines = normalized.split("\n")
+    while lines and not lines[0].strip():
+        lines.pop(0)
+    while lines and not lines[-1].strip():
+        lines.pop()
+    return "\n".join(lines)
+
+
+def _decoded_body_line(raw_line: str, visible) -> str:
+    """Undo the renderer's safety indent for protocol-shaped body lines.
+
+    ``line_safe_markdown_body`` protects a body line that would otherwise be
+    parsed as an Entry field, heading, or top-level bullet by prefixing four
+    spaces.  Keep ordinary continuation indentation untouched, but decode
+    that canonical safety representation when it is encountered outside a
+    fence.  Fenced lines are not passed to this helper and therefore remain
+    opaque source content.
+    """
+
+    if not visible.indented_code or not raw_line.startswith("    "):
+        return raw_line
+    candidate = raw_line[4:]
+    if FIELD_RE.match(candidate) or candidate.startswith(("## ", "- ", "* ", "+ ")):
+        return candidate
+    return raw_line
 
 
 def _validate_rendered_entry(
@@ -495,7 +496,7 @@ def parse_structured_entries(path: Path, text: str) -> list[StructuredEntry]:
             current_body = []
 
         visible_by_index = {
-            line.index: line for line in visible_lines(section) if not line.indented_code
+            line.index: line for line in visible_lines(section)
         }
         for line_index, raw_line in enumerate(lines):
             if line_index == 0:
@@ -504,6 +505,10 @@ def parse_structured_entries(path: Path, text: str) -> list[StructuredEntry]:
             if visible is None:
                 if current_field is not None:
                     current_body.append(raw_line)
+                continue
+            if visible.indented_code:
+                if current_field is not None:
+                    current_body.append(_decoded_body_line(raw_line, visible))
                 continue
             line = visible.text
             matched_field = FIELD_RE.match(line)
@@ -518,15 +523,21 @@ def parse_structured_entries(path: Path, text: str) -> list[StructuredEntry]:
             if current_field == "Evidence" and line.startswith("- "):
                 evidence.append(line[2:].strip())
                 current_body.append(line[2:].strip())
-            elif current_field is not None and line.strip():
-                current_body.append(line.strip())
+            elif current_field is not None:
+                # Preserve paragraph separators, trailing spaces, and
+                # continuation indentation.  Only blank lines at the start
+                # or end of an occurrence are removed by _normalized_body;
+                # those are field separators rather than body content.
+                current_body.append(raw_line)
         flush_field()
         field_bodies = {
-            key: _normalized_body("\n".join(
-                line
-                for occurrence in occurrences
-                for line in occurrence
-            ))
+            key: _normalized_body(
+                "\n".join(
+                    line
+                    for occurrence in occurrences
+                    for line in occurrence
+                )
+            )
             for key, occurrences in occurrence_bodies.items()
         }
         title = heading[1]

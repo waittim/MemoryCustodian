@@ -4748,6 +4748,34 @@ class MarkdownUnitBoundaryAuditTests(unittest.TestCase):
             for issue in issues
         ))
 
+    def test_nonfenced_typed_body_round_trips_source_whitespace(self):
+        message = "First paragraph.  \n\nSecond paragraph.\n  nested continuation"
+        source = (
+            "## MC-DEC-20260826-dddddddd — Source body\n\n"
+            "Status: active\nScope: project\nEvidence:\n- user-confirmed\n\n"
+            f"Decision:\n{message}\n\nReason:\nBecause.\n"
+        )
+        parsed_source = parse_structured_entries(Path("decisions.md"), source)
+        self.assertEqual(len(parsed_source), 1)
+        self.assertEqual(parsed_source[0].field_bodies["Decision"], message)
+        self.assertEqual(parsed_source[0].field_bodies["Reason"], "Because.")
+
+        rendered = render_active_entry(
+            "decision",
+            "MC-DEC-20260826-dddddddd",
+            "Rendered body",
+            message,
+            "Because.",
+            "project",
+            ("user-confirmed",),
+        )
+        parsed_rendered = parse_structured_entries(
+            Path("decisions.md"), rendered,
+        )
+        self.assertEqual(len(parsed_rendered), 1)
+        self.assertEqual(parsed_rendered[0].field_bodies["Decision"], message)
+        self.assertEqual(parsed_rendered[0].field_bodies["Reason"], "Because.")
+
     def test_subjects_ignore_comments_and_reject_duplicate_scalars(self):
         commented_id = "MC-SUBJ-20200101-aaaaaaaa"
         commented = (
