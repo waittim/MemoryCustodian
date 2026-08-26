@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -15,10 +14,7 @@ from .entries import (
 )
 from .reconciliations import parse_reconciliations, validate_reconciliations
 from .structural import active_structural_operand_issues, subject_index
-from .subjects import (
-    Subject, load_subjects, normalize_alias, normalize_canonical_ref,
-    validate_subject_registry,
-)
+from .subjects import load_subjects, validate_subject_registry
 from .protocol import canonical_memory_files, managed_markdown_files, read_managed_text
 
 
@@ -69,43 +65,6 @@ def canonical_entries(memory_dir: Path, *, include_archive: bool = False) -> tup
     return tuple(entries)
 
 
-def _subject_findings(subject_records: Sequence[Subject]) -> list[ConflictFinding]:
-    findings: list[ConflictFinding] = []
-    refs: dict[str, str] = {}
-    aliases: dict[str, str] = {}
-    for subject in subject_records:
-        key = subject.subject_id.casefold()
-        for alias in (subject.title, *subject.aliases):
-            normalized = normalize_alias(alias)
-            owner = aliases.get(normalized)
-            if subject.status == "active" and owner and owner != key:
-                findings.append(ConflictFinding(
-                    "MC-CONFLICT-004", ConflictStatus.CONFLICT,
-                    f"Alias {alias!r} is owned by multiple active Subjects.",
-                    subject_id=subject.subject_id,
-                ))
-            elif subject.status == "active":
-                aliases[normalized] = key
-        if subject.canonical_ref and subject.status == "active":
-            try:
-                normalized_ref = normalize_canonical_ref(subject.canonical_ref)
-            except ValueError as exc:
-                findings.append(ConflictFinding(
-                    "MC-CONFLICT-003", ConflictStatus.INVALID, str(exc),
-                    subject_id=subject.subject_id,
-                ))
-                continue
-            owner = refs.get(normalized_ref)
-            if owner and owner != key:
-                findings.append(ConflictFinding(
-                    "MC-CONFLICT-003", ConflictStatus.CONFLICT,
-                    f"Canonical-Ref {normalized_ref!r} is owned by multiple active Subjects.",
-                    subject_id=subject.subject_id,
-                ))
-            refs[normalized_ref] = key
-    return findings
-
-
 def _entry_index(entries: tuple[StructuredEntry, ...]) -> dict[str, list[StructuredEntry]]:
     result: dict[str, list[StructuredEntry]] = {}
     for entry in entries:
@@ -128,7 +87,6 @@ def analyze_conflicts(
         ConflictFinding("MC-CONFLICT-003", ConflictStatus.INVALID, issue)
         for issue in validate_subject_registry(memory_dir, project_root)
     ]
-    findings.extend(_subject_findings(subject_records))
     structural_subjects = subject_index(subject_records)
     # Keep live entries as the owner/context universe.  Lifecycle relations
     # and Entry-ID uniqueness, however, span the managed archive as well: a

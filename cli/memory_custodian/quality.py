@@ -7,7 +7,7 @@ from pathlib import Path
 import subprocess
 
 from .conflicts import analyze_conflicts, canonical_entries
-from .entries import parse_structured_entries, structured_relation_issues
+from .entries import parse_structured_entries, structured_relation_issues, validate_evidence
 from .protocol import (
     manifest_contract_metadata,
     canonical_memory_files,
@@ -160,27 +160,64 @@ def freshness_findings(project_root: Path, memory_dir: Path) -> tuple[QualityFin
     saw_revision = False
     entries = canonical_entries(memory_dir)
     all_entries = canonical_entries(memory_dir, include_archive=True)
+    from .subjects import load_subjects
+    subject_records = load_subjects(memory_dir)
+    subjects = {item.subject_id.casefold(): item for item in subject_records}
+
+    def check_evidence(owner: str, evidence: tuple[str, ...]) -> None:
+        nonlocal saw_revision
+        for value in evidence:
+            prefix, separator, rest = value.partition(":")
+            if not separator or prefix not in {"repo", "doc", "test"}:
+                continue
+            try:
+                # Validate the path syntax and containment even when the
+                # registry's structural pass allowed a missing source.
+                normalized_evidence = validate_evidence(
+                    (value,), project_root, allow_missing=True,
+                )[0]
+            except ValueError:
+                findings.append(QualityFinding(
+                    "ERROR", "MC-FRESH-001",
+                    f"{owner} Evidence has an unsafe or invalid source path.",
+                ))
+                continue
+            # validate_evidence canonicalizes path separators before checking
+            # the filesystem.  Use that same canonical value for freshness;
+            # otherwise a valid Windows-style relative path is checked under
+            # its literal POSIX backslash spelling and is falsely reported as
+            # missing.
+            prefix, separator, rest = normalized_evidence.partition(":")
+            raw_path, at, revision = rest.partition("@")
+            target = (project_root / raw_path).resolve()
+            try:
+                target.relative_to(project_root.resolve())
+            except ValueError:
+                # This is normally covered above; retain a defensive check so
+                # freshness never follows an escaping Evidence path.
+                findings.append(QualityFinding(
+                    "ERROR", "MC-FRESH-001",
+                    f"{owner} Evidence path escapes the project: {prefix}:{raw_path}",
+                ))
+                continue
+            if not target.exists():
+                findings.append(QualityFinding(
+                    "ERROR", "MC-FRESH-001",
+                    f"{owner} Evidence path does not exist: {prefix}:{raw_path}",
+                ))
+            if at:
+                saw_revision = True
+                if head is not None and not head.startswith(revision) and not revision.startswith(head):
+                    findings.append(QualityFinding(
+                        "WARNING", "MC-FRESH-002",
+                        f"{owner} Evidence revision differs from current Git HEAD.",
+                    ))
+
     for entry in entries:
         if entry.status in {"active", "candidate"}:
-            for evidence in entry.evidence:
-                prefix, separator, rest = evidence.partition(":")
-                if not separator or prefix not in {"repo", "doc", "test"}:
-                    continue
-                raw_path, at, revision = rest.partition("@")
-                if not (project_root / raw_path).exists():
-                    findings.append(QualityFinding(
-                        "ERROR", "MC-FRESH-001",
-                        f"{entry.entry_id} Evidence path does not exist: {prefix}:{raw_path}",
-                    ))
-                if at:
-                    saw_revision = True
-                    if head is not None and not head.startswith(revision) and not revision.startswith(head):
-                        findings.append(QualityFinding(
-                            "WARNING", "MC-FRESH-002",
-                            f"{entry.entry_id} Evidence revision differs from current Git HEAD.",
-                        ))
-    from .subjects import load_subjects
-    subjects = {item.subject_id.casefold(): item for item in load_subjects(memory_dir)}
+            check_evidence(entry.entry_id, entry.evidence)
+    for subject in subject_records:
+        check_evidence(f"Subject {subject.subject_id}", subject.evidence)
     findings.extend(
         QualityFinding("ERROR", "MC-FRESH-004", issue + ".")
         for issue in structured_relation_issues(

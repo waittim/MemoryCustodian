@@ -549,10 +549,6 @@ def _merge(args) -> int:
     reviews: list[str] = []
     if source.canonical_ref and target.canonical_ref and source.canonical_ref != target.canonical_ref:
         reviews.append("Source and target have different Canonical-Ref values; reviewer must choose target identity.")
-    source_aliases = {source.title.casefold(), *(item.casefold() for item in source.aliases)}
-    target_aliases = {target.title.casefold(), *(item.casefold() for item in target.aliases)}
-    if source_aliases & target_aliases:
-        reviews.append("Source and target share an exact normalized alias.")
     seed = (
         f"subject-merge\0{project_id}\0{source.subject_id}\0{target.subject_id}\0"
         + "\0".join(sorted([

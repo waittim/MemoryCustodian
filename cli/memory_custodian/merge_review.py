@@ -295,6 +295,16 @@ def merge_review(project_root: Path, memory_dir: Path, target_ref: str) -> Merge
         for issue in issues:
             conflicts.append(f"MC-MERGE-006 {side} has invalid Entry: {issue}")
 
+    base_subject_ids = set(base_subjects)
+    new_head_custom_subjects = {
+        key: subject for key, subject in head_subjects.items()
+        if key not in base_subject_ids and subject.status == "active" and not subject.canonical_ref
+    }
+    new_target_custom_subjects = {
+        key: subject for key, subject in target_subjects.items()
+        if key not in base_subject_ids and subject.status == "active" and not subject.canonical_ref
+    }
+
     left_refs: dict[str, str] = {}
     left_aliases: dict[str, str] = {}
     for subject in left_subjects.values():
@@ -321,7 +331,16 @@ def merge_review(project_root: Path, memory_dir: Path, target_ref: str) -> Merge
         collision = next((left_aliases.get(normalize_alias(alias)) for alias in (subject.title, *subject.aliases) if left_aliases.get(normalize_alias(alias))), None)
         if collision and collision.casefold() != subject.subject_id.casefold():
             conflicts.append(f"MC-MERGE-002 exact alias collision: {collision}, {subject.subject_id}")
-        if left_subjects and not subject.canonical_ref and not collision and subject.subject_id.casefold() not in left_subjects:
+        if (
+            subject.subject_id.casefold() in new_target_custom_subjects
+            and new_head_custom_subjects
+            and not subject.canonical_ref
+            and not collision
+            and any(
+                key != subject.subject_id.casefold()
+                for key in new_head_custom_subjects
+            )
+        ):
             reviews.append("MC-MERGE-REVIEW-003 both branches created differently named custom Subjects")
 
     def identity(entry: StructuredEntry) -> tuple[str, str, str] | None:

@@ -2816,6 +2816,48 @@ class RoutingAndQualityReleaseTests(unittest.TestCase):
             self.assertIn("MC-FRESH-005", output)
             self.assertIn("active registry entry", output)
 
+    def test_freshness_checks_subject_evidence_paths(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            memory = Path(tmp) / "docs/memory"
+            subject_id = "MC-SUBJ-20260826-bbbbbbbb"
+            (memory / "subjects.md").write_text(
+                "# Subject Registry\n\n"
+                + subject_unit(subject_id, "Missing source").replace(
+                    "- user-confirmed", "- repo:missing-subject-source.md", 1,
+                ),
+                encoding="utf-8",
+            )
+            code, output, error = capture([
+                "check", "--freshness", "--project-root", tmp,
+            ])
+            self.assertEqual(code, 1, output + error)
+            self.assertIn("MC-FRESH-001", output)
+            self.assertIn(subject_id, output)
+
+    def test_freshness_uses_normalized_subject_evidence_paths(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            source = Path(tmp) / "src/source.md"
+            source.parent.mkdir()
+            source.write_text("authoritative source\n", encoding="utf-8")
+            memory = Path(tmp) / "docs/memory"
+            subject_id = "MC-SUBJ-20260826-cbbbbbbb"
+            (memory / "subjects.md").write_text(
+                "# Subject Registry\n\n"
+                + subject_unit(subject_id, "Normalized source").replace(
+                    "- user-confirmed", r"- repo:src\source.md", 1,
+                ),
+                encoding="utf-8",
+            )
+            code, output, error = capture([
+                "check", "--freshness", "--project-root", tmp,
+            ])
+            self.assertEqual(code, 0, output + error)
+            self.assertNotIn("MC-FRESH-001", output)
+
     def test_local_manifest_rejects_unknown_or_unsafe_declarations(self):
         with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as state:
             with patch.dict(os.environ, {"XDG_STATE_HOME": state}), redirect_stdout(StringIO()):
@@ -4134,6 +4176,75 @@ class MergeAndDeterminismReleaseTests(unittest.TestCase):
                 self.assertIn(f"Merge review status: {expected_status}", output)
                 self.assertIn(expected_code, output)
                 self.assertEqual(code, 1 if expected_status == "CONFLICT" else 0)
+
+    def test_merge_review_does_not_treat_rename_as_second_subject_creation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = initialize_git_project(tmp)
+            subject_id = "MC-SUBJ-20260826-cccccccc"
+            (memory / "subjects.md").write_text(
+                "# Subject Registry\n\n" + subject_unit(subject_id, "Original"),
+                encoding="utf-8",
+            )
+            git(tmp, "add", ".")
+            git(tmp, "commit", "-qm", "base subject")
+            base = git(tmp, "rev-parse", "HEAD")
+
+            subprocess.run(["git", "checkout", "-qb", "left"], cwd=tmp, check=True,
+                           stdout=subprocess.DEVNULL)
+            (memory / "subjects.md").write_text(
+                (memory / "subjects.md").read_text(encoding="utf-8").replace(
+                    "Original", "Renamed",
+                ),
+                encoding="utf-8",
+            )
+            git(tmp, "add", ".")
+            git(tmp, "commit", "-qm", "rename subject")
+
+            subprocess.run(["git", "checkout", "-qb", "right", base], cwd=tmp, check=True,
+                           stdout=subprocess.DEVNULL)
+            another_id = "MC-SUBJ-20260826-dddddddd"
+            (memory / "subjects.md").write_text(
+                "# Subject Registry\n\n"
+                + subject_unit(subject_id, "Original") + "\n"
+                + subject_unit(another_id, "Right-only custom"),
+                encoding="utf-8",
+            )
+            git(tmp, "add", ".")
+            git(tmp, "commit", "-qm", "right custom subject")
+            subprocess.run(["git", "checkout", "-q", "left"], cwd=tmp, check=True,
+                           stdout=subprocess.DEVNULL)
+
+            code, output, error = capture([
+                "check", "--conflicts", "--merge-base", "right", "--project-root", tmp,
+            ])
+            self.assertEqual(code, 0, output + error)
+            self.assertIn("Merge review status: CLEAR", output)
+            self.assertNotIn("MC-MERGE-REVIEW-003", output)
+
+    def test_conflict_alias_collision_has_one_authoritative_invalid_finding(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            memory = Path(tmp) / "docs/memory"
+            first_id = "MC-SUBJ-20260826-eeeeeeee"
+            second_id = "MC-SUBJ-20260826-ffffffff"
+            first = subject_unit(first_id, "Shared alias")
+            second = subject_unit(second_id, "Other title").replace(
+                "- other title", "- shared alias",
+            )
+            (memory / "subjects.md").write_text(
+                "# Subject Registry\n\n" + first + "\n" + second,
+                encoding="utf-8",
+            )
+            result = analyze_conflicts(memory)
+            alias_findings = [
+                item for item in result.findings
+                if "alias" in item.message.casefold()
+                or "normalized alias" in item.message.casefold()
+            ]
+            self.assertEqual(len(alias_findings), 1)
+            self.assertEqual(alias_findings[0].code, "MC-CONFLICT-003")
+            self.assertEqual(alias_findings[0].status.value, "INVALID")
 
     def test_merge_review_detects_supersede_while_other_branch_extends_old_entry(self):
         with tempfile.TemporaryDirectory() as tmp:
