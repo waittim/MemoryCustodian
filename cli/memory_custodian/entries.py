@@ -584,6 +584,14 @@ def structured_entry_schema_issues(
     for name in sorted(set(entry.field_counts) & ENTRY_SCALAR_FIELDS):
         if not entry.fields.get(name, "").strip():
             issues.append(f"{prefix} {name} must not be empty")
+        if (
+            entry.field_counts.get(name) == 1
+            and entry.field_bodies.get(name, "")
+            != _normalized_body(entry.fields.get(name, ""))
+        ):
+            issues.append(
+                f"{prefix} scalar field {name} has an unexpected visible continuation line"
+            )
 
     for name in ("Status", "Scope", "Evidence"):
         count = entry.field_counts.get(name, 0)
@@ -653,6 +661,12 @@ def structured_entry_schema_issues(
                     )
 
     if entry.status in {"candidate", "promoted"}:
+        provisional_subject = entry.fields.get("Provisional-Subject", "").strip()
+        provisional_facet = entry.fields.get("Provisional-Facet", "").strip()
+        if bool(provisional_subject) != bool(provisional_facet):
+            issues.append(
+                f"{prefix} must declare Provisional-Subject and Provisional-Facet together"
+            )
         candidate_type_count = entry.field_counts.get("Candidate-Type", 0)
         if candidate_type_count != 1:
             issues.append(

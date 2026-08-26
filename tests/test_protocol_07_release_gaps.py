@@ -4686,6 +4686,68 @@ class MarkdownUnitBoundaryAuditTests(unittest.TestCase):
         self.assertEqual(migrated, legacy)
         self.assertEqual((changed, manual, generated), (0, 1, ()))
 
+    def test_shared_schema_rejects_incomplete_candidate_identity(self):
+        candidate_id = "MC-INBOX-20260826-aaaaaaaa"
+        rendered = render_candidate_entry(
+            candidate_id,
+            "Candidate",
+            "decision",
+            "Candidate body.",
+            "project",
+            ("agent-observed",),
+            "Review later.",
+            subject="MC-SUBJ-20260826-bbbbbbbb",
+        )
+        parsed = parse_structured_entries(Path("inbox.md"), rendered)
+        self.assertEqual(len(parsed), 1)
+        issues = structured_entry_schema_issues(parsed[0], "inbox.md")
+        self.assertTrue(any(
+            "Provisional-Subject and Provisional-Facet together" in issue
+            for issue in issues
+        ))
+
+        complete = render_candidate_entry(
+            candidate_id,
+            "Candidate",
+            "decision",
+            "Candidate body.",
+            "project",
+            ("agent-observed",),
+            "Review later.",
+            subject="MC-SUBJ-20260826-bbbbbbbb",
+            facet="architecture",
+        )
+        complete_entry = parse_structured_entries(Path("inbox.md"), complete)[0]
+        self.assertEqual(
+            structured_entry_schema_issues(complete_entry, "inbox.md"),
+            [],
+        )
+
+    def test_shared_schema_rejects_scalar_continuation_but_allows_multiline_bodies(self):
+        rendered = render_active_entry(
+            "decision",
+            "MC-DEC-20260826-cccccccc",
+            "Multiline body",
+            "First paragraph.\n\nSecond paragraph.\n  nested continuation",
+            None,
+            "project",
+            ("user-confirmed", "issue:#12"),
+        )
+        parsed = parse_structured_entries(Path("decisions.md"), rendered)[0]
+        self.assertEqual(structured_entry_schema_issues(parsed, "decisions.md"), [])
+
+        malformed = rendered.replace(
+            "Status: active\n",
+            "Status: active\nUnexpected continuation.\n",
+            1,
+        )
+        invalid = parse_structured_entries(Path("decisions.md"), malformed)[0]
+        issues = structured_entry_schema_issues(invalid, "decisions.md")
+        self.assertTrue(any(
+            "scalar field Status has an unexpected visible continuation line" in issue
+            for issue in issues
+        ))
+
     def test_subjects_ignore_comments_and_reject_duplicate_scalars(self):
         commented_id = "MC-SUBJ-20200101-aaaaaaaa"
         commented = (
