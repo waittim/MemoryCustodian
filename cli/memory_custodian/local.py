@@ -22,6 +22,7 @@ from .locking import (
     project_mutation_guard,
 )
 from .protocol import resolve_memory_dir, resolve_project_root
+from .snapshot import build_snapshot
 
 
 def _reset_inventory(
@@ -123,12 +124,13 @@ def run(args) -> int:
     if not manifest.exists():
         raise ValueError("manifest.md is missing; the MemoryCustodian setup is incomplete or corrupted")
     project_id = validated_project_identity(memory_dir)
-    shared_ids = memory_entry_ids(memory_dir)
     command = args.local_command
     if command == "status":
+        shared_ids = memory_entry_ids(memory_dir)
         render_overlay_status(inspect_overlay(project_root, project_id, shared_ids=shared_ids))
         return 0
     if command == "reset":
+        shared_ids = memory_entry_ids(memory_dir)
         overlay = inspect_overlay(project_root, project_id, shared_ids=shared_ids)
         render_overlay_status(overlay)
         if overlay.status == LocalStatus.DISABLED:
@@ -182,16 +184,34 @@ def run(args) -> int:
         f"local {command}",
         timeout=args.lock_timeout,
         break_stale=args.break_stale_lock,
-    ):
+    ) as mutation:
+        # The initial identity check above is only command routing.  Once the
+        # project lock is held, rebuild the shared snapshot and derive every
+        # ID-safety decision from that captured, lock-internal view.  A shared
+        # Entry created while the lock was being acquired must therefore
+        # reserve its ID before local allocation proceeds.
+        locked_project_id = mutation.project_id
+        if locked_project_id is None:
+            raise ValueError("Local overlay access requires a valid Protocol 0.7 project identity.")
+        locked_snapshot = build_snapshot(memory_dir, project_root)
+        captured_project_id = validated_project_identity(
+            memory_dir,
+            manifest_text=locked_snapshot.manifest_text,
+        )
+        if captured_project_id != locked_project_id:
+            raise ValueError("Project manifest changed while acquiring the mutation lock.")
+        shared_ids = {
+            entry.entry_id for entry in locked_snapshot.relation_entries
+        }
         if command == "enable":
-            directory = enable_overlay(project_root, project_id, shared_ids=shared_ids)
-            print(f"Local overlay enabled for project_id {project_id}.")
+            directory = enable_overlay(project_root, locked_project_id, shared_ids=shared_ids)
+            print(f"Local overlay enabled for project_id {locked_project_id}.")
             print(f"State directory: {directory}")
             print("Run `memory-custodian local link` before local content can load.")
             return 0
         if command == "link":
-            enable_overlay(project_root, project_id, shared_ids=shared_ids)
-            roots = link_root(project_root, project_id, shared_ids=shared_ids)
+            enable_overlay(project_root, locked_project_id, shared_ids=shared_ids)
+            roots = link_root(project_root, locked_project_id, shared_ids=shared_ids)
             print("Local overlay linked to this normalized project root.")
             if len(roots) > 1:
                 print("Local overlay status: REVIEW")
@@ -203,7 +223,7 @@ def run(args) -> int:
             evidence = validate_evidence(args.evidence, project_root)
             entry_id = add_local_preference(
                 project_root,
-                project_id,
+                locked_project_id,
                 args.message,
                 evidence,
                 shared_ids=shared_ids,

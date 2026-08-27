@@ -7,12 +7,10 @@ import sys
 
 from .conflicts import ConflictResult, ConflictStatus, analyze_snapshot, render_conflict_result
 from .context import ContextRoutingResult, invalid_context_result, route_context
-from .entries import parse_structured_entries
 from .local_overlay import (
     LocalOverlay,
     LocalStatus,
     inspect_overlay,
-    read_local_private_file,
     render_overlay_status,
     validated_project_identity,
 )
@@ -142,17 +140,19 @@ def run(args) -> int:
     local_contents: list[tuple[str, str]] = []
     local_scope_warnings: list[str] = []
     if overlay.status == LocalStatus.BOUND:
-        for path in overlay.modules:
-            if overlay.directory is None:
-                break
-            text = read_local_private_file(path)
-            entries = parse_structured_entries(path, text)
+        # ``inspect_overlay`` captured and validated the local modules above.
+        # Consume only that immutable view: reopening a private module here
+        # would allow a replacement between validation and rendering to mix
+        # inputs from two different local states.
+        for captured in overlay.captured_modules:
+            text = captured.text
+            entries = captured.entries
             if any(entry.scope not in {"local-user", "local-machine"} for entry in entries):
                 local_scope_warnings.append(
-                    f"Local module {path.name} contains a non-local Scope and was excluded."
+                    f"Local module {captured.path.name} contains a non-local Scope and was excluded."
                 )
                 continue
-            local_contents.append((f"local/{path.relative_to(overlay.directory).as_posix()}", text.strip()))
+            local_contents.append((f"local/{captured.relative}", text.strip()))
     completeness = result.completeness
     if (
         completeness == RoutingCompleteness.COMPLETE

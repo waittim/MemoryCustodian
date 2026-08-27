@@ -9,8 +9,10 @@ import os
 from pathlib import Path
 import re
 import stat
+from typing import Mapping
 
 from .entries import (
+    StructuredEntry,
     entry_unit_issues,
     generate_entry_id,
     heading_entry_ids,
@@ -49,6 +51,51 @@ class LocalStatus(str, Enum):
 
 
 @dataclass(frozen=True)
+class CapturedLocalFile:
+    """One local overlay file captured together with its parsed Entries.
+
+    The text and parser output are deliberately kept together.  Consumers of
+    an overlay inspection must use this immutable source record instead of
+    reopening the private file after validation has completed.
+    """
+
+    path: Path
+    relative: str
+    text: str
+    entries: tuple[StructuredEntry, ...] = ()
+    diagnostics: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class LocalOverlaySnapshot:
+    """Read-only local overlay view produced by one inspection.
+
+    ``files`` includes the local manifest followed by each declared module.
+    Every file is represented by the exact text and parsed Entries observed
+    during this inspection.  The tuple boundary prevents downstream callers
+    from replacing or reordering captured inputs.
+    """
+
+    directory: Path
+    files: tuple[CapturedLocalFile, ...] = ()
+
+    @property
+    def manifest(self) -> CapturedLocalFile | None:
+        return next(
+            (item for item in self.files if item.relative == "manifest.md"),
+            None,
+        )
+
+    @property
+    def module_files(self) -> tuple[CapturedLocalFile, ...]:
+        return tuple(item for item in self.files if item.relative != "manifest.md")
+
+    @property
+    def entries(self) -> tuple[StructuredEntry, ...]:
+        return tuple(entry for item in self.module_files for entry in item.entries)
+
+
+@dataclass(frozen=True)
 class LocalOverlay:
     status: LocalStatus
     directory: Path | None
@@ -56,6 +103,13 @@ class LocalOverlay:
     modules: tuple[Path, ...] = ()
     warnings: tuple[str, ...] = ()
     corrupt: bool = False
+    snapshot: LocalOverlaySnapshot | None = None
+
+    @property
+    def captured_modules(self) -> tuple[CapturedLocalFile, ...]:
+        """Return captured declared modules without reopening private files."""
+
+        return self.snapshot.module_files if self.snapshot is not None else ()
 
 
 def _project_state(project_id: str) -> Path:
@@ -236,8 +290,22 @@ def enable_overlay(
     return directory
 
 
-def _parse_manifest(path: Path, expected_project_id: str) -> tuple[Path, ...]:
-    text = read_local_private_file(path)
+def _parse_manifest(
+    path: Path,
+    expected_project_id: str,
+    *,
+    text: str | None = None,
+    captured_text: dict[Path, str] | None = None,
+) -> tuple[Path, ...]:
+    """Validate local manifest topology from supplied/captured text.
+
+    ``captured_text`` is used by ``inspect_overlay`` to retain the one read of
+    each declared module.  Legacy callers that omit it keep the historical
+    disk-backed API.
+    """
+
+    if text is None:
+        text = read_local_private_file(path)
     # A local manifest is a small Markdown document, not an unordered bag of
     # allowed lines.  Count only real (non-fenced, non-indented) headings so a
     # code example cannot satisfy or duplicate the manifest topology.
@@ -320,96 +388,173 @@ def _parse_manifest(path: Path, expected_project_id: str) -> tuple[Path, ...]:
             raise ValueError("Local overlay module path escapes its project state directory.") from exc
         if not candidate.exists() and not candidate.is_symlink():
             raise ValueError(f"Local overlay is missing declared module: {raw}")
-        read_local_private_file(candidate)
+        module_text = read_local_private_file(candidate)
+        if captured_text is not None:
+            captured_text[candidate] = module_text
         modules.append(candidate)
     return tuple(modules)
+
+
+def _local_entry_issues(
+    relative: str,
+    entries: tuple[StructuredEntry, ...],
+    project_root: Path,
+) -> list[str]:
+    """Validate already-parsed local Entries without touching the filesystem."""
+
+    issues: list[str] = []
+    for entry in entries:
+        issues.extend(structured_entry_schema_issues(entry, relative))
+        code = entry.entry_id.split("-", 2)[1].upper()
+        if relative == "preferences.md" and code != "PREF":
+            issues.append(
+                f"{relative}: {entry.entry_id} type does not match local preference storage"
+            )
+        if relative.startswith("profiles/") and code != "AREA":
+            issues.append(
+                f"{relative}: {entry.entry_id} type does not match local profile storage"
+            )
+        if entry.scope not in {"local-user", "local-machine"}:
+            issues.append(
+                f"{relative}: {entry.entry_id} must use Scope: local-user or local-machine"
+            )
+        if entry.status != "active":
+            issues.append(
+                f"{relative}: {entry.entry_id} has unsupported local Status {entry.status!r}"
+            )
+        forbidden_relations = sorted(
+            field
+            for field in (*LIFECYCLE_FIELDS, "Exception-To")
+            if entry.field_counts.get(field, 0)
+        )
+        if forbidden_relations:
+            issues.append(
+                f"{relative}: {entry.entry_id} local entries forbid governance relations: "
+                + ", ".join(forbidden_relations)
+            )
+        if not entry.evidence:
+            issues.append(f"{relative}: {entry.entry_id} has no Evidence")
+        else:
+            try:
+                validate_evidence(
+                    entry.evidence,
+                    project_root,
+                    allow_missing=True,
+                )
+            except ValueError:
+                issues.append(
+                    f"{relative}: {entry.entry_id} has invalid Evidence schema or unsafe source path"
+                )
+    return issues
+
+
+def _capture_local_file(
+    path: Path,
+    directory: Path,
+    project_root: Path,
+    *,
+    text: str | None = None,
+) -> CapturedLocalFile:
+    """Capture one local module and all diagnostics from that captured text."""
+
+    relative = path.relative_to(directory).as_posix()
+    if text is None:
+        try:
+            text = read_local_private_file(path)
+        except (OSError, RuntimeError, TypeError, ValueError) as exc:
+            return CapturedLocalFile(
+                path,
+                relative,
+                "",
+                diagnostics=(f"{relative}: Markdown entry parsing failed: {exc}",),
+            )
+
+    diagnostics: list[str] = []
+    try:
+        diagnostics.extend(entry_unit_issues(text, relative))
+    except (OSError, RuntimeError, TypeError, ValueError) as exc:
+        diagnostics.append(f"{relative}: Markdown entry parsing failed: {exc}")
+        return CapturedLocalFile(path, relative, text, diagnostics=tuple(diagnostics))
+    try:
+        entries = tuple(parse_structured_entries(path, text))
+    except (OSError, RuntimeError, TypeError, ValueError) as exc:
+        diagnostics.append(f"{relative}: Markdown entry parsing failed: {exc}")
+        return CapturedLocalFile(path, relative, text, diagnostics=tuple(diagnostics))
+    diagnostics.extend(_local_entry_issues(relative, entries, project_root))
+    return CapturedLocalFile(
+        path,
+        relative,
+        text,
+        entries,
+        tuple(dict.fromkeys(diagnostics)),
+    )
+
+
+def _captured_modules(
+    modules: tuple[Path, ...],
+    directory: Path,
+    project_root: Path,
+    *,
+    captured_text: Mapping[Path, str] | None = None,
+) -> tuple[CapturedLocalFile, ...]:
+    return tuple(
+        _capture_local_file(
+            path,
+            directory,
+            project_root,
+            text=(captured_text[path] if captured_text is not None and path in captured_text else None),
+        )
+        for path in modules
+    )
 
 
 def _local_module_issues(
     modules: tuple[Path, ...],
     directory: Path,
     project_root: Path,
+    *,
+    captured_files: Mapping[Path, CapturedLocalFile] | None = None,
 ) -> list[str]:
-    """Reuse formal Entry validation with local-only storage and scope rules."""
+    """Validate local modules, reusing captured text and parsed Entries."""
 
-    issues: list[str] = []
+    files = tuple(
+        captured_files[path]
+        if captured_files is not None and path in captured_files
+        else _capture_local_file(path, directory, project_root)
+        for path in modules
+    )
+    issues = [diagnostic for item in files for diagnostic in item.diagnostics]
     identifiers: dict[str, list[str]] = {}
-    for path in modules:
-        relative = path.relative_to(directory).as_posix()
-        try:
-            text = read_local_private_file(path)
-            issues.extend(entry_unit_issues(text, relative))
-            entries = parse_structured_entries(path, text)
-            values = heading_entry_ids(text)
-        except (OSError, RuntimeError, TypeError, ValueError) as exc:
-            issues.append(f"{relative}: Markdown entry parsing failed: {exc}")
-            continue
-        for value in values:
-            identifiers.setdefault(value.casefold(), []).append(relative)
-        for entry in entries:
-            issues.extend(structured_entry_schema_issues(entry, relative))
-            code = entry.entry_id.split("-", 2)[1].upper()
-            if relative == "preferences.md" and code != "PREF":
-                issues.append(
-                    f"{relative}: {entry.entry_id} type does not match local preference storage"
-                )
-            if relative.startswith("profiles/") and code != "AREA":
-                issues.append(
-                    f"{relative}: {entry.entry_id} type does not match local profile storage"
-                )
-            if entry.scope not in {"local-user", "local-machine"}:
-                issues.append(
-                    f"{relative}: {entry.entry_id} must use Scope: local-user or local-machine"
-                )
-            if entry.status != "active":
-                issues.append(
-                    f"{relative}: {entry.entry_id} has unsupported local Status {entry.status!r}"
-                )
-            forbidden_relations = sorted(
-                field
-                for field in (*LIFECYCLE_FIELDS, "Exception-To")
-                if entry.field_counts.get(field, 0)
-            )
-            if forbidden_relations:
-                issues.append(
-                    f"{relative}: {entry.entry_id} local entries forbid governance relations: "
-                    + ", ".join(forbidden_relations)
-                )
-            if not entry.evidence:
-                issues.append(f"{relative}: {entry.entry_id} has no Evidence")
-            else:
-                try:
-                    validate_evidence(
-                        entry.evidence,
-                        project_root,
-                        allow_missing=True,
-                    )
-                except ValueError:
-                    issues.append(
-                        f"{relative}: {entry.entry_id} has invalid Evidence schema or unsafe source path"
-                    )
+    for item in files:
+        for entry in item.entries:
+            identifiers.setdefault(entry.entry_id.casefold(), []).append(item.relative)
     for entry_id, locations in identifiers.items():
         if len(locations) > 1:
             issues.append(
                 f"duplicate local Entry ID {entry_id.upper()} in: {', '.join(locations)}"
             )
-    return issues
+    return list(dict.fromkeys(issues))
 
 
 def _cross_storage_id_issues(
     modules: tuple[Path, ...],
     shared_ids: set[str] | None,
+    *,
+    captured_files: Mapping[Path, CapturedLocalFile] | None = None,
 ) -> list[str]:
     normalized_shared = {value.casefold() for value in (shared_ids or set())}
     issues: list[str] = []
     for path in modules:
-        try:
-            values = heading_entry_ids(read_local_private_file(path))
-        except (OSError, RuntimeError, TypeError, ValueError):
-            # The module parser already reports malformed Markdown.  Do not
-            # turn that diagnostic into an uncaught exception while checking
-            # the cross-storage ID index.
-            continue
+        if captured_files is not None and path in captured_files:
+            values = tuple(entry.entry_id for entry in captured_files[path].entries)
+        else:
+            try:
+                values = heading_entry_ids(read_local_private_file(path))
+            except (OSError, RuntimeError, TypeError, ValueError):
+                # The module parser already reports malformed Markdown.  Do not
+                # turn that diagnostic into an uncaught exception while checking
+                # the cross-storage ID index.
+                continue
         issues.extend(
             f"duplicate Entry ID across shared/local storage: {entry_id}"
             for entry_id in values
@@ -479,7 +624,17 @@ def inspect_overlay(
             warnings=("Existing local overlay is not bound to this normalized project root; run `memory-custodian local link`.",),
         )
     try:
-        modules = _parse_manifest(manifest, project_id)
+        # Capture the manifest and every declared module once.  The returned
+        # snapshot is the only local input a downstream read is allowed to
+        # consume; it must not reopen these paths after validation.
+        manifest_text = read_local_private_file(manifest)
+        module_texts: dict[Path, str] = {}
+        modules = _parse_manifest(
+            manifest,
+            project_id,
+            text=manifest_text,
+            captured_text=module_texts,
+        )
     except (OSError, ValueError) as exc:
         return LocalOverlay(
             LocalStatus.REVIEW,
@@ -488,8 +643,32 @@ def inspect_overlay(
             warnings=(str(exc),),
             corrupt=True,
         )
-    entry_issues = _local_module_issues(modules, directory, project_root)
-    entry_issues.extend(_cross_storage_id_issues(modules, shared_ids))
+    module_files = _captured_modules(
+        modules,
+        directory,
+        project_root,
+        captured_text=module_texts,
+    )
+    captured_by_path = {item.path: item for item in module_files}
+    entry_issues = _local_module_issues(
+        modules,
+        directory,
+        project_root,
+        captured_files=captured_by_path,
+    )
+    cross_storage_issues = _cross_storage_id_issues(
+        modules,
+        shared_ids,
+        captured_files=captured_by_path,
+    )
+    entry_issues.extend(cross_storage_issues)
+    local_snapshot = LocalOverlaySnapshot(
+        directory,
+        (
+            CapturedLocalFile(manifest, "manifest.md", manifest_text),
+            *module_files,
+        ),
+    )
     if entry_issues:
         return LocalOverlay(
             LocalStatus.REVIEW,
@@ -498,13 +677,21 @@ def inspect_overlay(
             modules,
             tuple(entry_issues),
             corrupt=True,
+            snapshot=local_snapshot,
         )
     status = LocalStatus.REVIEW if len(roots) > 1 else LocalStatus.BOUND
     warnings = (
         ("The same project_id is explicitly bound to multiple roots; review cross-repository overlay reuse.",)
         if len(roots) > 1 else ()
     )
-    return LocalOverlay(status, directory, project_id, modules, warnings)
+    return LocalOverlay(
+        status,
+        directory,
+        project_id,
+        modules,
+        warnings,
+        snapshot=local_snapshot,
+    )
 
 
 def project_identity(memory_dir: Path) -> str:
@@ -556,20 +743,19 @@ def add_local_preference(
     path = overlay.directory / "preferences.md"
     if path not in overlay.modules:
         raise ValueError("Local overlay preferences are not declared by a valid local manifest.")
-    existing = read_local_private_file(path)
+    captured = next(
+        (item for item in overlay.captured_modules if item.path == path),
+        None,
+    )
+    if captured is None:
+        raise ValueError("Local overlay preferences were not captured by inspection.")
+    existing = captured.text
     findings = scan_text(path, message)
     if any(item.category == "security" for item in findings):
         raise ValueError("Local memory may not store credential-like secrets.")
     existing_ids: set[str] = set()
-    for module in overlay.modules:
-        try:
-            existing_ids.update(
-                heading_entry_ids(read_local_private_file(module))
-            )
-        except (OSError, RuntimeError, TypeError, ValueError) as exc:
-            raise ValueError(
-                f"Local overlay cannot allocate an Entry ID while {module.name} is invalid: {exc}"
-            ) from exc
+    for module_file in overlay.captured_modules:
+        existing_ids.update(entry.entry_id for entry in module_file.entries)
     existing_ids.update(shared_ids or ())
     entry_id = generate_entry_id("preference", existing_ids)
     if entry_id.casefold() in {value.casefold() for value in existing_ids}:

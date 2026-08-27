@@ -28,13 +28,16 @@ Subject: MC-SUBJ-20260729-7e5c3a91
 Facet: architecture
 Evidence:
 - user-confirmed
+- repo:cli/memory_custodian/local_overlay.py
+- repo:cli/memory_custodian/local.py
+- test:tests/test_local_snapshot.py
 Supersedes: MC-DEC-20260729-ef44900b
 
 Decision:
-Use one mutation guard, explicit task/scope routing, structural conflict review, and bound local overlays; defer complex governance apply to Protocol 0.8 transactions.
+Use explicit routing and structural review. Strict reads use one bound-overlay capture; local mutations recapture IDs under lock. Defer to 0.8.
 
 Reason:
-This keeps selection and reconciliation deterministic without partial multi-file governance writes.
+Prevents mixed-time reads and stale IDs.
 
 ## MC-DEC-20260721-3578b077 — Target Python 3.10+ minimum version
 
