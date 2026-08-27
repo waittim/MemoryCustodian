@@ -6,8 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 import subprocess
 
-from .conflicts import analyze_conflicts, canonical_entries
-from .entries import parse_structured_entries, structured_relation_issues, validate_evidence
+from .conflicts import analyze_snapshot, canonical_entries
+from .entries import parse_structured_entries, validate_evidence
 from .protocol import (
     manifest_contract_metadata,
     canonical_memory_files,
@@ -19,6 +19,7 @@ from .protocol import (
     validate_manifest_routes,
 )
 from .routes import CANONICAL_TASKS, SUBSTANTIAL_TASKS, parse_optional_module_index
+from .snapshot import MemorySnapshot, build_snapshot
 
 
 @dataclass(frozen=True)
@@ -144,7 +145,12 @@ def _head_revision(project_root: Path) -> str | None:
     return result.stdout.strip() if result.returncode == 0 else None
 
 
-def freshness_findings(project_root: Path, memory_dir: Path) -> tuple[QualityFinding, ...]:
+def freshness_findings(
+    project_root: Path,
+    memory_dir: Path,
+    *,
+    snapshot: MemorySnapshot | None = None,
+) -> tuple[QualityFinding, ...]:
     manifest_path = memory_dir / "manifest.md"
     if not manifest_path.exists():
         return (QualityFinding("ERROR", "MC-ROUTING-007", "manifest.md is missing."),)
@@ -155,14 +161,17 @@ def freshness_findings(project_root: Path, memory_dir: Path) -> tuple[QualityFin
         )
     except ValueError as exc:
         return (QualityFinding("ERROR", "MC-ROUTING-007", str(exc)),)
+    # Build the managed-memory inventory exactly once.  Every subsequent
+    # freshness check, relation check, and conflict analysis must consume the
+    # same snapshot so concurrent edits cannot mix observations from different
+    # file-system instants.  Callers that already have an inventory may pass it
+    # explicitly (for example, a larger validation pipeline).
+    snapshot = snapshot or build_snapshot(memory_dir, project_root)
     findings: list[QualityFinding] = []
     head = _head_revision(project_root)
     saw_revision = False
-    entries = canonical_entries(memory_dir)
-    all_entries = canonical_entries(memory_dir, include_archive=True)
-    from .subjects import load_subjects
-    subject_records = load_subjects(memory_dir)
-    subjects = {item.subject_id.casefold(): item for item in subject_records}
+    entries = snapshot.entries
+    subject_records = snapshot.subjects
 
     def check_evidence(owner: str, evidence: tuple[str, ...]) -> None:
         nonlocal saw_revision
@@ -218,33 +227,23 @@ def freshness_findings(project_root: Path, memory_dir: Path) -> tuple[QualityFin
             check_evidence(entry.entry_id, entry.evidence)
     for subject in subject_records:
         check_evidence(f"Subject {subject.subject_id}", subject.evidence)
-    findings.extend(
-        QualityFinding("ERROR", "MC-FRESH-004", issue + ".")
-        for issue in structured_relation_issues(
-            all_entries,
-            merged_subject_ids={
-                item.subject_id for item in subjects.values() if item.status == "merged"
-            },
-        )
-    )
-    for subject in subjects.values():
-        if subject.status == "merged" and (
-            not subject.merged_into
-            or subject.merged_into.casefold() not in subjects
-            or subjects[subject.merged_into.casefold()].status != "active"
-        ):
-            findings.append(QualityFinding(
-                "ERROR", "MC-FRESH-005",
-                f"{subject.subject_id} has a broken Merged-Into relation.",
-            ))
-    for conflict in analyze_conflicts(memory_dir).findings:
-        freshness_code = {
-            "MC-CONFLICT-005": "MC-FRESH-005",
-            "MC-CONFLICT-006": "MC-FRESH-004",
-            "MC-CONFLICT-007": "MC-FRESH-004",
-        }.get(conflict.code)
-        if conflict.code == "MC-CONFLICT-008" and "reconciliation" in conflict.message.casefold():
-            freshness_code = "MC-FRESH-006"
+    # Relation freshness is derived only from the shared conflict result.  In
+    # particular, do not separately replay snapshot.relation_issues or the
+    # Subject merge invariant: doing so emits duplicate findings and can
+    # observe a different validation path.  Reconciliation classification is
+    # structural too; its origin metadata is the authority, not message text.
+    freshness_codes = {
+        ("subject-registry", "MC-CONFLICT-005"): "MC-FRESH-005",
+        ("subject-reference", "MC-CONFLICT-005"): "MC-FRESH-005",
+        ("exception-relation", "MC-CONFLICT-006"): "MC-FRESH-004",
+        ("entry-schema", "MC-CONFLICT-007"): "MC-FRESH-004",
+        ("subject-reference", "MC-CONFLICT-007"): "MC-FRESH-004",
+        ("entry-identity", "MC-CONFLICT-008"): "MC-FRESH-004",
+        ("entry-relation", "MC-CONFLICT-008"): "MC-FRESH-004",
+        ("reconciliation", "MC-CONFLICT-008"): "MC-FRESH-006",
+    }
+    for conflict in analyze_snapshot(snapshot).findings:
+        freshness_code = freshness_codes.get((conflict.origin, conflict.code))
         if freshness_code:
             findings.append(QualityFinding(
                 "ERROR", freshness_code, conflict.message,

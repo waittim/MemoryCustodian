@@ -158,7 +158,6 @@ def _entry_semantic_diagnostics(
         if subject.status == "active":
             active_subjects[subject.subject_id.casefold()] = subject
 
-    owners: dict[tuple[str, str, str], tuple[str, str]] = {}
     issues_by_path: dict[Path, list[str]] = {item.path: [] for item in files}
     warnings_by_path: dict[Path, list[str]] = {item.path: [] for item in files}
     for item in files:
@@ -198,19 +197,6 @@ def _entry_semantic_diagnostics(
                             issues_by_path[item.path].append(
                                 f"{relative}: {entry.entry_id} has invalid Facet {facet!r}"
                             )
-                        identity = (
-                            entry.scope.casefold(),
-                            subject_id.casefold(),
-                            facet.casefold(),
-                        )
-                        owner = owners.get(identity)
-                        if owner:
-                            issues_by_path[item.path].append(
-                                f"{relative}: {entry.entry_id} duplicates active structural owner "
-                                f"{owner[0]} in {owner[1]} for Scope+Subject+Facet"
-                            )
-                        else:
-                            owners[identity] = (entry.entry_id, relative)
 
             if entry.status in {"candidate", "promoted"}:
                 provisional_subject = entry.fields.get("Provisional-Subject", "")
