@@ -19,11 +19,12 @@ from unittest.mock import patch
 from memory_custodian.conflicts import analyze_conflicts
 from memory_custodian.context import ContextRoutingResult
 from memory_custodian.entries import (
-    BODY_SAFETY_SENTINEL,
+    BODY_FENCE_INFO,
     entry_unit_issues,
     heading_entry_ids,
     memory_entry_ids,
     parse_structured_entries,
+    line_safe_markdown_body,
     render_active_entry,
     render_candidate_entry,
     structured_entry_schema_issues,
@@ -49,6 +50,7 @@ from memory_custodian.protocol import (
     parse_markdown_units,
     today,
 )
+from memory_custodian.markdown import semantic_unit_ranges
 from memory_custodian.routes import RouteReason, RoutingCompleteness
 from memory_custodian.reconciliations import parse_reconciliations
 from memory_custodian.subjects import (
@@ -4874,44 +4876,244 @@ class MarkdownUnitBoundaryAuditTests(unittest.TestCase):
             "    Status: example\n    ## heading\n    - bullet",
         )
 
-    def test_writer_safety_encoding_remains_reversible_for_column_zero_lines(self):
+    def test_body_safety_matches_shared_h2_and_bullet_grammar(self):
+        for width in (1, 2, 3):
+            with self.subTest(kind="h2", width=width):
+                message = f"{' ' * width}## heading"
+                rendered = render_active_entry(
+                    "decision", f"MC-DEC-20260827-{width:08d}",
+                    "Indented H2", message, None, "project",
+                    ("user-confirmed",),
+                )
+                self.assertIn(BODY_FENCE_INFO, rendered)
+                self.assertEqual(
+                    parse_structured_entries(Path("decisions.md"), rendered)[0]
+                    .field_bodies["Decision"],
+                    message,
+                )
+
+        # semantic_unit_ranges() does not classify a 1--3 space bullet as a
+        # top-level bullet: its shared grammar checks the marker at column 0.
+        # Keep that source unchanged rather than inventing a second boundary.
+        for width in (1, 2, 3):
+            with self.subTest(kind="bullet", width=width):
+                message = f"{' ' * width}- bullet"
+                ranges = semantic_unit_ranges(
+                    "# Decisions\n\n## Entry\nDecision:\n" + message,
+                )
+                self.assertEqual([item.kind for item in ranges], ["h2"])
+                self.assertEqual(line_safe_markdown_body(message), message)
+
+    def test_writer_body_fence_remains_reversible_for_column_zero_lines(self):
         message = "Status: example\n## heading\n- bullet"
         rendered_active = render_active_entry(
             "decision", "MC-DEC-20260827-dddddddd", "Column-zero protocol text",
             message, None, "project", ("user-confirmed",),
         )
-        self.assertIn(BODY_SAFETY_SENTINEL + "Status: example", rendered_active)
-        self.assertNotIn("\u2063", rendered_active)
+        self.assertIn(BODY_FENCE_INFO, rendered_active)
+        self.assertNotIn("&#8283;", rendered_active)
         self.assertEqual(
             parse_structured_entries(Path("decisions.md"), rendered_active)[0]
             .field_bodies["Decision"],
             message,
+        )
+        self.assertNotIn(
+            BODY_FENCE_INFO,
+            parse_structured_entries(Path("decisions.md"), rendered_active)[0].display_text,
         )
 
         rendered_candidate = render_candidate_entry(
             "MC-INBOX-20260827-eeeeeeee", "Column-zero protocol text", "decision",
             message, "project", ("agent-observed",), "Review later.",
         )
-        self.assertIn(BODY_SAFETY_SENTINEL + "Status: example", rendered_candidate)
-        self.assertNotIn("\u2063", rendered_candidate)
+        self.assertIn(BODY_FENCE_INFO, rendered_candidate)
+        self.assertNotIn("&#8283;", rendered_candidate)
         self.assertEqual(
             parse_structured_entries(Path("inbox.md"), rendered_candidate)[0]
             .field_bodies["Statement"],
             message,
         )
+        self.assertNotIn(
+            BODY_FENCE_INFO,
+            parse_structured_entries(Path("inbox.md"), rendered_candidate)[0].display_text,
+        )
 
-        literal_sentinel = BODY_SAFETY_SENTINEL + "Status: literal content"
+        # Local Entries and the promotion renderer consume the same parsed
+        # semantic body; neither path needs its own escape convention.
+        local_entry = render_active_entry(
+            "preference", "MC-PREF-20260827-45454545", "Local body",
+            message, None, "local-user", ("user-confirmed",),
+        )
+        self.assertEqual(
+            parse_structured_entries(Path("local/preferences.md"), local_entry)[0]
+            .field_bodies["Preference"],
+            message,
+        )
+        candidate_entry = parse_structured_entries(
+            Path("inbox.md"), rendered_candidate,
+        )[0]
+        promoted_entry = render_active_entry(
+            "preference", "MC-PREF-20260827-46464646", "Promoted body",
+            candidate_entry.field_bodies["Statement"], None,
+            "project", ("user-confirmed",),
+            promoted_from=candidate_entry.entry_id,
+        )
+        self.assertEqual(
+            parse_structured_entries(Path("preferences.md"), promoted_entry)[0]
+            .field_bodies["Preference"],
+            message,
+        )
+
+        literal_sentinel = "&#8283;Status: literal content"
         rendered_literal = render_active_entry(
             "decision", "MC-DEC-20260827-ffffffff", "Literal sentinel",
             literal_sentinel, None, "project", ("user-confirmed",),
         )
-        self.assertNotIn("\u2063", rendered_literal)
-        self.assertIn(BODY_SAFETY_SENTINEL + BODY_SAFETY_SENTINEL, rendered_literal)
+        self.assertNotIn(BODY_FENCE_INFO, rendered_literal)
+        self.assertIn(literal_sentinel, rendered_literal)
         self.assertEqual(
             parse_structured_entries(Path("decisions.md"), rendered_literal)[0]
             .field_bodies["Decision"],
             literal_sentinel,
         )
+
+        # A manually edited Protocol 0.7 Entry has no writer provenance.  The
+        # former entity sentinel therefore remains ordinary source content.
+        manual = (
+            "## MC-DEC-20260827-11111111 — Manual entity\n\n"
+            "Status: active\nScope: project\nEvidence:\n- user-confirmed\n\n"
+            "Decision:\n&#8283;Status: literal content\n"
+        )
+        parsed_manual = parse_structured_entries(Path("decisions.md"), manual)[0]
+        self.assertEqual(
+            parsed_manual.field_bodies["Decision"],
+            "&#8283;Status: literal content",
+        )
+
+    def test_show_preserves_legacy_entity_and_hides_body_wrapper(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            memory = Path(tmp) / "docs" / "memory"
+            raw_id = "MC-DEC-20260827-12121212"
+            raw = (
+                f"## {raw_id} — Manual entity\n\n"
+                "Status: active\nScope: project\nEvidence:\n- user-confirmed\n\n"
+                "Decision:\n&#8283;Status: literal content\n"
+            )
+            (memory / "decisions.md").write_text(
+                "# Decisions\n\n" + raw,
+                encoding="utf-8",
+            )
+            code, output, error = capture([
+                "show", raw_id, "--project-root", tmp,
+            ])
+            self.assertEqual(code, 0, error)
+            self.assertIn("&#8283;Status: literal content", output)
+            self.assertNotIn(BODY_FENCE_INFO, output)
+
+            wrapped_id = "MC-DEC-20260827-34343434"
+            wrapped = render_active_entry(
+                "decision", wrapped_id, "Wrapped body",
+                "Status: example\n## heading\n- bullet",
+                None, "project", ("user-confirmed",),
+            )
+            (memory / "decisions.md").write_text(
+                "# Decisions\n\n" + wrapped,
+                encoding="utf-8",
+            )
+            code, output, error = capture([
+                "show", wrapped_id, "--project-root", tmp,
+            ])
+            self.assertEqual(code, 0, error)
+            self.assertNotIn(BODY_FENCE_INFO, output)
+            self.assertIn("Status: example\n## heading\n- bullet", output)
+
+    def test_body_fence_preserves_nested_fences_and_source_whitespace(self):
+        message = (
+            "Status: example  \n\n"
+            "Second paragraph.  \n    nested code\n"
+            "~~~\ninside tilde fence\n~~~"
+        )
+        rendered = render_active_entry(
+            "decision", "MC-DEC-20260827-56565656", "Fence collision",
+            message, None, "project", ("user-confirmed",),
+        )
+        self.assertEqual(
+            parse_structured_entries(Path("decisions.md"), rendered)[0]
+            .field_bodies["Decision"],
+            message,
+        )
+
+        literal_wrapper = "```memory-custodian-body-v1\nliteral\n```"
+        rendered_literal_wrapper = render_active_entry(
+            "decision", "MC-DEC-20260827-57575757", "Literal wrapper",
+            literal_wrapper, None, "project", ("user-confirmed",),
+        )
+        self.assertEqual(
+            parse_structured_entries(Path("decisions.md"), rendered_literal_wrapper)[0]
+            .field_bodies["Decision"],
+            literal_wrapper,
+        )
+
+        legacy = "# Decisions\n\n## 2026-08-01 - Legacy\nDecision:\nStatus: old\n"
+        document = parse_markdown_units(legacy)
+        seed = _legacy_key("decisions.md", document.units[0].text, 0)
+        migrated, changed, manual, generated = _migrate_decisions(
+            legacy, {seed: "78787878"},
+        )
+        self.assertEqual((changed, manual), (1, 0))
+        self.assertEqual(generated, ("MC-DEC-20260801-78787878",))
+        migrated_entry = parse_structured_entries(
+            Path("decisions.md"), migrated,
+        )[0]
+        self.assertEqual(migrated_entry.field_bodies["Decision"], "Status: old")
+        self.assertEqual(
+            migrated_entry.display_text.split("Decision:\n", 1)[1],
+            "Status: old",
+        )
+
+    def test_public_migration_uses_one_wrapper_per_legacy_body(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as state:
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            memory = Path(tmp) / "docs" / "memory"
+            manifest = memory / "manifest.md"
+            manifest.write_text(
+                manifest.read_text(encoding="utf-8").replace(
+                    "- protocol_version: 0.7", "- protocol_version: 0.6", 1,
+                ),
+                encoding="utf-8",
+            )
+            legacy_body = (
+                "Status: old\nScope: original\nEvidence:\n- source\n"
+                "Plain continuation.  \n  Reason:\nScope: original-body\n\n"
+                "Second paragraph."
+            )
+            (memory / "decisions.md").write_text(
+                "# Decisions\n\n## 2026-08-01 - Legacy\nDecision:\n"
+                + legacy_body + "\n",
+                encoding="utf-8",
+            )
+            command = ["migrate", "--project-root", tmp]
+            with patch.dict(os.environ, {"XDG_STATE_HOME": state}):
+                code, preview, error = capture(command)
+                self.assertEqual(code, 0, preview + error)
+                plan_id = re.search(r"Plan ID: ([0-9a-f]{16})", preview).group(1)
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(
+                        main([
+                            *command, "--apply", "--confirm-plan", plan_id,
+                        ]),
+                        0,
+                    )
+            migrated = (memory / "decisions.md").read_text(encoding="utf-8")
+            self.assertEqual(migrated.count(BODY_FENCE_INFO), 1)
+            entry = parse_structured_entries(
+                memory / "decisions.md", migrated,
+            )[0]
+            self.assertEqual(entry.field_bodies["Decision"], legacy_body)
+            self.assertNotIn(BODY_FENCE_INFO, entry.display_text)
 
     def test_subjects_ignore_comments_and_reject_duplicate_scalars(self):
         commented_id = "MC-SUBJ-20200101-aaaaaaaa"

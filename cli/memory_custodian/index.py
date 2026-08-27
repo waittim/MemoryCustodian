@@ -206,7 +206,13 @@ def run_show(args) -> int:
                 current = subject.merged_into
             print(f"Historical Subject ID: {subject_id}")
             print(f"Current canonical Subject ID: {current}")
-    print(record.text)
+    # The parser owns the body envelope boundary.  Show its semantic source,
+    # not the explicit serialization wrapper; user-authored ``&#8283;`` text
+    # remains untouched because it has no protocol meaning.
+    print(
+        (record.structured.display_text or record.text)
+        if record.structured else record.text
+    )
     return 0
 
 

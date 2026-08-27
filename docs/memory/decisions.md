@@ -2,6 +2,23 @@
 
 Entries are newest first.
 
+## MC-DEC-20260827-8f4c2a91 — Protocol 0.7 body fencing
+
+Status: active
+Scope: project
+Subject: MC-SUBJ-20260729-7e5c3a91
+Facet: compatibility
+Evidence:
+- repo:cli/memory_custodian/entries.py
+- test:tests/test_protocol_07_release_gaps.py
+- doc:skills/memory-custodian/references/memory-file-protocol.md
+
+Decision:
+Use public versioned `memory-custodian-body-v1` fences for ambiguous Entries; legacy `&#8283;` is ordinary content. Parser/show unwrap fences; raw source retains them.
+
+Reason:
+Versioned delimiters preserve semantics.
+
 ## MC-DEC-20260801-07000007 — Adopt Protocol 0.7 deterministic governance
 
 Status: active

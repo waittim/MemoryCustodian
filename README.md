@@ -467,9 +467,11 @@ Migration derives operands only from normalized declarations, checks containment
 snapshots all text operands before persisting preview seeds.
 
 Entry bodies are serialized so column-zero field-like lines and `##` headings remain body text rather than becoming
-protocol fields or additional Entries. Active, candidate, local, and migrated Entry output requires a non-empty typed
-body and is parse-checked before writing. Protocol 0.5 bullet compatibility writes indent every continuation line so
-one CLI input remains one semantic unit. Subject titles and aliases are canonical non-empty single lines and rendered Subjects must round-trip as active,
+protocol fields or additional Entries. Plain bodies preserve source whitespace, while ambiguous column-zero lines use
+the explicit standard-Markdown `memory-custodian-body-v1` fenced form; the parser removes that versioned wrapper and
+treats legacy `&#8283;` text as ordinary content. Active, candidate, local, and migrated Entry output requires a
+non-empty typed body and is parse-checked before writing. Protocol 0.5 bullet compatibility writes indent every
+continuation line so one CLI input remains one semantic unit. Subject titles and aliases are canonical non-empty single lines and rendered Subjects must round-trip as active,
 non-merged records, so raw CLI text cannot apply deferred governance relations.
 Mixed compatibility files use one ordered semantic-unit grammar: H2 Entries and top-level legacy bullets remain
 separate, while protocol list fields such as Evidence remain inside their owner. Forget, compaction, indexing, and

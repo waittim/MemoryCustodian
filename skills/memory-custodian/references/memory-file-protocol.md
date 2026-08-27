@@ -332,12 +332,18 @@ Exception-To and active merged-Subject references.
 
 Writers serialize body lines that resemble protocol fields or H2 headings as body text and parse-check rendered
 active, candidate, local, migrated, and Subject records before writing. Typed Entry bodies and Subject titles must be
-non-empty. Protocol 0.5 bullet writers indent continuation lines so one accepted input remains exactly one semantic
-unit. Migration validates each prospective structured Entry with the shared schema and storage rules; a legacy unit
-that cannot be migrated unambiguously remains unchanged and blocks apply. Subject aliases and titles are canonical
-single lines. Promotion validates Scope and resolved target containment before filesystem access, checks generated
-IDs across active and archive storage, and changes only the canonical Status field. Directed cycle diagnostics retain
-the real successor traversal.
+non-empty. Plain body text keeps its source whitespace, including four-space indented code. When a body contains a
+visible column-zero field, H2, or top-level list line that would otherwise be structural, the shared writer encloses
+the whole body in a standard Markdown fence whose exact info string is `memory-custodian-body-v1`; the fence is
+chosen longer than every same-character run in the body. The parser removes only this explicit, versioned wrapper
+when it occurs immediately after a body field. The former `&#8283;` entity has no protocol meaning and is preserved
+as ordinary user content, including in pre-existing files. `show` presents the decoded body without the wrapper.
+Protocol 0.5 bullet writers indent continuation lines so one accepted input remains exactly one semantic unit.
+Migration validates each prospective structured Entry with the shared schema and storage rules; a legacy unit that
+cannot be migrated unambiguously remains unchanged and blocks apply. Subject aliases and titles are canonical single
+lines. Promotion validates Scope and resolved target containment before filesystem access, checks generated IDs across
+active and archive storage, and changes only the canonical Status field. Directed cycle diagnostics retain the real
+successor traversal.
 
 H2 Entries and column-zero legacy bullets are ordered peer semantic units in mixed compatibility files. Evidence,
 Aliases, Entries, and Merged-From list bullets remain attached to their declaring H2; generated typed-body bullets are

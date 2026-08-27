@@ -98,12 +98,44 @@ def _migrate_decisions(
             continue
         lines = section.splitlines()
         title = re.sub(r"^##\s+(?:\d{4}-\d{2}-\d{2}\s+-\s+)?", "", lines[0]).strip()
-        safe_body = []
+
+        # Protect each legacy body *range* as one value.  Calling
+        # ``line_safe_markdown_body`` for every line creates adjacent
+        # ``memory-custodian-body-v1`` wrappers; the shared Entry parser can
+        # only recognize a wrapper at the start of an empty body occurrence,
+        # so later wrappers would become literal body text or new fields.
+        # Decision/Reason are the only legacy field boundaries we preserve;
+        # everything between them is one semantic body, including protocol-
+        # shaped lines, blank lines, and trailing spaces.
+        safe_body: list[str] = []
+        body_start: int | None = None
+
+        def append_body(end: int) -> None:
+            nonlocal body_start
+            if body_start is not None:
+                body = "\n".join(lines[body_start:end])
+                if body:
+                    safe_body.append(line_safe_markdown_body(body))
+                else:
+                    safe_body.extend(lines[body_start:end])
+            body_start = None
+
         for line_index, line in enumerate(lines[1:], start=1):
-            if line_index not in visible or line in {"Decision:", "Reason:"}:
+            is_boundary = (
+                line_index in visible
+                and not line.startswith((" ", "\t"))
+                and line.rstrip(" \t") in {"Decision:", "Reason:"}
+            )
+            if is_boundary:
+                append_body(line_index)
                 safe_body.append(line)
-            else:
-                safe_body.append(line_safe_markdown_body(line))
+                body_start = line_index + 1
+            elif body_start is None:
+                # Preserve source before the first legacy body marker.  The
+                # existing structural validation will decide whether such a
+                # preamble is a safe migrated Entry.
+                safe_body.append(line)
+        append_body(len(lines))
         migrated = "\n".join(
             [
                 f"## {entry_id} — {title}",

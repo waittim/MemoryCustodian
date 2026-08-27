@@ -91,7 +91,8 @@
   relation audit requires unique targets and acyclic chains ending at an active replacement. Freshness also promotes
   invalid exceptions and active merged-Subject references to errors.
 - Made Entry/body and Subject/alias rendering line-safe with parse round-trip checks, preventing raw Markdown from
-  creating protocol fields, Entries, or merge state. Promotion now validates Scope/containment before target access,
+  creating protocol fields, Entries, or merge state. Ambiguous column-zero Entry body lines use the explicit,
+  versioned `memory-custodian-body-v1` Markdown fence; legacy `&#8283;` content remains literal. Promotion now validates Scope/containment before target access,
   checks archive IDs, anchors Status transition, and reports cycles in real edge order.
 - Closed the remaining write-boundary cases: rendered typed bodies and Subject titles must be non-empty, legacy
   multiline bullets remain one unit, and migration applies the shared schema/storage checks to every prospective

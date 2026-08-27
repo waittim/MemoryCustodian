@@ -32,14 +32,15 @@ CANDIDATE_ONLY_EVIDENCE = {"agent-observed", "conversation-unconfirmed"}
 INTERNAL_EVIDENCE = {"legacy-unverified"}
 VALID_SCOPES_RE = re.compile(r"^(?:project|area:[A-Za-z0-9][A-Za-z0-9._-]*|local-user|local-machine)$")
 FIELD_RE = re.compile(r"^([A-Za-z][A-Za-z-]*):(?:\s*(.*))?$")
-# This visible entity is a private, line-local writer escape.  Indenting a
-# protocol-shaped body line cannot be made unambiguous: every indentation width
-# at or above four spaces is valid Markdown indented code.  The marker keeps
-# the rendered line at column zero while giving the parser an explicit
-# representation to decode, without putting hidden format characters in the
-# source.  A leading marker in user content is doubled so the encoding remains
-# reversible for renderer input as well.
-BODY_SAFETY_SENTINEL = "&#8283;"
+# Body protection uses a normal Markdown fenced block only when a body contains
+# a column-zero line that the Entry grammar would otherwise treat as structure.
+# The info string is deliberately versioned and visible: a literal ``&#8283;``
+# in a pre-existing or manually edited Entry is ordinary body text and is
+# never decoded by the parser.
+BODY_FENCE_INFO = "memory-custodian-body-v1"
+BODY_FENCE_RE = re.compile(
+    rf"^ {{0,3}}(`{{3,}}|~{{3,}}){re.escape(BODY_FENCE_INFO)}[ \t]*$"
+)
 
 
 @dataclass(frozen=True)
@@ -54,6 +55,7 @@ class StructuredEntry:
     fields: dict[str, str]
     field_counts: dict[str, int] = field(default_factory=dict)
     field_bodies: dict[str, str] = field(default_factory=dict)
+    display_text: str | None = None
 
 
 class EntryUnitIssue(str):
@@ -268,42 +270,79 @@ def validate_scope(scope: str) -> str:
     return scope
 
 
-def line_safe_markdown_body(value: str) -> str:
-    """Serialize body text without creating column-zero protocol structure."""
+def _body_requires_fence(value: str) -> bool:
+    """Return whether plain body lines would become Entry structure.
 
-    safe: list[str] = []
-    fence_character: str | None = None
-    fence_length = 0
+    Use the shared Markdown lexer for visibility and H2 boundaries. Four-space
+    indented code and fenced content are opaque to the Entry field scanner;
+    only visible lines in the same structural grammar can accidentally start a
+    field, H2, or top-level list unit.
+    """
+
+    from .markdown import headings, visible_lines
+
+    visible = visible_lines(value)
+    h2_indexes = {
+        heading.index for heading in headings(value) if heading.level == 2
+    }
+    return any(
+        line.index in h2_indexes
+        or (
+            not line.indented_code
+            and (
+                FIELD_RE.match(line.text)
+                or line.text.startswith(("- ", "* ", "+ "))
+            )
+        )
+        for line in visible
+    )
+
+
+def _body_fence(value: str) -> str:
+    """Choose a visible Markdown fence that cannot close inside ``value``."""
+
+    longest = {"`": 0, "~": 0}
     for line in value.splitlines():
-        if fence_character is not None:
-            safe.append(line)
-            if re.fullmatch(
-                rf" {{0,3}}{re.escape(fence_character)}{{{fence_length},}}[ \t]*",
-                line,
-            ):
-                fence_character = None
-                fence_length = 0
+        for character in longest:
+            for match in re.finditer(re.escape(character) + r"+", line):
+                longest[character] = max(longest[character], len(match.group(0)))
+    # Backticks are the conventional Markdown fence.  A fence one character
+    # longer than every run in the body makes the wrapper's closing boundary
+    # unambiguous under CommonMark's ``at least N`` closing rule.  Use a tilde
+    # when that gives a shorter, equally readable wrapper.
+    character = min(longest, key=lambda item: (longest[item], item != "`"))
+    return character * max(3, longest[character] + 1)
+
+
+def _body_starts_with_wrapper(value: str) -> bool:
+    """Detect user content that would look like our body wrapper at start."""
+
+    for line in value.splitlines():
+        if not line.strip():
             continue
-        opening = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", line)
-        if opening:
-            marker = opening.group(1)
-            if marker[0] == "`" and "`" in opening.group(2):
-                raise ValueError("Backtick fence info strings must not contain backticks")
-            fence_character = marker[0]
-            fence_length = len(marker)
-            safe.append(line)
-            continue
-        if line.startswith(BODY_SAFETY_SENTINEL):
-            # Escape the sentinel itself before the parser's protocol-shape
-            # check so literal user content cannot be consumed as encoding.
-            safe.append(BODY_SAFETY_SENTINEL + line)
-        elif FIELD_RE.match(line) or line.startswith(("## ", "- ", "* ", "+ ")):
-            safe.append(BODY_SAFETY_SENTINEL + line)
-        else:
-            safe.append(line)
-    if fence_character is not None:
-        raise ValueError("Body contains an unclosed fenced code block.")
-    return "\n".join(safe)
+        return _body_fence_opening(line)
+    return False
+
+
+def _body_fence_opening(raw_line: str) -> bool:
+    match = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", raw_line)
+    return match is not None and match.group(2).strip() == BODY_FENCE_INFO
+
+
+def line_safe_markdown_body(value: str) -> str:
+    """Serialize body text without creating column-zero protocol structure.
+
+    Ordinary Markdown remains unchanged.  A body with visible protocol-like
+    lines is enclosed in the explicit, versioned ``memory-custodian-body-v1``
+    fenced-block form.  The wrapper is standard Markdown and is removed only
+    when it occurs directly as the body representation of a formal Entry;
+    there is no private character/entity escape and no indentation heuristic.
+    """
+
+    if not _body_requires_fence(value) and not _body_starts_with_wrapper(value):
+        return value.replace("\r\n", "\n").replace("\r", "\n")
+    fence = _body_fence(value)
+    return f"{fence}{BODY_FENCE_INFO}\n{value}\n{fence}"
 
 
 def render_markdown_bullet(value: str) -> str:
@@ -337,33 +376,19 @@ def _normalized_body(value: str) -> str:
     return "\n".join(lines)
 
 
-def _decoded_body_line(raw_line: str, visible) -> str | None:
-    """Decode an explicit writer escape or preserve a Markdown code line.
-
-    Protocol-shaped body lines are prefixed with ``BODY_SAFETY_SENTINEL`` by
-    ``line_safe_markdown_body``.  Unlike an indentation heuristic, this
-    representation is distinguishable from every native four-, five-, or
-    eight-space indented-code line.  A doubled sentinel is the escaped form
-    for literal user content that starts with the sentinel.  Fenced lines are
-    not passed to this helper and therefore remain opaque source content.
-
-    ``None`` means the line is not an encoded body line and should continue
-    through the normal field parser.  An ordinary indented line is returned
-    unchanged so callers retain its exact source whitespace.
-    """
-
-    if raw_line.startswith(BODY_SAFETY_SENTINEL):
-        candidate = raw_line[len(BODY_SAFETY_SENTINEL):]
-        if candidate.startswith(BODY_SAFETY_SENTINEL):
-            return candidate
-        if FIELD_RE.match(candidate) or candidate.startswith(("## ", "- ", "* ", "+ ")):
-            return candidate
-        # A non-protocol line with a lone sentinel is ordinary user text, not
-        # a writer escape.  Leave it for the normal non-field body path.
+def _body_fence_open(raw_line: str) -> tuple[str, int] | None:
+    match = BODY_FENCE_RE.fullmatch(raw_line)
+    if match is None:
         return None
-    if visible.indented_code:
-        return raw_line
-    return None
+    marker = match.group(1)
+    return marker[0], len(marker)
+
+
+def _body_fence_close(raw_line: str, character: str, length: int) -> bool:
+    return re.fullmatch(
+        rf" {{0,3}}{re.escape(character)}{{{length},}}[ \t]*",
+        raw_line,
+    ) is not None
 
 
 def _validate_rendered_entry(
@@ -526,6 +551,7 @@ def parse_structured_entries(path: Path, text: str) -> list[StructuredEntry]:
         evidence: list[str] = []
         current_field: str | None = None
         current_body: list[str] = []
+        display_lines: list[str] = []
 
         def flush_field() -> None:
             nonlocal current_field, current_body
@@ -537,20 +563,32 @@ def parse_structured_entries(path: Path, text: str) -> list[StructuredEntry]:
         visible_by_index = {
             line.index: line for line in visible_lines(section)
         }
+        body_fence: tuple[str, int] | None = None
+        body_fields = TYPED_BODY_FIELDS | {"Reason", "Promotion-Requirement"}
         for line_index, raw_line in enumerate(lines):
             if line_index == 0:
+                display_lines.append(raw_line)
+                continue
+            if body_fence is not None:
+                if _body_fence_close(raw_line, *body_fence):
+                    body_fence = None
+                else:
+                    current_body.append(raw_line)
+                    display_lines.append(raw_line)
                 continue
             visible = visible_by_index.get(line_index)
+            opened = _body_fence_open(raw_line)
+            if current_field in body_fields and not current_body and opened is not None:
+                body_fence = opened
+                continue
+            display_lines.append(raw_line)
             if visible is None:
                 if current_field is not None:
                     current_body.append(raw_line)
                 continue
-            if current_field is not None:
-                decoded = _decoded_body_line(raw_line, visible)
-                if decoded is not None:
-                    current_body.append(decoded)
-                    continue
             if visible.indented_code:
+                if current_field is not None:
+                    current_body.append(raw_line)
                 continue
             line = visible.text
             matched_field = FIELD_RE.match(line)
@@ -595,6 +633,7 @@ def parse_structured_entries(path: Path, text: str) -> list[StructuredEntry]:
                 fields,
                 field_counts,
                 field_bodies,
+                "\n".join(display_lines),
             )
         )
     return parsed
