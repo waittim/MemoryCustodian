@@ -10,11 +10,12 @@ Subject: MC-SUBJ-20260729-7e5c3a91
 Facet: compatibility
 Evidence:
 - repo:cli/memory_custodian/entries.py
+- repo:cli/memory_custodian/forget.py
 - test:tests/test_protocol_07_release_gaps.py
 - doc:skills/memory-custodian/references/memory-file-protocol.md
 
 Decision:
-Use public versioned `memory-custodian-body-v1` fences for ambiguous Entries; legacy `&#8283;` is ordinary content. Parser/show unwrap fences; raw source retains them.
+`memory-custodian-body-v1` fence; legacy entity ordinary. Selectors/search semantic display text; mutation/storage raw source.
 
 Reason:
 Versioned delimiters preserve semantics.

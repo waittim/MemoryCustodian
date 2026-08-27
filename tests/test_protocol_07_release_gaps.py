@@ -3089,6 +3089,66 @@ class RoutingAndQualityReleaseTests(unittest.TestCase):
 
 
 class ForgetAndHistoryReleaseTests(unittest.TestCase):
+    def test_topic_forget_matches_semantic_entry_body_not_body_fence_wrapper(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            memory = Path(tmp) / "docs/memory"
+            subject_id = "MC-SUBJ-20260827-aaaaaaaa"
+            (memory / "subjects.md").write_text(
+                "# Subject Registry\n\n" + subject_unit(subject_id, "Wrapped body"),
+                encoding="utf-8",
+            )
+            entry_id = "MC-DEC-20260827-bbbbbbbb"
+            entry = render_active_entry(
+                "decision",
+                entry_id,
+                "Wrapped body Entry",
+                "Status: semantic body only",
+                None,
+                "project",
+                ("user-confirmed",),
+                subject=subject_id,
+                facet="behavior",
+            )
+            decisions = memory / "decisions.md"
+            decisions.write_text("# Decisions\n\n" + entry + "\n", encoding="utf-8")
+            original = decisions.read_text(encoding="utf-8")
+            self.assertIn(BODY_FENCE_INFO, original)
+
+            wrapper_command = [
+                "forget", BODY_FENCE_INFO, "--mode", "soft",
+                "--project-root", tmp,
+            ]
+            code, preview, error = capture(wrapper_command)
+            self.assertEqual(code, 0, preview + error)
+            self.assertIn("Matched units: 0", preview)
+            self.assertNotIn(BODY_FENCE_INFO, preview)
+            plan_id = re.search(r"Plan ID: ([0-9a-f]{16})", preview).group(1)
+            code, applied, error = capture([
+                *wrapper_command, "--apply", "--confirm-plan", plan_id,
+            ])
+            self.assertEqual(code, 0, applied + error)
+            self.assertNotIn(BODY_FENCE_INFO, applied)
+            self.assertEqual(decisions.read_text(encoding="utf-8"), original)
+
+            semantic_command = [
+                "forget", "Status: semantic body only", "--mode", "soft",
+                "--project-root", tmp,
+            ]
+            code, preview, error = capture(semantic_command)
+            self.assertEqual(code, 0, preview + error)
+            self.assertIn("Matched units: 1", preview)
+            self.assertIn("decisions.md:", preview)
+            self.assertNotIn(BODY_FENCE_INFO, preview)
+            plan_id = re.search(r"Plan ID: ([0-9a-f]{16})", preview).group(1)
+            code, applied, error = capture([
+                *semantic_command, "--apply", "--confirm-plan", plan_id,
+            ])
+            self.assertEqual(code, 0, applied + error)
+            self.assertNotIn(entry_id, decisions.read_text(encoding="utf-8"))
+            self.assertNotIn("Status: semantic body only", decisions.read_text(encoding="utf-8"))
+
     def test_ambiguous_tail_bullet_blocks_forget(self):
         with tempfile.TemporaryDirectory() as tmp:
             with redirect_stdout(StringIO()):

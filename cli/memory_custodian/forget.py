@@ -11,6 +11,8 @@ import uuid
 
 from .entries import (
     ENTRY_ID_RE,
+    EntryUnit,
+    parse_entry_units,
     memory_entry_id_counts,
     parse_structured_entries,
     render_active_entry,
@@ -117,37 +119,41 @@ def _remove_units(
     topic: str,
     *,
     exact_entry_id: str | None = None,
+    source_path: Path | None = None,
 ) -> tuple[str, tuple[MarkdownUnit, ...], tuple[MarkdownUnit, ...]]:
     document = parse_markdown_units(text)
+    entry_units = parse_entry_units(source_path or Path("__forget__.md"), text)
     needle = topic.casefold()
 
-    def matches_unit(unit: MarkdownUnit) -> bool:
+    def matches_unit(entry_unit: EntryUnit) -> bool:
+        unit = entry_unit.source
         if unit.kind not in {"h2", "bullet"}:
             return False
         if exact_entry_id:
             if unit.kind != "h2":
                 return False
-            heading = ENTRY_ID_RE.search(unit.text.splitlines()[0])
+            heading = ENTRY_ID_RE.search(entry_unit.display_text.splitlines()[0])
             return bool(heading and heading.group(0).casefold() == exact_entry_id.casefold())
-        return needle in unit.text.casefold() and not (
+        return needle in entry_unit.display_text.casefold() and not (
             unit.kind == "h2" and len(unit.text.splitlines()) == 1
         )
 
     matches = tuple(
-        unit
-        for unit in document.units
-        if matches_unit(unit)
+        entry_unit.source
+        for entry_unit in entry_units
+        if matches_unit(entry_unit)
     )
     blockers = tuple(
-        unit for unit in document.units
+        entry_unit.source
+        for entry_unit in entry_units
         if (
-            unit.kind == "ambiguous-bullet"
-            and (exact_entry_id is not None or needle in unit.text.casefold())
+            entry_unit.source.kind == "ambiguous-bullet"
+            and (exact_entry_id is not None or needle in entry_unit.display_text.casefold())
         )
         or (
             not exact_entry_id
-            and unit.kind in {"preamble", "body"}
-            and needle in unit.text.casefold()
+            and entry_unit.source.kind in {"preamble", "body"}
+            and needle in entry_unit.display_text.casefold()
         )
     )
     kept = [unit for unit in document.units if unit not in matches]
@@ -255,31 +261,33 @@ def _update_existing_tombstones(
     mode: str,
     project_id: str | None = None,
     tombstone_suffix: str | None = None,
+    source_path: Path | None = None,
 ) -> tuple[str, tuple[MarkdownUnit, ...], tuple[MarkdownUnit, ...]]:
     document = parse_markdown_units(text)
+    entry_units = parse_entry_units(source_path or Path("__forget_tombstones__.md"), text)
     needle = topic.casefold()
     matches = tuple(
-        unit
-        for unit in document.units
-        if unit.kind == "h2"
-        and unit.heading is not None
+        entry_unit.source
+        for entry_unit in entry_units
+        if entry_unit.source.kind == "h2"
+        and entry_unit.source.heading is not None
         and (
-            unit.heading.casefold().startswith("tombstone:")
-            or unit.heading.casefold().startswith("mc-tomb-")
+            entry_unit.source.heading.casefold().startswith("tombstone:")
+            or entry_unit.source.heading.casefold().startswith("mc-tomb-")
         )
-        and needle in unit.text.casefold()
+        and needle in entry_unit.display_text.casefold()
     )
     blockers = tuple(
-        unit
-        for unit in document.units
-        if needle in unit.text.casefold()
+        entry_unit.source
+        for entry_unit in entry_units
+        if needle in entry_unit.display_text.casefold()
         and (
-            unit.kind in {"preamble", "body"}
+            entry_unit.source.kind in {"preamble", "body"}
             or (
-                unit.kind == "h2"
+                entry_unit.source.kind == "h2"
                 and (
-                    unit.heading is None
-                    or not unit.heading.casefold().startswith(("tombstone:", "mc-tomb-"))
+                    entry_unit.source.heading is None
+                    or not entry_unit.source.heading.casefold().startswith(("tombstone:", "mc-tomb-"))
                 )
             )
         )
@@ -288,9 +296,10 @@ def _update_existing_tombstones(
     if mode == "hard":
         generic = _tombstone(topic, mode, project_id, tombstone_suffix)
         has_generic_guard = any(
-            "Redacted user-requested removal" in unit.text
-            and "Do not reconstruct removed content" in unit.text
-            for unit in kept
+            "Redacted user-requested removal" in entry_unit.display_text
+            and "Do not reconstruct removed content" in entry_unit.display_text
+            for entry_unit in entry_units
+            if entry_unit.source in kept
         )
         if generic is not None and not has_generic_guard:
             insertion = next(
@@ -410,6 +419,7 @@ def _build_forget_mutation_plan(
             original,
             topic,
             exact_entry_id=getattr(args, "entry_id", None),
+            source_path=path,
         )
         plans.append(FilePlan(path, updated, matches, blockers))
     matched_plans = [plan for plan in plans if plan.matches]
@@ -425,6 +435,7 @@ def _build_forget_mutation_plan(
             args.mode,
             project_id,
             tombstone_suffix,
+            tombstone_path,
         )
         if candidate != ensure_newline(read_managed_text(memory_dir, tombstone_path)):
             tombstone_updated = candidate

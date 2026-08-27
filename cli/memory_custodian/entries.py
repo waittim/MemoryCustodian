@@ -58,6 +58,39 @@ class StructuredEntry:
     display_text: str | None = None
 
 
+@dataclass(frozen=True)
+class EntryUnit:
+    """Pair one Markdown source unit with its parsed Entry, when formal.
+
+    ``source`` is the immutable Markdown unit used for range-local mutations.
+    ``display_text`` is the semantic representation used by selectors and
+    search consumers.  Keeping these two views together prevents a consumer
+    from accidentally searching the serialization envelope while retaining
+    the exact source text for a later mutation.
+    """
+
+    source: "MarkdownUnit"
+    structured: StructuredEntry | None = None
+
+    @property
+    def source_text(self) -> str:
+        """Return the raw source text preserved for mutation/rendering."""
+
+        return self.source.text
+
+    @property
+    def display_text(self) -> str:
+        """Return semantic text, hiding only the formal body envelope."""
+
+        if self.structured is not None:
+            return (
+                self.structured.display_text
+                if self.structured.display_text is not None
+                else self.structured.text
+            )
+        return self.source_text
+
+
 class EntryUnitIssue(str):
     """An entry-unit diagnostic with safety metadata for conflict consumers."""
 
@@ -637,6 +670,34 @@ def parse_structured_entries(path: Path, text: str) -> list[StructuredEntry]:
             )
         )
     return parsed
+
+
+def parse_entry_units(path: Path, text: str) -> tuple[EntryUnit, ...]:
+    """Return source units with an explicit raw/semantic Entry boundary.
+
+    Formal Entries are matched to their original Markdown units by source
+    text.  The source unit remains the mutation operand, while its parsed
+    ``display_text`` is the selector/search representation.  Legacy bullets,
+    preambles, and non-Entry H2 units deliberately retain their source text
+    as semantic text because they have no formal body envelope to decode.
+    """
+
+    from .protocol import parse_markdown_units
+
+    document = parse_markdown_units(text)
+    structured_by_source: dict[str, list[StructuredEntry]] = {}
+    for entry in parse_structured_entries(path, text):
+        structured_by_source.setdefault(entry.text, []).append(entry)
+
+    units: list[EntryUnit] = []
+    for source in document.units:
+        structured = None
+        if source.kind == "h2":
+            candidates = structured_by_source.get(source.text)
+            if candidates:
+                structured = candidates.pop(0)
+        units.append(EntryUnit(source, structured))
+    return tuple(units)
 
 
 def expected_typed_body(entry: StructuredEntry, relative_path: str) -> str | None:
