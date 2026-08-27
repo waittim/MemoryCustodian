@@ -36,6 +36,58 @@ class SnapshotValidationArchitectureTests(unittest.TestCase):
         self.assertEqual(code, 0, output + error)
         return Path(root) / "docs/memory"
 
+    def test_strict_read_reports_unclosed_canonical_entry_fence(self):
+        with tempfile.TemporaryDirectory() as root:
+            memory = self._init(root)
+            decisions = memory / "decisions.md"
+            decisions.write_text(
+                decisions.read_text(encoding="utf-8")
+                + "\n```text\n"
+                + "DO_NOT_PRINT_DECISIONS " * 1000,
+                encoding="utf-8",
+            )
+
+            code, output, error = capture([
+                "read", "--task", "implementation", "--strict-routing",
+                "--project-root", root,
+            ])
+
+            self.assertEqual(code, 2, output + error)
+            self.assertIn("Conflict status: INVALID", output)
+            self.assertIn("MC-CONFLICT-007 INVALID", output)
+            self.assertIn("Unclosed fenced code block", output)
+            self.assertIn("Context pack not approved for substantial work", output)
+            self.assertNotIn("DO_NOT_PRINT_DECISIONS", output)
+
+    def test_strict_read_reports_unclosed_fence_in_matched_optional_entry_module(self):
+        with tempfile.TemporaryDirectory() as root:
+            memory = self._init(root)
+            code, output, error = capture([
+                "enable", "area/backend", "--path", "cli/**",
+                "--project-root", root,
+            ])
+            self.assertEqual(code, 0, output + error)
+            area = memory / "areas" / "backend.md"
+            area.write_text(
+                area.read_text(encoding="utf-8")
+                + "\n```text\n"
+                + "DO_NOT_PRINT_BACKEND " * 1000,
+                encoding="utf-8",
+            )
+
+            code, output, error = capture([
+                "read", "--task", "implementation", "--path", "cli/example.py",
+                "--strict-routing", "--project-root", root,
+            ])
+
+            self.assertEqual(code, 2, output + error)
+            self.assertIn("areas/backend.md", output)
+            self.assertIn("Conflict status: INVALID", output)
+            self.assertIn("MC-CONFLICT-007 INVALID", output)
+            self.assertIn("Unclosed fenced code block", output)
+            self.assertIn("Context pack not approved for substantial work", output)
+            self.assertNotIn("DO_NOT_PRINT_BACKEND", output)
+
     def test_alias_collision_has_same_current_and_planned_blocker(self):
         with tempfile.TemporaryDirectory() as root:
             memory = self._init(root)

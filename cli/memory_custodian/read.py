@@ -5,9 +5,9 @@ from __future__ import annotations
 from pathlib import Path
 import sys
 
-from .conflicts import ConflictResult, ConflictStatus, analyze_conflicts, render_conflict_result
+from .conflicts import ConflictResult, ConflictStatus, analyze_snapshot, render_conflict_result
 from .context import ContextRoutingResult, invalid_context_result, route_context
-from .entries import memory_entry_ids, parse_structured_entries
+from .entries import parse_structured_entries
 from .local_overlay import (
     LocalOverlay,
     LocalStatus,
@@ -18,6 +18,7 @@ from .local_overlay import (
 )
 from .protocol import budget_for, resolve_memory_dir, resolve_project_root
 from .routes import ModuleDisposition, RouteReason, RoutedModule, RoutingCompleteness
+from .snapshot import build_snapshot
 
 
 def _optional_requested(kind: str, names: list[str]) -> list[RoutedModule]:
@@ -114,6 +115,12 @@ def run(args) -> int:
             areas=args.area,
             error=exc,
         )
+    # Build the shared inventory before optional local inspection so malformed
+    # Entry files cannot make the local ID lookup parse them a second time.
+    # The same snapshot is then passed to conflict analysis below, ensuring a
+    # lexical error (such as an unclosed fence) reaches the structured
+    # MC-CONFLICT-007 path instead of escaping from context packing.
+    snapshot = None if routing_invalid else build_snapshot(memory_dir)
     overlay = LocalOverlay(LocalStatus.DISABLED, Path("."), "")
     if not routing_invalid and not getattr(args, "no_local", False):
         try:
@@ -128,7 +135,7 @@ def run(args) -> int:
             overlay = inspect_overlay(
                 project_root,
                 overlay_project_id,
-                shared_ids=memory_entry_ids(memory_dir),
+                shared_ids={entry.entry_id for entry in snapshot.relation_entries},
             )
     local_contents: list[tuple[str, str]] = []
     local_scope_warnings: list[str] = []
@@ -158,8 +165,8 @@ def run(args) -> int:
     conflicts = (
         ConflictResult(ConflictStatus.INVALID, ())
         if routing_invalid
-        else analyze_conflicts(
-            memory_dir,
+        else analyze_snapshot(
+            snapshot,
             matched_areas=matched_areas,
             included_modules=tuple(module.module_id for module in result.modules if module.loaded),
         )
@@ -230,7 +237,13 @@ def run(args) -> int:
     elif not routing_invalid and conflicts.status in {ConflictStatus.CONFLICT, ConflictStatus.INVALID}:
         print("Context pack contains unresolved active-memory conflict")
 
-    if not args.names_only:
+    # A strict read that failed the structural gate must never present an
+    # invalid module as a usable context pack.  Conflict diagnostics above
+    # remain available, while safe metadata and routing dispositions are
+    # still rendered for inspection.
+    if not args.names_only and not (
+        args.strict_routing and conflicts.status == ConflictStatus.INVALID
+    ):
         for name, text in result.contents:
             print(f"\n## {name}\n")
             print(text)

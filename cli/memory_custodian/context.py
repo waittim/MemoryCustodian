@@ -169,9 +169,19 @@ def _unit_ref(module_id: str, text: str, ordinal: int) -> str:
 
 def _pack(module_id: str, text: str, budget: int | None) -> tuple[str, tuple[BudgetOmission, ...], bool]:
     normalized = text.strip()
+    # Validate the Markdown envelope before returning any module text.  A
+    # malformed selected module (most importantly an unclosed fenced block)
+    # must reach the shared snapshot/conflict model rather than aborting read
+    # while the context pack is being assembled.  Returning an empty packed
+    # value keeps the invalid source out of ordinary context output; the
+    # caller still records the routed module and the later conflict pass
+    # reports the precise MC-CONFLICT-007 diagnostic.
+    try:
+        document = parse_markdown_units(normalized)
+    except (TypeError, ValueError):
+        return "", (), False
     if budget is None or estimate_tokens(normalized) <= budget:
         return normalized, (), False
-    document = parse_markdown_units(normalized)
     chosen = []
     oversized = False
     stop = len(document.units)
@@ -282,7 +292,8 @@ def route_context(
         packed, module_omissions, oversized = _pack(
             module.module_id, read_managed_text(memory_dir, path), budget_for(module.module_id)
         )
-        contents.append((module.module_id, packed))
+        if packed:
+            contents.append((module.module_id, packed))
         omissions.extend(module_omissions)
         results.append(module.with_result(
             loaded=True,
