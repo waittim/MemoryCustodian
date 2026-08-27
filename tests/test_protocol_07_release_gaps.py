@@ -4556,8 +4556,30 @@ class MergeAndDeterminismReleaseTests(unittest.TestCase):
                 or "normalized alias" in item.message.casefold()
             ]
             self.assertEqual(len(alias_findings), 1)
-            self.assertEqual(alias_findings[0].code, "MC-CONFLICT-003")
+            self.assertEqual(alias_findings[0].code, "MC-CONFLICT-004")
             self.assertEqual(alias_findings[0].status.value, "INVALID")
+
+    def test_conflict_canonical_ref_collision_keeps_distinct_stable_finding_code(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            memory = Path(tmp) / "docs/memory"
+            first_id = "MC-SUBJ-20260826-11111111"
+            second_id = "MC-SUBJ-20260826-22222222"
+            (memory / "subjects.md").write_text(
+                "# Subject Registry\n\n"
+                + subject_unit(first_id, "First ref", "feature:shared")
+                + subject_unit(second_id, "Second ref", "feature:shared"),
+                encoding="utf-8",
+            )
+            result = analyze_conflicts(memory)
+            ref_findings = [
+                item for item in result.findings
+                if "Canonical-Ref" in item.message
+            ]
+            self.assertEqual(len(ref_findings), 1)
+            self.assertEqual(ref_findings[0].code, "MC-CONFLICT-003")
+            self.assertEqual(ref_findings[0].status.value, "INVALID")
 
     def test_merge_review_detects_supersede_while_other_branch_extends_old_entry(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -81,6 +81,28 @@ class Subject:
     end_line: int = -1
 
 
+class SubjectRegistryIssue(str):
+    """A registry validation message with optional conflict finding metadata.
+
+    The public validation helpers historically returned strings.  Keeping
+    issues as ``str`` subclasses preserves that API for writers and previews,
+    while allowing conflict analysis to consume a stable code assigned at the
+    point where the invariant is detected instead of parsing message text.
+    """
+
+    conflict_code: str | None
+
+    def __new__(
+        cls,
+        message: str,
+        *,
+        conflict_code: str | None = None,
+    ) -> "SubjectRegistryIssue":
+        instance = super().__new__(cls, message)
+        instance.conflict_code = conflict_code
+        return instance
+
+
 def normalize_alias(value: str) -> str:
     """Normalize exact alias ownership without fuzzy or semantic matching."""
 
@@ -372,9 +394,10 @@ def subject_registry_issues(
             normalized = normalize_alias(alias)
             owner = aliases.get(normalized)
             if owner and owner.casefold() != subject.subject_id.casefold():
-                issues.append(
-                    f"subjects.md: normalized alias {alias!r} is owned by both {owner} and {subject.subject_id}"
-                )
+                issues.append(SubjectRegistryIssue(
+                    f"subjects.md: normalized alias {alias!r} is owned by both {owner} and {subject.subject_id}",
+                    conflict_code="MC-CONFLICT-004",
+                ))
             aliases[normalized] = subject.subject_id
         if subject.canonical_ref:
             try:
@@ -384,9 +407,10 @@ def subject_registry_issues(
                 continue
             owner = refs.get(normalized_ref)
             if owner and owner.casefold() != subject.subject_id.casefold():
-                issues.append(
-                    f"subjects.md: Canonical-Ref {normalized_ref!r} is owned by both {owner} and {subject.subject_id}"
-                )
+                issues.append(SubjectRegistryIssue(
+                    f"subjects.md: Canonical-Ref {normalized_ref!r} is owned by both {owner} and {subject.subject_id}",
+                    conflict_code="MC-CONFLICT-003",
+                ))
             refs[normalized_ref] = subject.subject_id
     by_id = {item.subject_id.casefold(): item for item in subjects}
     for subject in subjects:

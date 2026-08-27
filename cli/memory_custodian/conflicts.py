@@ -18,6 +18,12 @@ from .subjects import load_subjects, validate_subject_registry
 from .protocol import canonical_memory_files, managed_markdown_files, read_managed_text
 
 
+# The Protocol 0.7 contract reserves 001-009 for specific structural
+# findings. Subject registry schema errors have no dedicated public finding
+# in that contract, so keep them distinct from the collision codes.
+_SUBJECT_REGISTRY_INVALID_CODE = "MC-CONFLICT-010"
+
+
 class ConflictStatus(str, Enum):
     CLEAR = "CLEAR"
     REVIEW = "REVIEW"
@@ -84,7 +90,11 @@ def analyze_conflicts(
     )
     subject_records = load_subjects(memory_dir)
     findings = [
-        ConflictFinding("MC-CONFLICT-003", ConflictStatus.INVALID, issue)
+        ConflictFinding(
+            getattr(issue, "conflict_code", None) or _SUBJECT_REGISTRY_INVALID_CODE,
+            ConflictStatus.INVALID,
+            issue,
+        )
         for issue in validate_subject_registry(memory_dir, project_root)
     ]
     structural_subjects = subject_index(subject_records)
