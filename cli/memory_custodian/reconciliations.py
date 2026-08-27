@@ -22,6 +22,54 @@ REC_ID_RE = re.compile(r"MC-REC-\d{8}-[0-9a-f]{8}", re.I)
 RESOLUTIONS = frozenset({"distinct", "superseded", "exception", "subject-merged"})
 
 
+def _parse_reconciliation_fields(
+    section_lines: list[str],
+) -> tuple[dict[str, str], dict[str, list[str]], set[str], list[str]]:
+    """Parse visible record fields independently of the heading grammar."""
+
+    scalars: dict[str, str] = {}
+    blocks: dict[str, list[str]] = {"Entries": [], "Evidence": []}
+    seen_blocks: set[str] = set()
+    active_block: str | None = None
+    record_issues: list[str] = []
+    for line in section_lines[1:]:
+        if not line.strip():
+            continue
+        field = re.fullmatch(r"([A-Za-z][A-Za-z-]*):\s*(.*)", line)
+        if field:
+            key, value = field.groups()
+            active_block = None
+            if key in {"Status", "Resolution"}:
+                if key in scalars:
+                    record_issues.append(f"duplicate {key} field")
+                scalars[key] = value.strip()
+            elif key in blocks:
+                if value.strip():
+                    record_issues.append(f"{key} block heading must not contain a value")
+                    if key == "Entries":
+                        # Keep exact visible Entry operands even when the
+                        # block heading is malformed.  Forget/reference
+                        # preflight must protect an Entry named by an
+                        # invalid record, but must not harvest examples
+                        # from fenced or indented code (already excluded
+                        # by visible_lines above).
+                        blocks[key].extend(
+                            match.group(0) for match in ENTRY_ID_RE.finditer(value)
+                        )
+                if key in seen_blocks:
+                    record_issues.append(f"duplicate {key} block")
+                seen_blocks.add(key)
+                active_block = key
+            else:
+                record_issues.append(f"unknown field {key}")
+            continue
+        if line.startswith("- ") and active_block:
+            blocks[active_block].append(line[2:].strip())
+            continue
+        record_issues.append(f"unexpected line {line!r}")
+    return scalars, blocks, seen_blocks, record_issues
+
+
 @dataclass(frozen=True)
 class ReconciliationRecord:
     record_id: str
@@ -120,8 +168,16 @@ def parse_reconciliations(
         if not heading:
             match = REC_ID_RE.search(section_lines[0])
             if match and include_invalid:
+                _scalars, blocks, _seen_blocks, _record_issues = _parse_reconciliation_fields(
+                    section_lines
+                )
+                entries = tuple(
+                    value for value in blocks["Entries"]
+                    if ENTRY_ID_RE.fullmatch(value)
+                )
                 records.append(ReconciliationRecord(
-                    match.group(0), "(invalid heading)", "invalid", "", (), (),
+                    match.group(0), "(invalid heading)", "invalid", "",
+                    entries, (),
                     section, False, (f"malformed reconciliation heading {section_lines[0]!r}",),
                 ))
             else:
@@ -129,46 +185,9 @@ def parse_reconciliations(
             continue
 
         record_id, title = heading
-        scalars: dict[str, str] = {}
-        blocks: dict[str, list[str]] = {"Entries": [], "Evidence": []}
-        seen_blocks: set[str] = set()
-        active_block: str | None = None
-        record_issues: list[str] = []
-        for line in section_lines[1:]:
-            if not line.strip():
-                continue
-            field = re.fullmatch(r"([A-Za-z][A-Za-z-]*):\s*(.*)", line)
-            if field:
-                key, value = field.groups()
-                active_block = None
-                if key in {"Status", "Resolution"}:
-                    if key in scalars:
-                        record_issues.append(f"duplicate {key} field")
-                    scalars[key] = value.strip()
-                elif key in blocks:
-                    if value.strip():
-                        record_issues.append(f"{key} block heading must not contain a value")
-                        if key == "Entries":
-                            # Keep exact visible Entry operands even when the
-                            # block heading is malformed.  Forget/reference
-                            # preflight must protect an Entry named by an
-                            # invalid record, but must not harvest examples
-                            # from fenced or indented code (already excluded
-                            # by visible_lines above).
-                            blocks[key].extend(
-                                match.group(0) for match in ENTRY_ID_RE.finditer(value)
-                            )
-                    if key in seen_blocks:
-                        record_issues.append(f"duplicate {key} block")
-                    seen_blocks.add(key)
-                    active_block = key
-                else:
-                    record_issues.append(f"unknown field {key}")
-                continue
-            if line.startswith("- ") and active_block:
-                blocks[active_block].append(line[2:].strip())
-                continue
-            record_issues.append(f"unexpected line {line!r}")
+        scalars, blocks, seen_blocks, record_issues = _parse_reconciliation_fields(
+            section_lines
+        )
 
         entries = tuple(blocks["Entries"])
         evidence = tuple(blocks["Evidence"])

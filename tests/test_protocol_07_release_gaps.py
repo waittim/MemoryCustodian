@@ -5152,6 +5152,52 @@ class MarkdownUnitBoundaryAuditTests(unittest.TestCase):
         self.assertNotIn(fenced_id, records[0].entries)
         self.assertNotIn(indented_id, records[0].entries)
 
+    def test_malformed_reconciliation_heading_preserves_visible_entry_operands(self):
+        first_id = "MC-DEC-20260825-aaaaaaaa"
+        second_id = "MC-DEC-20260825-bbbbbbbb"
+        text = (
+            "## MC-REC-20260825-dddddddd\n\n"
+            "Status: active\nResolution: distinct\nEntries:\n"
+            f"- {first_id}\n- {second_id}\n"
+            "Evidence:\n- user-confirmed\n"
+        )
+        records, issues = parse_reconciliations(
+            Path("reconciliations.md"), text, include_invalid=True,
+        )
+        self.assertEqual(issues, ())
+        self.assertEqual(len(records), 1)
+        self.assertFalse(records[0].valid)
+        self.assertEqual(records[0].entries, (first_id, second_id))
+        self.assertTrue(any(
+            "malformed reconciliation heading" in issue
+            for issue in records[0].parse_issues
+        ))
+
+    def test_conflict_diagnostic_keeps_operands_from_malformed_reconciliation_heading(
+        self,
+    ):
+        first_id = "MC-DEC-20260825-aaaaaaaa"
+        second_id = "MC-DEC-20260825-bbbbbbbb"
+        with tempfile.TemporaryDirectory() as tmp:
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            (Path(tmp) / "docs/memory/reconciliations.md").write_text(
+                "# Reconciliations\n\n"
+                "## MC-REC-20260825-dddddddd\n\n"
+                "Status: active\nResolution: distinct\nEntries:\n"
+                f"- {first_id}\n- {second_id}\n"
+                "Evidence:\n- user-confirmed\n",
+                encoding="utf-8",
+            )
+            code, output, error = capture([
+                "check", "--conflicts", "--project-root", tmp,
+            ])
+            self.assertEqual(code, 1, output + error)
+            self.assertIn("Conflict status: INVALID", output)
+            self.assertIn(
+                f"Entries: {first_id}, {second_id}.", output,
+            )
+
     def test_direct_operands_use_no_follow_reads(self):
         with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as outside:
             with redirect_stdout(StringIO()):
