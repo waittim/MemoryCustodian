@@ -12,15 +12,12 @@ from .protocol import (
     count_inbox_items,
     estimate_tokens,
     long_decision_entries,
-    managed_markdown_files,
-    manifest_contract_metadata,
-    protocol_metadata,
-    read_managed_text,
     resolve_memory_dir,
     resolve_project_root,
 )
 from . import __version__
 from .templates import CORE_FILES, brief_needs_curation
+from .snapshot import build_snapshot
 
 
 def run(args) -> int:
@@ -33,17 +30,24 @@ def run(args) -> int:
     if not memory_dir.exists():
         print("Status: MISSING")
         return 1
-    managed_paths = managed_markdown_files(memory_dir)
+    # Capture managed inventory, source text, parser results, and manifest
+    # contract once.  Status is intentionally a pure consumer of this view;
+    # later metadata, budget, and optional-module reporting must not observe a
+    # second manifest or inventory revision.
+    snapshot = build_snapshot(memory_dir, project_root)
+    files_by_relative = {item.relative: item for item in snapshot.files}
 
     exit_code = 0
-    manifest_path = memory_dir / "manifest.md"
-    manifest = read_managed_text(memory_dir, manifest_path, required=False)
-    protocol_error: str | None = None
-    try:
-        metadata = manifest_contract_metadata(manifest, allow_missing_section=True)
-    except ValueError as exc:
-        metadata = protocol_metadata(manifest)
-        protocol_error = str(exc)
+    metadata = snapshot.manifest_contract.as_dict()
+    # A missing manifest is already reported as a missing core file below;
+    # preserve the historical "Protocol version: missing" line instead of
+    # turning that absence into a duplicate metadata error.
+    protocol_error = (
+        snapshot.manifest_contract.error
+        if snapshot.manifest_contract.present
+        else None
+    )
+    if protocol_error:
         exit_code = 1
     protocol_version = metadata.get("protocol_version")
     if protocol_error:
@@ -64,12 +68,12 @@ def run(args) -> int:
         print(f"Protocol version: missing (migration available to {CURRENT_PROTOCOL_VERSION})")
 
     for name in CORE_FILES:
-        path = memory_dir / name
-        if not path.exists():
+        source = files_by_relative.get(name)
+        if source is None:
             print(f"{name}: MISSING")
             exit_code = 1
             continue
-        text = read_managed_text(memory_dir, path)
+        text = source.text
         tokens = estimate_tokens(text)
         budget = budget_for(name)
         usage_state = budget_state(tokens, budget) if budget is not None else "OK"
@@ -107,11 +111,11 @@ def run(args) -> int:
         if state != "OK":
             exit_code = 1
     for name in ("preferences.md", "changelog.md"):
-        path = memory_dir / name
-        if not path.exists():
+        source = files_by_relative.get(name)
+        if source is None:
             print(f"{name}: not enabled")
             continue
-        text = read_managed_text(memory_dir, path)
+        text = source.text
         tokens = estimate_tokens(text)
         budget = budget_for(name)
         state = "OK" if budget is None else budget_state(tokens, budget)
@@ -124,14 +128,17 @@ def run(args) -> int:
         if state != "OK":
             exit_code = 1
     for folder in ("rules", "profiles", "areas", "archive"):
-        directory = memory_dir / folder
-        if not directory.exists():
+        folder_files = [
+            item for item in snapshot.files
+            if item.relative.startswith(folder + "/")
+        ]
+        if not folder_files and snapshot.memory_dir / folder not in snapshot.managed_directories:
             print(f"{folder}/: not enabled")
             continue
         files = sorted(
-            path.name
-            for path in managed_paths
-            if path.parent == directory
+            item.relative.removeprefix(folder + "/")
+            for item in folder_files
+            if item.relative.count("/") == 1
         )
         if files:
             print(f"{folder}/: enabled, {len(files)} markdown file(s)")

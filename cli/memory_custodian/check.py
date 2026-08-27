@@ -14,22 +14,16 @@ from .protocol import (
     count_inbox_items,
     estimate_tokens,
     long_decision_entries,
-    manifest_contract_metadata,
     parse_markdown_units,
     parse_manifest_task_file_specs,
-    read_managed_text,
     read_no_follow_text,
     protocol_contract_metadata,
-    protocol_metadata,
     resolve_manifest_memory_path,
     resolve_memory_dir,
     resolve_project_root,
-    validate_manifest_routes,
 )
 from .entries import (
     heading_entry_ids,
-    memory_entry_ids,
-    parse_structured_entries,
 )
 from .scanning import scan_text
 from .integrity import cross_unit_integrity_findings
@@ -40,7 +34,6 @@ from .conflicts import (
     render_conflict_result,
 )
 from .quality import (
-    QualityFinding,
     freshness_findings,
     reachability_findings,
     render_quality,
@@ -49,8 +42,6 @@ from .quality import (
 from .local_overlay import (
     LocalStatus,
     inspect_overlay,
-    read_local_private_file,
-    validated_project_identity,
 )
 from .snapshot import build_snapshot
 
@@ -90,8 +81,58 @@ def _manifest_mentions_required_policy(text: str) -> list[str]:
     return issues
 
 
-def _check_protocol_metadata(text: str) -> list[str]:
+def _check_protocol_metadata(
+    text: str,
+    *,
+    contract=None,
+) -> list[str]:
     issues: list[str] = []
+    if contract is not None:
+        if not contract.present:
+            return [
+                "manifest.md: invalid protocol metadata "
+                "[MC-ROUTING-007 INVALID]: manifest.md is missing."
+            ]
+        if contract.error is not None:
+            if (
+                not contract.as_dict()
+                and contract.error.startswith("Invalid manifest routing:")
+                and "MemoryCustodian Protocol" not in text
+            ):
+                return [
+                    "manifest.md: missing MemoryCustodian Protocol metadata "
+                    f"[MC-ROUTING-007 INVALID]: {contract.error}"
+                ]
+            return [
+                "manifest.md: invalid protocol metadata "
+                f"[MC-ROUTING-007 INVALID]: {contract.error}"
+            ]
+        metadata = contract.as_dict()
+        if not metadata:
+            return [
+                "manifest.md: missing MemoryCustodian Protocol metadata; "
+                "run `memory-custodian migrate --apply`"
+            ]
+        version = metadata.get("protocol_version")
+        if not version:
+            return [
+                "manifest.md: missing protocol_version; "
+                "run `memory-custodian migrate --apply`"
+            ]
+        comparison = compare_versions(version, CURRENT_PROTOCOL_VERSION)
+        if comparison is None:
+            issues.append(f"manifest.md: invalid protocol_version {version!r}")
+        elif comparison < 0:
+            issues.append(
+                f"manifest.md: protocol_version {version} is older than current {CURRENT_PROTOCOL_VERSION}; "
+                "run `memory-custodian migrate --apply`"
+            )
+        elif comparison > 0:
+            issues.append(
+                f"manifest.md: protocol_version {version} is newer than this CLI supports ({CURRENT_PROTOCOL_VERSION}); "
+                "update memory-custodian"
+            )
+        return issues
     try:
         metadata = protocol_contract_metadata(text, allow_missing_section=True)
     except ValueError as exc:
@@ -117,36 +158,25 @@ def _check_protocol_metadata(text: str) -> list[str]:
     return issues
 
 
-def _specialized_protocol_finding(memory_dir: Path) -> QualityFinding | None:
-    manifest_path = memory_dir / "manifest.md"
-    if not manifest_path.exists():
-        return QualityFinding("ERROR", "MC-ROUTING-007", "manifest.md is missing.")
-    try:
-        manifest_contract_metadata(
-            read_managed_text(memory_dir, manifest_path),
-            allow_missing_section=True,
-        )
-    except ValueError as exc:
-        return QualityFinding("ERROR", "MC-ROUTING-007", str(exc))
-    return None
-
-
 def run(args) -> int:
     project_root = resolve_project_root(args.project_root)
     memory_dir = resolve_memory_dir(project_root, args.memory_dir)
     if not memory_dir.exists():
         print(f"Memory directory missing: {memory_dir}")
         return 1
+    # Capture every shared managed-memory input once.  All focused checks and
+    # the ordinary diagnostics below consume this immutable view; in
+    # particular, no preflight may reread manifest.md before this boundary.
+    snapshot = build_snapshot(memory_dir, project_root)
     if getattr(args, "conflicts", False):
-        specialized_protocol = _specialized_protocol_finding(memory_dir)
-        if specialized_protocol:
+        if not snapshot.manifest_contract.valid:
             print("Conflict status: INVALID")
             print(
-                f"{specialized_protocol.code} {specialized_protocol.severity}: "
-                f"{specialized_protocol.message}"
+                "MC-ROUTING-007 INVALID: "
+                f"{snapshot.manifest_contract.error or 'manifest.md is missing.'}"
             )
             return 1
-        result = analyze_snapshot(build_snapshot(memory_dir, project_root))
+        result = analyze_snapshot(snapshot)
         render_conflict_result(result)
         if getattr(args, "merge_base", None):
             from .merge_review import merge_review
@@ -156,26 +186,38 @@ def run(args) -> int:
                 return 1
         return 1 if result.status in {ConflictStatus.CONFLICT, ConflictStatus.INVALID} else 0
     if getattr(args, "routing", False):
-        return render_quality("routing check", routing_findings(memory_dir))
+        return render_quality(
+            "routing check",
+            routing_findings(memory_dir, snapshot=snapshot),
+        )
     if getattr(args, "reachability", False):
-        return render_quality("reachability check", reachability_findings(memory_dir))
+        return render_quality(
+            "reachability check",
+            reachability_findings(memory_dir, snapshot=snapshot),
+        )
     if getattr(args, "freshness", False):
-        return render_quality("freshness check", freshness_findings(project_root, memory_dir))
+        return render_quality(
+            "freshness check",
+            freshness_findings(project_root, memory_dir, snapshot=snapshot),
+        )
     issues: list[str] = []
     warnings: list[str] = []
     detailed_findings = []
 
+    files_by_relative = {item.relative: item for item in snapshot.files}
     for name in CORE_FILES:
-        if not (memory_dir / name).exists():
+        if name not in files_by_relative:
             issues.append(f"{name}: missing required core file")
 
-    manifest_path = memory_dir / "manifest.md"
-    manifest = read_managed_text(memory_dir, manifest_path, required=False)
-    if manifest_path.exists():
-        issues.extend(_check_protocol_metadata(manifest))
+    manifest = snapshot.manifest_text
+    issues.extend(
+        _check_protocol_metadata(
+            manifest,
+            contract=snapshot.manifest_contract,
+        )
+    )
     if manifest:
         issues.extend(_manifest_mentions_required_policy(manifest))
-        issues.extend(f"manifest.md: {issue}" for issue in validate_manifest_routes(manifest))
         for task in ("default", "planning", "implementation", "artifact", "preferences", "history", "maintenance"):
             try:
                 specs = parse_manifest_task_file_specs(manifest, task)
@@ -189,14 +231,13 @@ def run(args) -> int:
                     if issue not in issues:
                         issues.append(issue)
                     continue
-                if required and not path.exists():
+                relative = path.relative_to(memory_dir).as_posix()
+                if required and relative not in files_by_relative:
                     issue = f"manifest.md: required route file is missing: {name}"
                     if issue not in issues:
                         issues.append(issue)
 
-    snapshot = build_snapshot(memory_dir, project_root)
-
-    brief = read_managed_text(memory_dir, memory_dir / "brief.md", required=False)
+    brief = files_by_relative.get("brief.md").text if "brief.md" in files_by_relative else ""
     if brief and brief_needs_curation(brief):
         issues.append("brief.md: generated scaffold still needs real project purpose, direction, and system context")
 
@@ -251,15 +292,21 @@ def run(args) -> int:
                 "shorten it semantically and move supporting detail outside the decision entry"
             )
 
-    try:
-        overlay_project_id = validated_project_identity(memory_dir)
-    except (OSError, ValueError):
-        overlay_project_id = None
+    metadata = snapshot.manifest_contract.as_dict()
+    overlay_project_id = (
+        metadata.get("project_id")
+        if snapshot.manifest_contract.valid
+        and compare_versions(
+            metadata.get("protocol_version", "0.5"),
+            CURRENT_PROTOCOL_VERSION,
+        ) == 0
+        else None
+    )
     overlay = (
         inspect_overlay(
             project_root,
             overlay_project_id,
-            shared_ids=memory_entry_ids(memory_dir),
+            shared_ids={entry.entry_id for entry in snapshot.relation_entries},
         )
         if overlay_project_id is not None
         else None
@@ -270,20 +317,21 @@ def run(args) -> int:
         and overlay.directory is not None
         and overlay.status in {LocalStatus.BOUND, LocalStatus.REVIEW}
     ):
-        for path in overlay.modules:
+        for captured in overlay.captured_modules:
+            path = captured.path
             local_paths.add(path)
-            text = read_local_private_file(path)
+            text = captured.text
             detailed_findings.extend(scan_text(path, text))
-            for entry in parse_structured_entries(path, text):
+            for entry in captured.entries:
                 if entry.scope not in {"local-user", "local-machine"}:
                     issues.append(
                         f"local/{path.relative_to(overlay.directory).as_posix()}: "
                         f"{entry.entry_id} has non-local Scope {entry.scope!r}"
                     )
 
-    inbox = memory_dir / "inbox.md"
-    if inbox.exists():
-        inbox_items = count_inbox_items(read_managed_text(memory_dir, inbox))
+    inbox_file = files_by_relative.get("inbox.md")
+    if inbox_file is not None:
+        inbox_items = count_inbox_items(inbox_file.text)
         if inbox_items > 30:
             warnings.append(f"inbox.md: {inbox_items} items, compaction recommended")
 
@@ -293,6 +341,7 @@ def run(args) -> int:
         manifest,
         project_id=overlay_project_id,
         snapshot=snapshot,
+        overlay=overlay,
     )
     issues.extend(cross_issues)
     warnings.extend(cross_warnings)

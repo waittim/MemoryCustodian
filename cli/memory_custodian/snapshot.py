@@ -99,6 +99,10 @@ class MemorySnapshot:
         (),
         "manifest.md is missing.",
     )
+    # Top-level optional directories are captured alongside the file inventory
+    # so status/integrity can preserve the distinction between an absent and
+    # an intentionally empty enabled directory without probing disk later.
+    managed_directories: frozenset[Path] = frozenset()
 
     def file_for(self, relative: str) -> SnapshotFile | None:
         """Return one captured managed file by normalized relative path."""
@@ -302,6 +306,16 @@ def build_snapshot(
     # this captured manifest rather than the compatibility wrapper that would
     # inventory and read managed memory again.
     inventory = managed_markdown_files(memory_dir)
+    managed_directories = frozenset(
+        path
+        for path in (
+            memory_dir / "rules",
+            memory_dir / "profiles",
+            memory_dir / "areas",
+            memory_dir / "archive",
+        )
+        if path.is_dir()
+    )
     inventory_set = set(inventory)
     for path in overlay:
         if path.suffix.casefold() != ".md":
@@ -515,4 +529,5 @@ def build_snapshot(
         relation_issues,
         integrity_relation_issues,
         manifest_contract,
+        managed_directories,
     )

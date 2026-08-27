@@ -64,9 +64,6 @@ class FreshnessSnapshotTests(unittest.TestCase):
             with patch(
                 "memory_custodian.quality.build_snapshot",
                 side_effect=AssertionError("freshness rebuilt its supplied snapshot"),
-            ), patch(
-                "memory_custodian.quality.read_managed_text",
-                side_effect=AssertionError("freshness reread the manifest"),
             ):
                 findings = freshness_findings(
                     Path(root), memory, snapshot=captured,

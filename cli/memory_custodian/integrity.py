@@ -5,8 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from .conflicts import ConflictStatus, analyze_snapshot
-from .entries import memory_entry_ids
-from .local_overlay import LocalStatus, inspect_overlay
+from .local_overlay import LocalOverlay, LocalStatus, inspect_overlay
 from .protocol import optional_index_paths
 from .snapshot import MemorySnapshot, build_snapshot
 
@@ -19,12 +18,19 @@ def cross_unit_integrity_findings(
     project_id: str | None = None,
     allow_missing_subjects: bool = False,
     snapshot: MemorySnapshot | None = None,
+    overlay: LocalOverlay | None = None,
 ) -> tuple[list[str], list[str]]:
     """Validate one shared snapshot's cross-file integrity and topology."""
 
-    snapshot = snapshot or build_snapshot(memory_dir, project_root)
+    if snapshot is None:
+        snapshot = build_snapshot(memory_dir, project_root)
+    else:
+        # With a supplied capture, its manifest is authoritative.  Standalone
+        # callers may still pass a planned manifest that intentionally differs
+        # from the current on-disk text.
+        manifest = snapshot.manifest_text
     subject_issues = list(snapshot.subject_issues)
-    if allow_missing_subjects and not (memory_dir / "subjects.md").exists():
+    if allow_missing_subjects and snapshot.file_for("subjects.md") is None:
         subject_issues = [
             issue for issue in subject_issues
             if issue != "subjects.md: missing managed Subject registry"
@@ -62,28 +68,39 @@ def cross_unit_integrity_findings(
 
     indexed_optional_paths = optional_index_paths(manifest)
     for folder in ("rules", "profiles", "areas"):
-        directory = memory_dir / folder
         folder_paths = [
             item.path for item in snapshot.files
             if item.relative.startswith(folder + "/")
             and item.path.name.casefold() != "readme.md"
         ]
-        if directory.exists() and folder + "/" not in manifest:
+        # ``snapshot.files`` is the captured managed inventory.  An empty
+        # optional directory has no managed input to inspect and therefore
+        # cannot affect this integrity result.
+        folder_present = (
+            snapshot.memory_dir / folder in snapshot.managed_directories
+            or any(
+                item.relative.startswith(folder + "/")
+                for item in snapshot.files
+            )
+        )
+        if folder_present and folder + "/" not in manifest:
             issues.append(
                 f"manifest.md: {folder}/ exists but manifest does not describe when to load it"
             )
         for path in folder_paths:
-            relative = path.relative_to(memory_dir).as_posix()
+            relative = path.relative_to(snapshot.memory_dir).as_posix()
             if relative not in indexed_optional_paths:
                 issues.append(
                     f"manifest.md: {relative} exists but is missing from optional module index"
                 )
 
-    if project_id:
+    if overlay is None and project_id:
         overlay = inspect_overlay(
-            project_root, project_id, shared_ids=memory_entry_ids(memory_dir),
+            project_root,
+            project_id,
+            shared_ids={entry.entry_id for entry in snapshot.relation_entries},
         )
-        if overlay.status == LocalStatus.REVIEW:
-            target = issues if overlay.corrupt else warnings
-            target.extend(f"local overlay: {warning}" for warning in overlay.warnings)
+    if overlay is not None and overlay.status == LocalStatus.REVIEW:
+        target = issues if overlay.corrupt else warnings
+        target.extend(f"local overlay: {warning}" for warning in overlay.warnings)
     return issues, warnings

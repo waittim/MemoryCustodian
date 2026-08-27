@@ -6,18 +6,9 @@ from dataclasses import dataclass
 from pathlib import Path
 import subprocess
 
-from .conflicts import analyze_snapshot, canonical_entries
-from .entries import parse_structured_entries, validate_evidence
-from .protocol import (
-    manifest_contract_metadata,
-    canonical_memory_files,
-    managed_markdown_files,
-    parse_manifest_task_file_specs,
-    protocol_metadata,
-    protocol_contract_metadata,
-    read_managed_text,
-    validate_manifest_routes,
-)
+from .conflicts import analyze_snapshot
+from .entries import validate_evidence
+from .protocol import parse_manifest_task_file_specs
 from .routes import CANONICAL_TASKS, SUBSTANTIAL_TASKS, parse_optional_module_index
 from .snapshot import MemorySnapshot, build_snapshot
 
@@ -29,20 +20,41 @@ class QualityFinding:
     message: str
 
 
-def routing_findings(memory_dir: Path) -> tuple[QualityFinding, ...]:
-    manifest_path = memory_dir / "manifest.md"
-    if not manifest_path.exists():
-        return (QualityFinding("ERROR", "MC-ROUTING-001", "manifest.md is missing."),)
-    manifest = read_managed_text(memory_dir, manifest_path)
-    findings = [
-        QualityFinding("ERROR", "MC-ROUTING-002", issue)
-        for issue in validate_manifest_routes(manifest)
-    ]
-    try:
-        metadata = protocol_contract_metadata(manifest, allow_missing_section=True)
-    except ValueError as exc:
-        metadata = protocol_metadata(manifest)
-        findings.append(QualityFinding("ERROR", "MC-ROUTING-007", str(exc)))
+def _supplied_snapshot(
+    memory_dir: Path,
+    snapshot: MemorySnapshot | None,
+) -> MemorySnapshot:
+    """Use the supplied capture, or build one for a standalone call."""
+
+    return snapshot if snapshot is not None else build_snapshot(memory_dir)
+
+
+def _manifest_contract_finding(
+    snapshot: MemorySnapshot,
+) -> QualityFinding | None:
+    """Return the stable routing gate finding for one captured manifest."""
+
+    if snapshot.manifest_contract.present:
+        if snapshot.manifest_contract.error is None:
+            return None
+        return QualityFinding(
+            "ERROR", "MC-ROUTING-007", snapshot.manifest_contract.error,
+        )
+    return QualityFinding("ERROR", "MC-ROUTING-001", "manifest.md is missing.")
+
+
+def routing_findings(
+    memory_dir: Path,
+    *,
+    snapshot: MemorySnapshot | None = None,
+) -> tuple[QualityFinding, ...]:
+    snapshot = _supplied_snapshot(memory_dir, snapshot)
+    manifest = snapshot.manifest_text
+    contract_finding = _manifest_contract_finding(snapshot)
+    if contract_finding is not None:
+        return (contract_finding,)
+    findings: list[QualityFinding] = []
+    metadata = snapshot.manifest_contract.as_dict()
     version = metadata.get("protocol_version", "0.5")
     try:
         declarations = parse_optional_module_index(manifest, legacy_compatible=version != "0.7")
@@ -56,7 +68,7 @@ def routing_findings(memory_dir: Path) -> tuple[QualityFinding, ...]:
         except ValueError:
             continue
         for relative, required in specs:
-            if required and not (memory_dir / relative).exists():
+            if required and snapshot.file_for(relative) is None:
                 findings.append(QualityFinding(
                     "ERROR", "MC-ROUTING-006",
                     f"Required module is missing for {task}: {relative}",
@@ -67,8 +79,7 @@ def routing_findings(memory_dir: Path) -> tuple[QualityFinding, ...]:
                 f"Routing safety review required: {task} does not reach root constraints.md.",
             ))
     for declaration in declarations:
-        path = memory_dir / declaration.module_id
-        if not path.exists():
+        if snapshot.file_for(declaration.module_id) is None:
             findings.append(QualityFinding(
                 "WARNING", "MC-ROUTING-005",
                 f"Enabled optional module is missing: {declaration.module_id}",
@@ -76,15 +87,17 @@ def routing_findings(memory_dir: Path) -> tuple[QualityFinding, ...]:
     return tuple(sorted(set(findings), key=lambda item: (item.severity, item.code, item.message)))
 
 
-def reachability_findings(memory_dir: Path) -> tuple[QualityFinding, ...]:
-    manifest = read_managed_text(memory_dir, memory_dir / "manifest.md")
-    try:
-        metadata = manifest_contract_metadata(
-            manifest,
-            allow_missing_section=True,
-        )
-    except ValueError as exc:
-        return (QualityFinding("ERROR", "MC-ROUTING-007", str(exc)),)
+def reachability_findings(
+    memory_dir: Path,
+    *,
+    snapshot: MemorySnapshot | None = None,
+) -> tuple[QualityFinding, ...]:
+    snapshot = _supplied_snapshot(memory_dir, snapshot)
+    contract_finding = _manifest_contract_finding(snapshot)
+    if contract_finding is not None:
+        return (contract_finding,)
+    manifest = snapshot.manifest_text
+    metadata = snapshot.manifest_contract.as_dict()
     version = metadata.get("protocol_version", "0.5")
     declarations = parse_optional_module_index(manifest, legacy_compatible=version != "0.7")
     reachable: set[str] = set()
@@ -96,23 +109,24 @@ def reachability_findings(memory_dir: Path) -> tuple[QualityFinding, ...]:
     reachable.update(item.module_id for item in declarations)
     declarations_by_path = {item.module_id: item for item in declarations}
     findings: list[QualityFinding] = []
-    canonical_paths = set(canonical_memory_files(memory_dir))
-    for path in managed_markdown_files(memory_dir):
+    canonical_paths = snapshot.canonical_paths
+    for item in snapshot.files:
+        path = item.path
         if path in canonical_paths or path.name.casefold() == "readme.md":
             continue
-        if path.relative_to(memory_dir).as_posix().startswith("archive/"):
+        if item.relative.startswith("archive/"):
             continue
-        for entry in parse_structured_entries(path, read_managed_text(memory_dir, path)):
+        for entry in item.entries:
             if entry.status == "active":
                 findings.append(QualityFinding(
                     "ERROR", "MC-REACH-001",
-                    f"{entry.entry_id} in {path.relative_to(memory_dir).as_posix()} "
+                    f"{entry.entry_id} in {item.relative} "
                     "is outside canonical manifest-authorized storage.",
                 ))
-    for entry in canonical_entries(memory_dir):
+    for entry in snapshot.entries:
         if entry.status != "active":
             continue
-        relative = entry.path.relative_to(memory_dir).as_posix()
+        relative = entry.path.relative_to(snapshot.memory_dir).as_posix()
         if relative not in reachable:
             hard = entry.entry_id.split("-", 2)[1].upper() in {"CON", "DNU", "TOMB"}
             severity = "ERROR" if hard and entry.scope == "project" else "WARNING"

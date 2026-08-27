@@ -541,13 +541,20 @@ def inspect_manifest_contract(
 
     if not present:
         return ManifestContractResult(False, (), "manifest.md is missing.")
+    # Preserve the best-effort scalar view alongside an invalid contract.  It
+    # is still sourced from this captured text, and lets status retain its
+    # useful protocol-version display without reparsing the manifest from
+    # disk.  Contract consumers must continue to gate on ``error``.
+    captured_metadata = protocol_metadata(manifest)
     try:
         metadata = manifest_contract_metadata(
             manifest,
             allow_missing_section=allow_missing_section,
         )
     except ValueError as exc:
-        return ManifestContractResult(True, (), str(exc))
+        return ManifestContractResult(
+            True, tuple(sorted(captured_metadata.items())), str(exc),
+        )
     return ManifestContractResult(True, tuple(sorted(metadata.items())), None)
 
 
