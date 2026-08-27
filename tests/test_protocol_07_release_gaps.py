@@ -2804,6 +2804,42 @@ class RoutingAndQualityReleaseTests(unittest.TestCase):
             self.assertIn("Conflict status: INVALID", output)
             self.assertIn("MC-CONFLICT-008", output)
 
+    def test_unclosed_subject_registry_fence_is_structured_conflict(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            path = Path(tmp) / "docs/memory/subjects.md"
+            path.write_text(
+                "# Subject Registry\n\n```text\nunterminated\n",
+                encoding="utf-8",
+            )
+            code, output, error = capture([
+                "check", "--conflicts", "--project-root", tmp,
+            ])
+            self.assertEqual(code, 1)
+            self.assertEqual(error, "")
+            self.assertIn("Conflict status: INVALID", output)
+            self.assertIn("MC-CONFLICT-010 INVALID", output)
+            self.assertIn("Unclosed fenced code block", output)
+
+    def test_unclosed_reconciliation_registry_fence_is_structured_conflict(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            path = Path(tmp) / "docs/memory/reconciliations.md"
+            path.write_text(
+                "# Reconciliations\n\n```text\nunterminated\n",
+                encoding="utf-8",
+            )
+            code, output, error = capture([
+                "check", "--conflicts", "--project-root", tmp,
+            ])
+            self.assertEqual(code, 1)
+            self.assertEqual(error, "")
+            self.assertIn("Conflict status: INVALID", output)
+            self.assertIn("MC-CONFLICT-008 INVALID", output)
+            self.assertIn("Unclosed fenced code block", output)
+
     def test_project_area_overlap_requires_valid_exception(self):
         with tempfile.TemporaryDirectory() as tmp:
             with redirect_stdout(StringIO()):

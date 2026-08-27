@@ -88,15 +88,34 @@ def analyze_conflicts(
         (parent.parent for parent in (memory_dir, *memory_dir.parents) if parent.name == "docs"),
         memory_dir.parent.parent,
     )
-    subject_records = load_subjects(memory_dir)
-    findings = [
-        ConflictFinding(
-            getattr(issue, "conflict_code", None) or _SUBJECT_REGISTRY_INVALID_CODE,
+    findings: list[ConflictFinding] = []
+    try:
+        subject_records = load_subjects(memory_dir)
+    except ValueError as exc:
+        # Subject parsing is a shared conflict input. Keep lexical failures in
+        # the structured result so callers get a stable status/code while
+        # retaining the parser's actionable detail.
+        subject_records = []
+        findings.append(ConflictFinding(
+            _SUBJECT_REGISTRY_INVALID_CODE,
             ConflictStatus.INVALID,
-            issue,
+            f"subjects.md: Subject registry parsing failed: {exc}",
+        ))
+    else:
+        try:
+            subject_issues = validate_subject_registry(memory_dir, project_root)
+        except ValueError as exc:
+            subject_issues = [
+                f"subjects.md: Subject registry parsing failed: {exc}"
+            ]
+        findings.extend(
+            ConflictFinding(
+                getattr(issue, "conflict_code", None) or _SUBJECT_REGISTRY_INVALID_CODE,
+                ConflictStatus.INVALID,
+                issue,
+            )
+            for issue in subject_issues
         )
-        for issue in validate_subject_registry(memory_dir, project_root)
-    ]
     structural_subjects = subject_index(subject_records)
     # Keep live entries as the owner/context universe.  Lifecycle relations
     # and Entry-ID uniqueness, however, span the managed archive as well: a
@@ -120,6 +139,12 @@ def analyze_conflicts(
             for issue in entry_issues
         )
     for path in managed_markdown_files(memory_dir):
+        relative = path.relative_to(memory_dir).as_posix()
+        if relative in {"subjects.md", "reconciliations.md"}:
+            # These registries have dedicated parsers above/below.  Do not
+            # send them through the Entry parser as an unrelated storage
+            # check, especially when their Markdown is lexically malformed.
+            continue
         if path in canonical_paths or path.name.casefold() == "readme.md":
             continue
         if path.relative_to(memory_dir).as_posix().startswith("archive/"):
@@ -288,7 +313,9 @@ def analyze_conflicts(
     # historical replacement in archive/.  Validate those records against
     # the same full lifecycle inventory used above, while keeping `entries`
     # (and therefore owner/conflict analysis) live-only.
-    findings.extend(_reconciliation_findings(memory_dir, relation_by_id))
+    findings.extend(_reconciliation_findings(
+        memory_dir, relation_by_id, subjects=subject_records,
+    ))
     unique = {
         (item.code, item.status, item.message, item.entry_ids, item.subject_id, item.facet, item.scopes): item
         for item in findings
@@ -303,6 +330,8 @@ def analyze_conflicts(
 def _reconciliation_findings(
     memory_dir: Path,
     entries: dict[str, list[StructuredEntry]],
+    *,
+    subjects=None,
 ) -> list[ConflictFinding]:
     path = memory_dir / "reconciliations.md"
     if not path.exists():
@@ -311,12 +340,23 @@ def _reconciliation_findings(
         (parent.parent for parent in (memory_dir, *memory_dir.parents) if parent.name == "docs"),
         memory_dir.parent.parent,
     )
-    records, parse_issues = parse_reconciliations(
-        path, read_managed_text(memory_dir, path), project_root, include_invalid=True
-    )
+    try:
+        records, parse_issues = parse_reconciliations(
+            path, read_managed_text(memory_dir, path), project_root, include_invalid=True
+        )
+    except ValueError as exc:
+        # Reconciliation parsing is part of conflict analysis, rather than a
+        # CLI-only diagnostic. Preserve the exact lexical error for callers
+        # while using the reconciliation integrity finding code.
+        return [ConflictFinding(
+            "MC-CONFLICT-008",
+            ConflictStatus.INVALID,
+            f"reconciliations.md: Reconciliation parsing failed: {exc}",
+        )]
     all_entries = tuple(entry for matches in entries.values() for entry in matches)
     _valid, issues = validate_reconciliations(
-        records, parse_issues, all_entries, load_subjects(memory_dir),
+        records, parse_issues, all_entries,
+        tuple(subjects) if subjects is not None else tuple(load_subjects(memory_dir)),
     )
     return [
         ConflictFinding(
