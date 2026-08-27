@@ -4,15 +4,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .conflicts import ConflictStatus, analyze_conflicts
-from .entries import (
-    memory_entry_ids,
-    parse_structured_entries,
-    structured_relation_issues,
-)
+from .conflicts import ConflictStatus, analyze_snapshot
+from .entries import memory_entry_ids
 from .local_overlay import LocalStatus, inspect_overlay
-from .protocol import managed_markdown_files, optional_index_paths, read_managed_text
-from .subjects import load_subjects, validate_subject_registry
+from .protocol import optional_index_paths
+from .snapshot import MemorySnapshot, build_snapshot
 
 
 def cross_unit_integrity_findings(
@@ -22,41 +18,42 @@ def cross_unit_integrity_findings(
     *,
     project_id: str | None = None,
     allow_missing_subjects: bool = False,
+    snapshot: MemorySnapshot | None = None,
 ) -> tuple[list[str], list[str]]:
-    """Validate relationships, registry, optional topology, and local binding."""
+    """Validate one shared snapshot's cross-file integrity and topology."""
 
-    issues = validate_subject_registry(memory_dir, project_root)
+    snapshot = snapshot or build_snapshot(memory_dir, project_root)
+    subject_issues = list(snapshot.subject_issues)
     if allow_missing_subjects and not (memory_dir / "subjects.md").exists():
-        issues = [
-            issue for issue in issues
+        subject_issues = [
+            issue for issue in subject_issues
             if issue != "subjects.md: missing managed Subject registry"
         ]
+    issues = [
+        f"{getattr(issue, 'conflict_code', None)}: {issue}"
+        if getattr(issue, "conflict_code", None)
+        else issue
+        for issue in subject_issues
+    ]
     warnings: list[str] = []
-    relation_entries = []
-    managed_paths = managed_markdown_files(memory_dir)
-    for path in managed_paths:
-        relative = path.relative_to(memory_dir).as_posix()
-        if relative in {"manifest.md", "subjects.md", "reconciliations.md"} or path.name.casefold() == "readme.md":
-            continue
-        relation_entries.extend(parse_structured_entries(
-            path, read_managed_text(memory_dir, path)
-        ))
-    issues.extend(
-        structured_relation_issues(
-            relation_entries,
-            merged_subject_ids={
-                subject.subject_id
-                for subject in load_subjects(memory_dir)
-                if subject.status == "merged"
-            },
-        )
-    )
+    # Integrity covers every managed formal Entry, including entries in an
+    # optional file that has not yet been declared in the manifest.  The
+    # complete parsed inventory is already part of the snapshot; do not walk
+    # and parse the files a second time here.
+    issues.extend(snapshot.integrity_relation_issues)
 
     # Pre-0.7 migration input may legitimately lack Subject/Facet owner
     # metadata. Its renderer preserves those units as legacy memory.
     if not allow_missing_subjects:
-        conflict_result = analyze_conflicts(memory_dir)
+        conflict_result = analyze_snapshot(snapshot)
         for finding in conflict_result.findings:
+            # Subject, Entry-schema, and Entry-relation findings are already
+            # represented by the snapshot's dedicated diagnostics above (or
+            # by the caller's per-file schema pass).  Keep only the
+            # cross-unit conflict/review findings here; this prevents the old
+            # relation-then-conflict double pipeline and duplicate messages.
+            if finding.origin in {"subject-registry", "entry-schema", "entry-relation"}:
+                continue
             message = f"{finding.code}: {finding.message}"
             if finding.status in {ConflictStatus.INVALID, ConflictStatus.CONFLICT}:
                 issues.append(message)
@@ -67,9 +64,9 @@ def cross_unit_integrity_findings(
     for folder in ("rules", "profiles", "areas"):
         directory = memory_dir / folder
         folder_paths = [
-            path for path in managed_paths
-            if path.relative_to(memory_dir).as_posix().startswith(folder + "/")
-            and path.name.casefold() != "readme.md"
+            item.path for item in snapshot.files
+            if item.relative.startswith(folder + "/")
+            and item.path.name.casefold() != "readme.md"
         ]
         if directory.exists() and folder + "/" not in manifest:
             issues.append(

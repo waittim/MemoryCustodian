@@ -48,6 +48,22 @@ class StructuredEntry:
     field_bodies: dict[str, str] = field(default_factory=dict)
 
 
+class EntryUnitIssue(str):
+    """An entry-unit diagnostic with safety metadata for conflict consumers."""
+
+    conflict_relevant: bool
+
+    def __new__(
+        cls,
+        message: str,
+        *,
+        conflict_relevant: bool = True,
+    ) -> "EntryUnitIssue":
+        instance = super().__new__(cls, message)
+        instance.conflict_relevant = conflict_relevant
+        return instance
+
+
 TYPED_BODY_FIELDS = {
     "Decision",
     "Constraint",
@@ -134,10 +150,11 @@ def entry_unit_issues(text: str, relative_path: str) -> list[str]:
                     "expected `## <ENTRY_ID> — <title>`"
                 )
         elif unit.kind == "ambiguous-bullet":
-            issues.append(
+            issues.append(EntryUnitIssue(
                 f"{relative_path}: ambiguous column-zero bullet follows a formal Entry; "
-                "indent body bullets or move legacy memory under an explicit heading"
-            )
+                "indent body bullets or move legacy memory under an explicit heading",
+                conflict_relevant=False,
+            ))
     return issues
 
 

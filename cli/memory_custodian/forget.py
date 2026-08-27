@@ -16,8 +16,8 @@ from .entries import (
     render_active_entry,
     render_markdown_bullet,
     line_safe_markdown_body,
-    structured_relation_issues,
 )
+from .conflicts import ConflictStatus, analyze_snapshot
 from .locking import project_mutation_guard
 from .erasure import ErasureScope, render_apply_boundary, render_scope, scope_for_forget
 from .mutations import TextMutation, apply_mutations
@@ -32,7 +32,6 @@ from .plans import (
 from .protocol import (
     CURRENT_PROTOCOL_VERSION,
     MarkdownUnit,
-    canonical_memory_files,
     compare_versions,
     ensure_newline,
     managed_markdown_files,
@@ -45,12 +44,8 @@ from .protocol import (
     resolve_project_root,
     today,
 )
-from .reconciliations import parse_reconciliations, validate_reconciliations
-from .subjects import (
-    SUBJECT_ID_RE,
-    parse_subject_registry,
-    subject_registry_issues,
-)
+from .snapshot import MemorySnapshot, build_snapshot
+from .subjects import SUBJECT_ID_RE
 
 
 @dataclass(frozen=True)
@@ -333,112 +328,10 @@ def _public_text(value: str, topic: str, redact: bool) -> str:
     )
 
 
-def _snapshot_validation_issues(
-    memory_dir: Path,
-    project_root: Path,
-    planned_text: dict[Path, str],
-) -> list[str]:
-    """Validate one complete memory snapshot in memory.
-
-    Forget plans remove whole Markdown units, so a textual match can remove
-    one side of a lifecycle relation or one Subject that another Subject
-    still names.  The ordinary validators read from disk, which is too late
-    for a preview and would make an apply partially destructive.  Rebuild the
-    same inventories from the planned text overlay and report every resulting
-    structural issue as a deterministic blocker.
-    """
-
-    entries = []
-    canonical_paths = sorted(
-        canonical_memory_files(memory_dir, include_archive=True),
-        key=lambda path: path.relative_to(memory_dir).as_posix(),
-    )
-    for path in canonical_paths:
-        relative = path.relative_to(memory_dir).as_posix()
-        if relative in {"subjects.md", "reconciliations.md"}:
-            continue
-        text = planned_text.get(path, read_managed_text(memory_dir, path))
-        entries.extend(parse_structured_entries(path, text))
-
-    subjects_path = memory_dir / "subjects.md"
-    if subjects_path.exists() or subjects_path in planned_text:
-        subjects_text = planned_text.get(
-            subjects_path,
-            read_managed_text(memory_dir, subjects_path),
-        )
-        subjects, subject_parse_issues = parse_subject_registry(
-            subjects_path,
-            subjects_text,
-        )
-        subject_issues = subject_registry_issues(
-            subjects,
-            subject_parse_issues,
-            project_root,
-        )
-    else:
-        subjects = []
-        subject_issues = ["subjects.md: missing managed Subject registry"]
-
-    relation_issues = structured_relation_issues(
-        entries,
-        merged_subject_ids={
-            subject.subject_id
-            for subject in subjects
-            if subject.status == "merged"
-        },
-    )
-
-    reconciliation_issues = []
-    reconciliation_path = memory_dir / "reconciliations.md"
-    if reconciliation_path.exists() or reconciliation_path in planned_text:
-        reconciliation_text = planned_text.get(
-            reconciliation_path,
-            read_managed_text(memory_dir, reconciliation_path),
-        )
-        records, parse_issues = parse_reconciliations(
-            reconciliation_path,
-            reconciliation_text,
-            project_root,
-            include_invalid=True,
-        )
-        _valid, reconciliation_issues = validate_reconciliations(
-            records,
-            parse_issues,
-            tuple(entries),
-            tuple(subjects),
-        )
-
-    blockers = [
-        f"MC-CONFLICT-003 INVALID: {issue}"
-        for issue in subject_issues
-    ]
-    blockers.extend(
-        f"MC-CONFLICT-008 INVALID: Invalid Entry relation: {issue}"
-        for issue in relation_issues
-    )
-    blockers.extend(
-        "MC-CONFLICT-008 INVALID: Invalid or inconsistent reconciliation record: "
-        + (f"{issue.record_id}: " if issue.record_id else "")
-        + issue.message
-        for issue in reconciliation_issues
-    )
-    return list(dict.fromkeys(sorted(blockers)))
-
-
-def _planned_snapshot_blockers(
-    memory_dir: Path,
-    project_root: Path,
-    planned_text: dict[Path, str],
-) -> list[str]:
-    """Return integrity issues present in the planned post-mutation snapshot."""
-
-    return _snapshot_validation_issues(memory_dir, project_root, planned_text)
-
-
 def _subject_reference_blockers(
     memory_dir: Path,
     plans: list[FilePlan],
-    tombstone_updated: str | None,
+    snapshot: MemorySnapshot,
 ) -> list[str]:
     registry_plan = next(
         (plan for plan in plans if plan.path.relative_to(memory_dir).as_posix() == "subjects.md"),
@@ -453,20 +346,16 @@ def _subject_reference_blockers(
     }
     if not removed_ids:
         return []
-    planned_text = {plan.path: plan.updated for plan in plans}
-    if tombstone_updated is not None:
-        planned_text[memory_dir / "do-not-use.md"] = tombstone_updated
     references: dict[str, list[str]] = {subject_id: [] for subject_id in removed_ids}
-    for path in managed_markdown_files(memory_dir):
-        if path.name == "subjects.md" or path.name.casefold() == "readme.md":
+    for item in snapshot.files:
+        if item.relative in {"subjects.md", "reconciliations.md"} or item.path.name.casefold() == "readme.md":
             continue
-        text = planned_text.get(path, read_managed_text(memory_dir, path))
-        for entry in parse_structured_entries(path, text):
+        for entry in item.entries:
             for field in ("Subject", "Provisional-Subject"):
                 subject_id = entry.fields.get(field, "").casefold()
                 if subject_id in references:
                     references[subject_id].append(
-                        f"{path.relative_to(memory_dir).as_posix()}:{entry.entry_id}"
+                        f"{item.relative}:{entry.entry_id}"
                     )
     return [
         f"subjects.md: cannot remove {subject_id.upper()} while referenced by {', '.join(owners)}"
@@ -475,16 +364,18 @@ def _subject_reference_blockers(
     ]
 
 
-def _entry_reference_blockers(memory_dir: Path, entry_id: str | None) -> list[str]:
+def _entry_reference_blockers(
+    memory_dir: Path,
+    entry_id: str | None,
+    snapshot: MemorySnapshot,
+) -> list[str]:
     if not entry_id:
         return []
-    from .conflicts import canonical_entries
-
     relation_fields = (
         "Supersedes", "Superseded-By", "Promoted-From", "Promoted-To", "Exception-To"
     )
     blockers: list[str] = []
-    for entry in canonical_entries(memory_dir, include_archive=True):
+    for entry in snapshot.integrity_entries:
         if entry.entry_id.casefold() == entry_id.casefold():
             continue
         for field in relation_fields:
@@ -493,23 +384,11 @@ def _entry_reference_blockers(memory_dir: Path, entry_id: str | None) -> list[st
                 blockers.append(
                     f"{relative}:{entry.entry_id} {field} references selected Entry {entry_id}"
                 )
-    reconciliation_path = memory_dir / "reconciliations.md"
-    if reconciliation_path.exists():
-        text = read_managed_text(memory_dir, reconciliation_path)
-        from .reconciliations import parse_reconciliations
-
-        project_root = next(
-            (parent.parent for parent in (memory_dir, *memory_dir.parents) if parent.name == "docs"),
-            memory_dir.parent.parent,
-        )
-        records, parse_issues = parse_reconciliations(
-            reconciliation_path, text, project_root, include_invalid=True
-        )
-        for record in records:
-            if any(value.casefold() == entry_id.casefold() for value in record.entries):
-                blockers.append(
-                    f"reconciliations.md:{record.record_id} Entries references selected Entry {entry_id}"
-                )
+    for record in snapshot.reconciliations:
+        if any(value.casefold() == entry_id.casefold() for value in record.entries):
+            blockers.append(
+                f"reconciliations.md:{record.record_id} Entries references selected Entry {entry_id}"
+            )
     return sorted(blockers)
 
 
@@ -644,6 +523,12 @@ def _build_forget_mutation_plan(
         planned_text[tombstone_path] = tombstone_updated
     if changelog_updated is not None:
         planned_text[changelog_path] = changelog_updated
+    planned_snapshot = build_snapshot(
+        memory_dir,
+        project_root,
+        planned_text=planned_text,
+    )
+    planned_conflicts = analyze_snapshot(planned_snapshot)
     blockers = [
         f"{plan.path.relative_to(memory_dir).as_posix()}: "
         f"{unit.kind} contains non-removable matching content"
@@ -654,10 +539,25 @@ def _build_forget_mutation_plan(
         f"do-not-use.md: {unit.kind} contains non-removable matching content"
         for unit in tombstone_blockers
     )
-    blockers.extend(_subject_reference_blockers(memory_dir, plans, tombstone_updated))
-    blockers.extend(_entry_reference_blockers(memory_dir, getattr(args, "entry_id", None)))
     blockers.extend(
-        _planned_snapshot_blockers(memory_dir, project_root, planned_text)
+        _subject_reference_blockers(
+            memory_dir,
+            plans,
+            planned_snapshot,
+        )
+    )
+    blockers.extend(
+        _entry_reference_blockers(
+            memory_dir,
+            getattr(args, "entry_id", None),
+            planned_snapshot,
+        )
+    )
+    blockers.extend(
+        f"{finding.code} "
+        f"{finding.status.value}: {finding.message}"
+        for finding in planned_conflicts.findings
+        if finding.status in {ConflictStatus.INVALID, ConflictStatus.CONFLICT}
     )
     blockers.extend(extra_blockers)
     total_matches = sum(len(plan.matches) for plan in plans)

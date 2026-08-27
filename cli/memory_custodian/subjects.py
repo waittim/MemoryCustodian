@@ -39,6 +39,9 @@ FACETS = {
     "lifecycle",
 }
 SUBJECT_REQUIRED_TYPES = {"decision", "constraint", "tombstone", "do-not-use", "area"}
+# Stable conflict code for a Subject merge reference that is missing, points
+# at an inactive/merged Subject, or violates the reciprocal merge invariant.
+SUBJECT_REFERENCE_CONFLICT_CODE = "MC-CONFLICT-005"
 # Protocol 0.6 deliberately permits the complete canonical Facet vocabulary for
 # every managed type. Keeping the matrix explicit makes admission deterministic
 # and leaves later protocol versions a migration point for narrower combinations.
@@ -101,6 +104,15 @@ class SubjectRegistryIssue(str):
         instance = super().__new__(cls, message)
         instance.conflict_code = conflict_code
         return instance
+
+
+def _subject_reference_issue(message: str) -> SubjectRegistryIssue:
+    """Attach the stable code at the Subject merge invariant boundary."""
+
+    return SubjectRegistryIssue(
+        message,
+        conflict_code=SUBJECT_REFERENCE_CONFLICT_CODE,
+    )
 
 
 def normalize_alias(value: str) -> str:
@@ -373,13 +385,21 @@ def subject_registry_issues(
         if subject.status not in {"active", "merged"}:
             issues.append(f"subjects.md: {subject.subject_id} has invalid Status {subject.status!r}")
         if subject.status == "merged" and not subject.merged_into:
-            issues.append(f"subjects.md: {subject.subject_id} merged Subject lacks Merged-Into")
+            issues.append(_subject_reference_issue(
+                f"subjects.md: {subject.subject_id} merged Subject lacks Merged-Into"
+            ))
         if subject.status == "active" and subject.merged_into:
-            issues.append(f"subjects.md: {subject.subject_id} active Subject cannot declare Merged-Into")
+            issues.append(_subject_reference_issue(
+                f"subjects.md: {subject.subject_id} active Subject cannot declare Merged-Into"
+            ))
         if subject.status == "merged" and subject.merged_from:
-            issues.append(f"subjects.md: {subject.subject_id} merged Subject cannot declare Merged-From")
+            issues.append(_subject_reference_issue(
+                f"subjects.md: {subject.subject_id} merged Subject cannot declare Merged-From"
+            ))
         if len({item.casefold() for item in subject.merged_from}) != len(subject.merged_from):
-            issues.append(f"subjects.md: {subject.subject_id} has duplicate Merged-From values")
+            issues.append(_subject_reference_issue(
+                f"subjects.md: {subject.subject_id} has duplicate Merged-From values"
+            ))
         try:
             validate_subject_kind(subject.kind)
         except ValueError as exc:
@@ -419,16 +439,16 @@ def subject_registry_issues(
                 continue
             target = by_id.get(subject.merged_into.casefold())
             if target is None or target.status != "active" or target.subject_id.casefold() == subject.subject_id.casefold():
-                issues.append(
+                issues.append(_subject_reference_issue(
                     f"subjects.md: {subject.subject_id} Merged-Into must reference a different active Subject"
-                )
+                ))
         elif subject.status == "active" and subject.merged_from:
             for source_id in subject.merged_from:
                 source = by_id.get(source_id.casefold())
                 if source is None or source.status != "merged" or (source.merged_into or "").casefold() != subject.subject_id.casefold():
-                    issues.append(
+                    issues.append(_subject_reference_issue(
                         f"subjects.md: {subject.subject_id} Merged-From references a non-reciprocal source {source_id}"
-                    )
+                    ))
     return issues
 
 

@@ -6,16 +6,9 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
-from .entries import (
-    StructuredEntry,
-    parse_entry_inventory,
-    parse_structured_entries,
-    structured_relation_issues,
-)
-from .reconciliations import parse_reconciliations, validate_reconciliations
+from .entries import StructuredEntry
 from .structural import active_structural_operand_issues, subject_index
-from .subjects import load_subjects, validate_subject_registry
-from .protocol import canonical_memory_files, managed_markdown_files, read_managed_text
+from .snapshot import MemorySnapshot, build_snapshot
 
 
 # The Protocol 0.7 contract reserves 001-009 for specific structural
@@ -40,6 +33,7 @@ class ConflictFinding:
     subject_id: str = ""
     facet: str = ""
     scopes: tuple[str, ...] = ()
+    origin: str = "general"
 
 
 @dataclass(frozen=True)
@@ -56,19 +50,8 @@ def _status(findings: list[ConflictFinding]) -> ConflictStatus:
 
 
 def canonical_entries(memory_dir: Path, *, include_archive: bool = False) -> tuple[StructuredEntry, ...]:
-    entries: list[StructuredEntry] = []
-    if not memory_dir.exists():
-        return ()
-    for path in canonical_memory_files(memory_dir, include_archive=include_archive):
-        relative = path.relative_to(memory_dir).as_posix()
-        try:
-            entries.extend(parse_structured_entries(path, read_managed_text(memory_dir, path)))
-        except ValueError:
-            # The integrity pass in analyze_conflicts emits the actionable
-            # finding; index consumers should still be able to inventory the
-            # remaining valid units.
-            continue
-    return tuple(entries)
+    snapshot = build_snapshot(memory_dir)
+    return snapshot.relation_entries if include_archive else snapshot.entries
 
 
 def _entry_index(entries: tuple[StructuredEntry, ...]) -> dict[str, list[StructuredEntry]]:
@@ -84,77 +67,73 @@ def analyze_conflicts(
     matched_areas: tuple[str, ...] = (),
     included_modules: tuple[str, ...] | None = None,
 ) -> ConflictResult:
-    project_root = next(
-        (parent.parent for parent in (memory_dir, *memory_dir.parents) if parent.name == "docs"),
-        memory_dir.parent.parent,
+    return analyze_snapshot(
+        build_snapshot(memory_dir),
+        matched_areas=matched_areas,
+        included_modules=included_modules,
     )
+
+
+def analyze_snapshot(
+    snapshot: MemorySnapshot,
+    *,
+    matched_areas: tuple[str, ...] = (),
+    included_modules: tuple[str, ...] | None = None,
+) -> ConflictResult:
+    """Analyze one already-built snapshot without rereading managed memory."""
+
+    memory_dir = snapshot.memory_dir
     findings: list[ConflictFinding] = []
-    try:
-        subject_records = load_subjects(memory_dir)
-    except ValueError as exc:
-        # Subject parsing is a shared conflict input. Keep lexical failures in
-        # the structured result so callers get a stable status/code while
-        # retaining the parser's actionable detail.
-        subject_records = []
-        findings.append(ConflictFinding(
-            _SUBJECT_REGISTRY_INVALID_CODE,
+    subject_records = list(snapshot.subjects)
+    findings.extend(
+        ConflictFinding(
+            getattr(issue, "conflict_code", None) or _SUBJECT_REGISTRY_INVALID_CODE,
             ConflictStatus.INVALID,
-            f"subjects.md: Subject registry parsing failed: {exc}",
-        ))
-    else:
-        try:
-            subject_issues = validate_subject_registry(memory_dir, project_root)
-        except ValueError as exc:
-            subject_issues = [
-                f"subjects.md: Subject registry parsing failed: {exc}"
-            ]
-        findings.extend(
-            ConflictFinding(
-                getattr(issue, "conflict_code", None) or _SUBJECT_REGISTRY_INVALID_CODE,
-                ConflictStatus.INVALID,
-                issue,
-            )
-            for issue in subject_issues
+            issue,
+            origin="subject-registry",
         )
+        for issue in snapshot.subject_issues
+    )
     structural_subjects = subject_index(subject_records)
     # Keep live entries as the owner/context universe.  Lifecycle relations
     # and Entry-ID uniqueness, however, span the managed archive as well: a
     # current Entry may legitimately supersede a historical Entry that has
     # already been moved out of the live canonical file.
-    entries = canonical_entries(memory_dir)
-    relation_entries = canonical_entries(memory_dir, include_archive=True)
-    canonical_paths = set(canonical_memory_files(memory_dir))
-    integrity_paths = set(canonical_memory_files(memory_dir, include_archive=True))
-    for path in integrity_paths:
-        relative = path.relative_to(memory_dir).as_posix()
-        parsed, entry_issues = parse_entry_inventory(
-            path, read_managed_text(memory_dir, path), relative, project_root,
-            require_active_identity=not relative.startswith("archive/"),
-        )
+    entries = snapshot.entries
+    relation_entries = snapshot.relation_entries
+    canonical_paths = {
+        item.path for item in snapshot.files
+        if item.canonical and not item.archive
+    }
+    for item in snapshot.files:
+        if not item.canonical:
+            continue
         findings.extend(
             ConflictFinding(
                 "MC-CONFLICT-007", ConflictStatus.INVALID, issue,
-                tuple(entry.entry_id for entry in parsed if entry.entry_id),
+                tuple(entry.entry_id for entry in item.entries if entry.entry_id),
+                origin="entry-schema",
             )
-            for issue in entry_issues
+            for issue in item.conflict_entry_issues
         )
-    for path in managed_markdown_files(memory_dir):
-        relative = path.relative_to(memory_dir).as_posix()
+    for item in snapshot.files:
+        relative = item.relative
         if relative in {"subjects.md", "reconciliations.md"}:
-            # These registries have dedicated parsers above/below.  Do not
-            # send them through the Entry parser as an unrelated storage
-            # check, especially when their Markdown is lexically malformed.
             continue
-        if path in canonical_paths or path.name.casefold() == "readme.md":
+        if (
+            item.path in canonical_paths
+            or item.archive
+            or relative.casefold().endswith("/readme.md")
+            or relative.casefold() == "readme.md"
+        ):
             continue
-        if path.relative_to(memory_dir).as_posix().startswith("archive/"):
-            continue
-        for entry in parse_structured_entries(path, read_managed_text(memory_dir, path)):
+        for entry in item.entries:
             if entry.status == "active":
                 findings.append(ConflictFinding(
                     "MC-CONFLICT-007", ConflictStatus.INVALID,
                     "Active Entry is outside canonical manifest-authorized storage.",
                     (entry.entry_id,),
+                    origin="entry-schema",
                 ))
     selected_modules = set(included_modules) if included_modules is not None else None
     by_id = _entry_index(entries)
@@ -165,15 +144,9 @@ def analyze_conflicts(
                 "MC-CONFLICT-008", ConflictStatus.INVALID,
                 "Duplicate Entry ID prevents deterministic relation resolution.",
                 tuple(entry.entry_id for entry in matches),
+                origin="entry-identity",
             ))
-    merged_subject_ids = {
-        subject.subject_id
-        for subject in subject_records
-        if subject.status == "merged"
-    }
-    for issue in structured_relation_issues(
-        list(relation_entries), merged_subject_ids=merged_subject_ids,
-    ):
+    for issue in snapshot.relation_issues:
         entry_ids = tuple(
             entry.entry_id
             for entry in relation_entries
@@ -182,6 +155,7 @@ def analyze_conflicts(
         findings.append(ConflictFinding(
             "MC-CONFLICT-008", ConflictStatus.INVALID,
             f"Invalid Entry relation: {issue}", entry_ids,
+            origin="entry-relation",
         ))
     owners: dict[tuple[str, str, str], list[StructuredEntry]] = {}
     by_subject_facet: dict[tuple[str, str], list[StructuredEntry]] = {}
@@ -198,6 +172,7 @@ def analyze_conflicts(
                         code, ConflictStatus.INVALID, issue.message,
                         (entry.entry_id,), entry.fields.get("Subject", ""),
                         entry.fields.get("Facet", ""), (entry.scope,),
+                        "subject-reference",
                     ))
         if entry.status != "active":
             continue
@@ -221,6 +196,7 @@ def analyze_conflicts(
                 code, ConflictStatus.INVALID,
                 issue.message,
                 (entry.entry_id,), subject_id, facet, (entry.scope,),
+                "subject-reference",
             ))
         if operand_issues:
             continue
@@ -233,6 +209,7 @@ def analyze_conflicts(
                 "Exception-To is valid only on an active area-scoped entry.",
                 (entry.entry_id, entry.fields["Exception-To"]), subject_id, facet,
                 (entry.scope,),
+                "exception-relation",
             ))
 
     for entry in entries:
@@ -257,6 +234,7 @@ def analyze_conflicts(
                 (entry.entry_id, entry.fields["Exception-To"]),
                 entry.fields.get("Subject", ""), entry.fields.get("Facet", ""),
                 (entry.scope, "project"),
+                "exception-relation",
             ))
 
     for (scope, subject_id, facet), matches in sorted(owners.items()):
@@ -287,6 +265,7 @@ def analyze_conflicts(
                         "Invalid Exception-To relation.",
                         (area_entry.entry_id, exception_to), subject_id, facet,
                         (area_entry.scope, "project"),
+                        "exception-relation",
                     ))
             elif project_entries:
                 findings.append(ConflictFinding(
@@ -294,6 +273,7 @@ def analyze_conflicts(
                     "Project/area overlap requires explicit exception review.",
                     tuple(sorted([area_entry.entry_id, *(entry.entry_id for entry in project_entries)])),
                     subject_id, facet, ("project", area_entry.scope),
+                    "structural-conflict",
                 ))
 
         matched = [
@@ -307,15 +287,14 @@ def analyze_conflicts(
                 "Matched areas expose overlapping Subject/Facet ownership.",
                 tuple(sorted(entry.entry_id for entry in matched)), subject_id, facet,
                 tuple(sorted(matched_scopes)),
+                "structural-conflict",
             ))
 
     # Reconciliation records may acknowledge a live Entry against its
     # historical replacement in archive/.  Validate those records against
     # the same full lifecycle inventory used above, while keeping `entries`
     # (and therefore owner/conflict analysis) live-only.
-    findings.extend(_reconciliation_findings(
-        memory_dir, relation_by_id, subjects=subject_records,
-    ))
+    findings.extend(_reconciliation_findings(snapshot))
     unique = {
         (item.code, item.status, item.message, item.entry_ids, item.subject_id, item.facet, item.scopes): item
         for item in findings
@@ -327,44 +306,20 @@ def analyze_conflicts(
     return ConflictResult(_status(ordered), tuple(ordered))
 
 
-def _reconciliation_findings(
-    memory_dir: Path,
-    entries: dict[str, list[StructuredEntry]],
-    *,
-    subjects=None,
-) -> list[ConflictFinding]:
-    path = memory_dir / "reconciliations.md"
-    if not path.exists():
+def _reconciliation_findings(snapshot: MemorySnapshot) -> list[ConflictFinding]:
+    """Convert snapshot reconciliation diagnostics to public findings."""
+
+    path = snapshot.memory_dir / "reconciliations.md"
+    if not path.exists() and not snapshot.reconciliations:
         return []
-    project_root = next(
-        (parent.parent for parent in (memory_dir, *memory_dir.parents) if parent.name == "docs"),
-        memory_dir.parent.parent,
-    )
-    try:
-        records, parse_issues = parse_reconciliations(
-            path, read_managed_text(memory_dir, path), project_root, include_invalid=True
-        )
-    except ValueError as exc:
-        # Reconciliation parsing is part of conflict analysis, rather than a
-        # CLI-only diagnostic. Preserve the exact lexical error for callers
-        # while using the reconciliation integrity finding code.
-        return [ConflictFinding(
-            "MC-CONFLICT-008",
-            ConflictStatus.INVALID,
-            f"reconciliations.md: Reconciliation parsing failed: {exc}",
-        )]
-    all_entries = tuple(entry for matches in entries.values() for entry in matches)
-    _valid, issues = validate_reconciliations(
-        records, parse_issues, all_entries,
-        tuple(subjects) if subjects is not None else tuple(load_subjects(memory_dir)),
-    )
     return [
         ConflictFinding(
             "MC-CONFLICT-008", ConflictStatus.INVALID,
             f"Invalid or inconsistent reconciliation record: {issue.message}",
             issue.entries,
+            origin="reconciliation",
         )
-        for issue in issues
+        for issue in snapshot.reconciliation_issues
     ]
 
 

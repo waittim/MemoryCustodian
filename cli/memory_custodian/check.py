@@ -15,7 +15,6 @@ from .protocol import (
     estimate_tokens,
     long_decision_entries,
     manifest_contract_metadata,
-    managed_markdown_files,
     parse_markdown_units,
     parse_manifest_task_file_specs,
     read_managed_text,
@@ -28,24 +27,16 @@ from .protocol import (
     validate_manifest_routes,
 )
 from .entries import (
-    CANDIDATE_ONLY_EVIDENCE,
-    INTERNAL_EVIDENCE,
-    VALID_SCOPES_RE,
-    entry_unit_issues,
     heading_entry_ids,
     memory_entry_ids,
     parse_structured_entries,
-    structured_entry_schema_issues,
-    structured_entry_storage_issues,
-    validate_evidence,
 )
 from .scanning import scan_text
 from .integrity import cross_unit_integrity_findings
-from .subjects import FACETS, load_subjects, subject_indexes
 from .templates import CORE_FILES, brief_needs_curation
 from .conflicts import (
     ConflictStatus,
-    analyze_conflicts,
+    analyze_snapshot,
     render_conflict_result,
 )
 from .quality import (
@@ -61,6 +52,7 @@ from .local_overlay import (
     read_local_private_file,
     validated_project_identity,
 )
+from .snapshot import build_snapshot
 
 
 def _read(path: Path) -> str:
@@ -154,7 +146,7 @@ def run(args) -> int:
                 f"{specialized_protocol.message}"
             )
             return 1
-        result = analyze_conflicts(memory_dir)
+        result = analyze_snapshot(build_snapshot(memory_dir, project_root))
         render_conflict_result(result)
         if getattr(args, "merge_base", None):
             from .merge_review import merge_review
@@ -172,7 +164,6 @@ def run(args) -> int:
     issues: list[str] = []
     warnings: list[str] = []
     detailed_findings = []
-    active_identities: dict[tuple[str, str, str], tuple[str, str]] = {}
 
     for name in CORE_FILES:
         if not (memory_dir / name).exists():
@@ -203,115 +194,20 @@ def run(args) -> int:
                     if issue not in issues:
                         issues.append(issue)
 
-    subjects = load_subjects(memory_dir)
-    subjects_by_id, _subjects_by_alias, _subjects_by_ref = subject_indexes(subjects)
+    snapshot = build_snapshot(memory_dir, project_root)
 
     brief = read_managed_text(memory_dir, memory_dir / "brief.md", required=False)
     if brief and brief_needs_curation(brief):
         issues.append("brief.md: generated scaffold still needs real project purpose, direction, and system context")
 
-    for path in managed_markdown_files(memory_dir):
-        relative = path.relative_to(memory_dir).as_posix()
-        text = read_managed_text(memory_dir, path)
-        issues.extend(entry_unit_issues(text, relative))
-        detailed_findings.extend(scan_text(path, text))
-        parsed_entries = parse_structured_entries(path, text)
-        for entry in parsed_entries:
-            issues.extend(structured_entry_schema_issues(entry, relative))
-            issues.extend(structured_entry_storage_issues(entry, relative))
-        if relative.startswith("archive/"):
+    for item in snapshot.files:
+        relative = item.relative
+        text = item.text
+        issues.extend(item.check_issues)
+        warnings.extend(item.check_warnings)
+        detailed_findings.extend(scan_text(item.path, text))
+        if item.archive:
             continue
-        for entry in parsed_entries:
-            expected_inbox = relative == "inbox.md"
-            if entry.status not in {"active", "candidate", "superseded", "promoted"}:
-                issues.append(f"{relative}: {entry.entry_id} has invalid Status {entry.status!r}")
-            if entry.status == "candidate" and not expected_inbox:
-                issues.append(f"{relative}: candidate {entry.entry_id} must be stored in inbox.md")
-            if expected_inbox and entry.status not in {"candidate", "promoted"}:
-                issues.append(
-                    f"{relative}: {entry.entry_id} has Status {entry.status!r}; "
-                    "inbox entries must be candidate or promoted"
-                )
-            if entry.status == "promoted" and not entry.fields.get("Promoted-To"):
-                issues.append(f"{relative}: promoted entry {entry.entry_id} has no Promoted-To")
-            if entry.status == "superseded" and not entry.fields.get("Superseded-By"):
-                issues.append(f"{relative}: superseded entry {entry.entry_id} has no Superseded-By")
-            if entry.status == "active":
-                if not entry.evidence:
-                    issues.append(f"{relative}: active entry {entry.entry_id} has no Evidence")
-                elif all(item in CANDIDATE_ONLY_EVIDENCE for item in entry.evidence):
-                    issues.append(f"{relative}: active entry {entry.entry_id} has only unconfirmed Evidence")
-                if "legacy-unverified" in entry.evidence:
-                    warnings.append(f"{relative}: {entry.entry_id} uses migration-only legacy-unverified Evidence")
-            if entry.status in {"active", "candidate", "superseded", "promoted"}:
-                candidate_entry = entry.status in {"candidate", "promoted"}
-                if entry.evidence:
-                    try:
-                        validate_evidence(
-                            entry.evidence,
-                            project_root,
-                            candidate=candidate_entry,
-                            allow_missing=True,
-                            allow_internal=not candidate_entry,
-                        )
-                    except ValueError:
-                        issues.append(
-                            f"{relative}: {entry.entry_id} has invalid Evidence schema "
-                            "or unsafe source path"
-                        )
-                elif candidate_entry:
-                    issues.append(
-                        f"{relative}: {entry.entry_id} has no Evidence"
-                    )
-            if not VALID_SCOPES_RE.fullmatch(entry.scope):
-                issues.append(f"{relative}: {entry.entry_id} has invalid Scope {entry.scope!r}")
-            code = entry.entry_id.split("-", 2)[1].upper()
-            managed_subject_type = code in {"DEC", "CON", "DNU", "AREA"}
-            subject_id = entry.fields.get("Subject", "")
-            facet = entry.fields.get("Facet", "")
-            if entry.status == "active" and managed_subject_type:
-                if not subject_id or not facet:
-                    warnings.append(
-                        f"{relative}: {entry.entry_id} legacy Subject/Facet coverage is incomplete"
-                    )
-                else:
-                    subject = subjects_by_id.get(subject_id.casefold())
-                    if subject is None:
-                        issues.append(
-                            f"{relative}: {entry.entry_id} references missing or inactive Subject {subject_id}"
-                        )
-                    if facet not in FACETS:
-                        issues.append(
-                            f"{relative}: {entry.entry_id} has invalid Facet {facet!r}"
-                        )
-                    identity = (entry.scope.casefold(), subject_id.casefold(), facet.casefold())
-                    owner = active_identities.get(identity)
-                    if owner:
-                        issues.append(
-                            f"{relative}: {entry.entry_id} duplicates active structural owner "
-                            f"{owner[0]} in {owner[1]} for Scope+Subject+Facet"
-                        )
-                    else:
-                        active_identities[identity] = (entry.entry_id, relative)
-            if entry.status in {"candidate", "promoted"}:
-                provisional_subject = entry.fields.get("Provisional-Subject", "")
-                provisional_facet = entry.fields.get("Provisional-Facet", "")
-                if bool(provisional_subject) != bool(provisional_facet):
-                    issues.append(
-                        f"{relative}: {entry.entry_id} must declare Provisional-Subject and "
-                        "Provisional-Facet together"
-                    )
-                elif provisional_subject:
-                    if provisional_subject.casefold() not in subjects_by_id:
-                        issues.append(
-                            f"{relative}: {entry.entry_id} references missing or inactive "
-                            f"Provisional-Subject {provisional_subject}"
-                        )
-                    if provisional_facet not in FACETS:
-                        issues.append(
-                            f"{relative}: {entry.entry_id} has invalid "
-                            f"Provisional-Facet {provisional_facet!r}"
-                        )
         if relative in {
             "decisions.md", "constraints.md", "do-not-use.md", "preferences.md", "inbox.md"
         } or relative.startswith(("areas/", "rules/", "profiles/")):
@@ -349,7 +245,7 @@ def run(args) -> int:
                 f"{relative}: near limit ({tokens}/{budget} tokens); maintenance recommended before "
                 f"the next write; run `memory-custodian compact --target {relative}`"
             )
-        for title, entry_tokens in long_decision_entries(read_managed_text(memory_dir, path)):
+        for title, entry_tokens in long_decision_entries(text):
             issues.append(
                 f"{relative}: decision {title!r} is too long ({entry_tokens}/{DECISION_ENTRY_BUDGET} tokens); "
                 "shorten it semantically and move supporting detail outside the decision entry"
@@ -396,6 +292,7 @@ def run(args) -> int:
         memory_dir,
         manifest,
         project_id=overlay_project_id,
+        snapshot=snapshot,
     )
     issues.extend(cross_issues)
     warnings.extend(cross_warnings)
@@ -404,11 +301,11 @@ def run(args) -> int:
         warnings.extend(_check_agent_entry(project_root / entry_name))
 
     all_ids: dict[str, list[str]] = {}
-    for path in managed_markdown_files(memory_dir):
-        if path.name.casefold() == "readme.md":
+    for item in snapshot.files:
+        if item.path.name.casefold() == "readme.md":
             continue
-        for value in heading_entry_ids(read_managed_text(memory_dir, path)):
-            all_ids.setdefault(value.casefold(), []).append(path.relative_to(memory_dir).as_posix())
+        for value in heading_entry_ids(item.text):
+            all_ids.setdefault(value.casefold(), []).append(item.relative)
     for value, paths in all_ids.items():
         if len(paths) > 1:
             issues.append(f"duplicate Entry ID {value.upper()} in: {', '.join(paths)}")

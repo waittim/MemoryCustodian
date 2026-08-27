@@ -3663,7 +3663,8 @@ class ForgetAndHistoryReleaseTests(unittest.TestCase):
             ]
             code, preview, error = capture(args)
             self.assertEqual(code, 0, preview + error)
-            self.assertIn("MC-CONFLICT-003", preview)
+            self.assertIn("MC-CONFLICT-005", preview)
+            self.assertNotIn("MC-CONFLICT-003", preview)
             self.assertIn("Merged-From references a non-reciprocal source", preview)
             plan_id = re.search(r"Plan ID: ([0-9a-f]{16})", preview).group(1)
             code, output, error = capture([
