@@ -55,8 +55,20 @@ def _git(project_root: Path, *args: str) -> str:
 def _show(project_root: Path, revision: str, path: str) -> str:
     try:
         return _git(project_root, "show", f"{revision}:{path}")
-    except ValueError:
-        return ""
+    except ValueError as exc:
+        # A valid revision may legitimately omit an optional managed file (or
+        # predate the Subject registry).  Keep that historical behavior, but
+        # do not turn an unrelated Git failure into an empty file: the caller
+        # must report that review as unavailable and block it.  A second,
+        # exact ls-tree lookup distinguishes the two cases without relying on
+        # localized `git show` diagnostics.
+        try:
+            listed = _git(project_root, "ls-tree", "-r", "--name-only", revision, "--", path)
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            raise exc
+        if path not in listed.splitlines():
+            return ""
+        raise
 
 
 def _files(project_root: Path, revision: str, memory_relative: str) -> tuple[str, ...]:
@@ -121,7 +133,10 @@ def _subjects(
     text = _show(project_root, revision, registry)
     if not text:
         return (), (f"{registry}: missing managed Subject registry",)
-    subjects, parse_issues = parse_subject_registry(Path(registry), text)
+    try:
+        subjects, parse_issues = parse_subject_registry(Path(registry), text)
+    except (TypeError, ValueError) as exc:
+        return (), (f"{registry}: Subject registry parsing failed: {exc}",)
     return tuple(subjects), tuple(subject_registry_issues(
         subjects, parse_issues, project_root,
     ))
@@ -134,10 +149,14 @@ def _reconciliations(
     entries: tuple[StructuredEntry, ...],
     subjects: tuple[Subject, ...],
 ) -> tuple[tuple[ReconciliationRecord, ...], tuple[ReconciliationIssue, ...]]:
-    records, parse_issues = parse_reconciliations(
-        Path(relative), _show(project_root, revision, relative), project_root,
-        include_invalid=True,
-    )
+    try:
+        records, parse_issues = parse_reconciliations(
+            Path(relative), _show(project_root, revision, relative), project_root,
+            include_invalid=True,
+        )
+    except (TypeError, ValueError) as exc:
+        parse_issues = (f"{relative}: Reconciliation parsing failed: {exc}",)
+        records = ()
     valid, issues = validate_reconciliations(records, parse_issues, entries, subjects)
     return (() if issues else valid), issues
 
@@ -273,7 +292,7 @@ def merge_review(project_root: Path, memory_dir: Path, target_ref: str) -> Merge
     except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
         return MergeReviewResult(
             "Merge review unavailable: " + str(exc) + "\nConflict-free status was not established.",
-            False,
+            True,
         )
 
     left_entries = _changed(base_entries, head_entries)
