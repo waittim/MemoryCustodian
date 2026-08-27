@@ -32,6 +32,14 @@ CANDIDATE_ONLY_EVIDENCE = {"agent-observed", "conversation-unconfirmed"}
 INTERNAL_EVIDENCE = {"legacy-unverified"}
 VALID_SCOPES_RE = re.compile(r"^(?:project|area:[A-Za-z0-9][A-Za-z0-9._-]*|local-user|local-machine)$")
 FIELD_RE = re.compile(r"^([A-Za-z][A-Za-z-]*):(?:\s*(.*))?$")
+# This visible entity is a private, line-local writer escape.  Indenting a
+# protocol-shaped body line cannot be made unambiguous: every indentation width
+# at or above four spaces is valid Markdown indented code.  The marker keeps
+# the rendered line at column zero while giving the parser an explicit
+# representation to decode, without putting hidden format characters in the
+# source.  A leading marker in user content is doubled so the encoding remains
+# reversible for renderer input as well.
+BODY_SAFETY_SENTINEL = "&#8283;"
 
 
 @dataclass(frozen=True)
@@ -285,8 +293,12 @@ def line_safe_markdown_body(value: str) -> str:
             fence_length = len(marker)
             safe.append(line)
             continue
-        if FIELD_RE.match(line) or line.startswith(("## ", "- ", "* ", "+ ")):
-            safe.append("    " + line)
+        if line.startswith(BODY_SAFETY_SENTINEL):
+            # Escape the sentinel itself before the parser's protocol-shape
+            # check so literal user content cannot be consumed as encoding.
+            safe.append(BODY_SAFETY_SENTINEL + line)
+        elif FIELD_RE.match(line) or line.startswith(("## ", "- ", "* ", "+ ")):
+            safe.append(BODY_SAFETY_SENTINEL + line)
         else:
             safe.append(line)
     if fence_character is not None:
@@ -325,23 +337,33 @@ def _normalized_body(value: str) -> str:
     return "\n".join(lines)
 
 
-def _decoded_body_line(raw_line: str, visible) -> str:
-    """Undo the renderer's safety indent for protocol-shaped body lines.
+def _decoded_body_line(raw_line: str, visible) -> str | None:
+    """Decode an explicit writer escape or preserve a Markdown code line.
 
-    ``line_safe_markdown_body`` protects a body line that would otherwise be
-    parsed as an Entry field, heading, or top-level bullet by prefixing four
-    spaces.  Keep ordinary continuation indentation untouched, but decode
-    that canonical safety representation when it is encountered outside a
-    fence.  Fenced lines are not passed to this helper and therefore remain
-    opaque source content.
+    Protocol-shaped body lines are prefixed with ``BODY_SAFETY_SENTINEL`` by
+    ``line_safe_markdown_body``.  Unlike an indentation heuristic, this
+    representation is distinguishable from every native four-, five-, or
+    eight-space indented-code line.  A doubled sentinel is the escaped form
+    for literal user content that starts with the sentinel.  Fenced lines are
+    not passed to this helper and therefore remain opaque source content.
+
+    ``None`` means the line is not an encoded body line and should continue
+    through the normal field parser.  An ordinary indented line is returned
+    unchanged so callers retain its exact source whitespace.
     """
 
-    if not visible.indented_code or not raw_line.startswith("    "):
+    if raw_line.startswith(BODY_SAFETY_SENTINEL):
+        candidate = raw_line[len(BODY_SAFETY_SENTINEL):]
+        if candidate.startswith(BODY_SAFETY_SENTINEL):
+            return candidate
+        if FIELD_RE.match(candidate) or candidate.startswith(("## ", "- ", "* ", "+ ")):
+            return candidate
+        # A non-protocol line with a lone sentinel is ordinary user text, not
+        # a writer escape.  Leave it for the normal non-field body path.
+        return None
+    if visible.indented_code:
         return raw_line
-    candidate = raw_line[4:]
-    if FIELD_RE.match(candidate) or candidate.startswith(("## ", "- ", "* ", "+ ")):
-        return candidate
-    return raw_line
+    return None
 
 
 def _validate_rendered_entry(
@@ -523,9 +545,12 @@ def parse_structured_entries(path: Path, text: str) -> list[StructuredEntry]:
                 if current_field is not None:
                     current_body.append(raw_line)
                 continue
+            if current_field is not None:
+                decoded = _decoded_body_line(raw_line, visible)
+                if decoded is not None:
+                    current_body.append(decoded)
+                    continue
             if visible.indented_code:
-                if current_field is not None:
-                    current_body.append(_decoded_body_line(raw_line, visible))
                 continue
             line = visible.text
             matched_field = FIELD_RE.match(line)

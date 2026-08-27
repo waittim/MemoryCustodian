@@ -19,6 +19,7 @@ from unittest.mock import patch
 from memory_custodian.conflicts import analyze_conflicts
 from memory_custodian.context import ContextRoutingResult
 from memory_custodian.entries import (
+    BODY_SAFETY_SENTINEL,
     entry_unit_issues,
     heading_entry_ids,
     memory_entry_ids,
@@ -4834,6 +4835,83 @@ class MarkdownUnitBoundaryAuditTests(unittest.TestCase):
         self.assertEqual(len(parsed_rendered), 1)
         self.assertEqual(parsed_rendered[0].field_bodies["Decision"], message)
         self.assertEqual(parsed_rendered[0].field_bodies["Reason"], "Because.")
+
+    def test_indented_code_is_not_decoded_as_writer_safety(self):
+        for width in (4, 5, 8):
+            with self.subTest(width=width):
+                message = "\n".join(
+                    f"{' ' * width}{line}"
+                    for line in ("Status: example", "## heading", "- bullet")
+                )
+                source = (
+                    "## MC-DEC-20260827-aaaaaaaa — Native indented code\n\n"
+                    "Status: active\nScope: project\nEvidence:\n- user-confirmed\n\n"
+                    f"Decision:\n{message}\n"
+                )
+                parsed = parse_structured_entries(Path("decisions.md"), source)
+                self.assertEqual(len(parsed), 1)
+                self.assertEqual(parsed[0].field_bodies["Decision"], message)
+
+        rendered_active = render_active_entry(
+            "decision", "MC-DEC-20260827-bbbbbbbb", "Native indented code",
+            "    Status: example\n    ## heading\n    - bullet",
+            None, "project", ("user-confirmed",),
+        )
+        self.assertEqual(
+            parse_structured_entries(Path("decisions.md"), rendered_active)[0]
+            .field_bodies["Decision"],
+            "    Status: example\n    ## heading\n    - bullet",
+        )
+
+        rendered_candidate = render_candidate_entry(
+            "MC-INBOX-20260827-cccccccc", "Native indented code", "decision",
+            "    Status: example\n    ## heading\n    - bullet",
+            "project", ("agent-observed",), "Review later.",
+        )
+        self.assertEqual(
+            parse_structured_entries(Path("inbox.md"), rendered_candidate)[0]
+            .field_bodies["Statement"],
+            "    Status: example\n    ## heading\n    - bullet",
+        )
+
+    def test_writer_safety_encoding_remains_reversible_for_column_zero_lines(self):
+        message = "Status: example\n## heading\n- bullet"
+        rendered_active = render_active_entry(
+            "decision", "MC-DEC-20260827-dddddddd", "Column-zero protocol text",
+            message, None, "project", ("user-confirmed",),
+        )
+        self.assertIn(BODY_SAFETY_SENTINEL + "Status: example", rendered_active)
+        self.assertNotIn("\u2063", rendered_active)
+        self.assertEqual(
+            parse_structured_entries(Path("decisions.md"), rendered_active)[0]
+            .field_bodies["Decision"],
+            message,
+        )
+
+        rendered_candidate = render_candidate_entry(
+            "MC-INBOX-20260827-eeeeeeee", "Column-zero protocol text", "decision",
+            message, "project", ("agent-observed",), "Review later.",
+        )
+        self.assertIn(BODY_SAFETY_SENTINEL + "Status: example", rendered_candidate)
+        self.assertNotIn("\u2063", rendered_candidate)
+        self.assertEqual(
+            parse_structured_entries(Path("inbox.md"), rendered_candidate)[0]
+            .field_bodies["Statement"],
+            message,
+        )
+
+        literal_sentinel = BODY_SAFETY_SENTINEL + "Status: literal content"
+        rendered_literal = render_active_entry(
+            "decision", "MC-DEC-20260827-ffffffff", "Literal sentinel",
+            literal_sentinel, None, "project", ("user-confirmed",),
+        )
+        self.assertNotIn("\u2063", rendered_literal)
+        self.assertIn(BODY_SAFETY_SENTINEL + BODY_SAFETY_SENTINEL, rendered_literal)
+        self.assertEqual(
+            parse_structured_entries(Path("decisions.md"), rendered_literal)[0]
+            .field_bodies["Decision"],
+            literal_sentinel,
+        )
 
     def test_subjects_ignore_comments_and_reject_duplicate_scalars(self):
         commented_id = "MC-SUBJ-20200101-aaaaaaaa"
