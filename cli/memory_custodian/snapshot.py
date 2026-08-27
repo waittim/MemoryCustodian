@@ -20,8 +20,10 @@ from .entries import (
     structured_relation_issues,
 )
 from .protocol import (
+    ManifestContractResult,
     MarkdownDocument,
-    canonical_memory_files,
+    canonical_memory_files_from_inventory,
+    inspect_manifest_contract,
     managed_markdown_files,
     parse_markdown_units,
     read_managed_text,
@@ -89,6 +91,14 @@ class MemorySnapshot:
     integrity_entries: tuple[StructuredEntry, ...]
     relation_issues: tuple[str, ...]
     integrity_relation_issues: tuple[str, ...]
+    # The manifest text is also present in ``files`` for normal path lookup;
+    # retain the strict contract result explicitly so consumers never need to
+    # reread or revalidate it outside this capture.
+    manifest_contract: ManifestContractResult = ManifestContractResult(
+        False,
+        (),
+        "manifest.md is missing.",
+    )
 
     def file_for(self, relative: str) -> SnapshotFile | None:
         """Return one captured managed file by normalized relative path."""
@@ -287,8 +297,42 @@ def build_snapshot(
     )
     overlay = _normalize_overlay(memory_dir, planned_text)
 
+    # Inventory and source capture are the only filesystem observation in the
+    # snapshot boundary.  In particular, canonical authority below must use
+    # this captured manifest rather than the compatibility wrapper that would
+    # inventory and read managed memory again.
     inventory = managed_markdown_files(memory_dir)
-    canonical = canonical_memory_files(memory_dir, include_archive=True)
+    inventory_set = set(inventory)
+    for path in overlay:
+        if path.suffix.casefold() != ".md":
+            continue
+        try:
+            path.relative_to(memory_dir)
+        except ValueError:
+            continue
+        # Planned files are virtual members of this read-only view.  This is
+        # especially important for a planned manifest: its routing must affect
+        # canonical authority even when the file does not yet exist on disk.
+        inventory_set.add(path)
+    inventory = tuple(
+        sorted(inventory_set, key=lambda path: path.relative_to(memory_dir).as_posix())
+    )
+    captured_text = {
+        path: _overlay_text(memory_dir, path, overlay)
+        for path in inventory
+    }
+    manifest_path = memory_dir / "manifest.md"
+    manifest_text = captured_text.get(manifest_path, "")
+    manifest_contract = inspect_manifest_contract(
+        manifest_text,
+        present=manifest_path in captured_text,
+    )
+    canonical = canonical_memory_files_from_inventory(
+        memory_dir,
+        inventory,
+        manifest_text,
+        include_archive=True,
+    )
     canonical_keys = {
         path.relative_to(memory_dir).as_posix()
         for path in canonical
@@ -296,7 +340,7 @@ def build_snapshot(
     files: list[SnapshotFile] = []
     for path in inventory:
         relative = path.relative_to(memory_dir).as_posix()
-        text = _overlay_text(memory_dir, path, overlay)
+        text = captured_text[path]
         archive = relative.startswith("archive/")
         try:
             markdown_document = parse_markdown_units(text)
@@ -351,8 +395,8 @@ def build_snapshot(
         )
 
     subject_path = memory_dir / "subjects.md"
-    if subject_path.exists() or subject_path in overlay:
-        subject_text = _overlay_text(memory_dir, subject_path, overlay)
+    if subject_path in captured_text:
+        subject_text = captured_text[subject_path]
         try:
             subjects, subject_parse_issues = parse_subject_registry(
                 subject_path,
@@ -410,8 +454,8 @@ def build_snapshot(
     )
 
     reconciliation_path = memory_dir / "reconciliations.md"
-    if reconciliation_path.exists() or reconciliation_path in overlay:
-        reconciliation_text = _overlay_text(memory_dir, reconciliation_path, overlay)
+    if reconciliation_path in captured_text:
+        reconciliation_text = captured_text[reconciliation_path]
         try:
             records, reconciliation_parse_issues = parse_reconciliations(
                 reconciliation_path,
@@ -470,4 +514,5 @@ def build_snapshot(
         integrity_entries,
         relation_issues,
         integrity_relation_issues,
+        manifest_contract,
     )

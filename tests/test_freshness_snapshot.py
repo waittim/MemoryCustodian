@@ -48,6 +48,140 @@ class FreshnessSnapshotTests(unittest.TestCase):
                 freshness_findings(Path(root), memory)
             self.assertEqual(build.call_count, 1)
 
+    def test_freshness_uses_manifest_contract_from_supplied_snapshot(self):
+        """A later manifest edit cannot change an already captured check."""
+
+        with tempfile.TemporaryDirectory() as root:
+            memory = self._init(root)
+            manifest = memory / "manifest.md"
+            valid = manifest.read_text(encoding="utf-8")
+            captured = build_snapshot(memory, Path(root))
+
+            manifest.write_text(
+                valid.replace("- protocol_version: 0.7", "- protocol_version: 0.7.0", 1),
+                encoding="utf-8",
+            )
+            with patch(
+                "memory_custodian.quality.build_snapshot",
+                side_effect=AssertionError("freshness rebuilt its supplied snapshot"),
+            ), patch(
+                "memory_custodian.quality.read_managed_text",
+                side_effect=AssertionError("freshness reread the manifest"),
+            ):
+                findings = freshness_findings(
+                    Path(root), memory, snapshot=captured,
+                )
+
+            self.assertEqual(findings, ())
+
+            manifest.write_text(valid, encoding="utf-8")
+            invalid_manifest = valid.replace(
+                "- protocol_version: 0.7", "- protocol_version: 0.7.0", 1,
+            )
+            manifest.write_text(invalid_manifest, encoding="utf-8")
+            invalid_snapshot = build_snapshot(memory, Path(root))
+            manifest.write_text(valid, encoding="utf-8")
+            findings = freshness_findings(
+                Path(root), memory, snapshot=invalid_snapshot,
+            )
+            self.assertEqual(
+                [(item.code, item.message) for item in findings],
+                [("MC-ROUTING-007", "Protocol version equivalent to 0.7 must use the canonical value 0.7; manifest has '0.7.0'")],
+            )
+
+    def test_snapshot_keeps_one_manifest_capture_for_canonical_authority(self):
+        """Canonical selection is based on the manifest captured in the inventory."""
+
+        with tempfile.TemporaryDirectory() as root:
+            memory = self._init(root)
+            area = memory / "areas" / "backend.md"
+            area.parent.mkdir()
+            area.write_text("# Backend\n", encoding="utf-8")
+            manifest = memory / "manifest.md"
+            valid = manifest.read_text(encoding="utf-8")
+            declared = (
+                "### Enabled areas\n"
+                "- `areas/backend.md`\n"
+                "  - activation: path\n"
+                "  - paths: `cli/**`"
+            )
+            captured_manifest = valid.replace(
+                "### Enabled areas\n- None enabled.", declared, 1,
+            )
+            manifest.write_text(captured_manifest, encoding="utf-8")
+            real_read = __import__(
+                "memory_custodian.snapshot", fromlist=["read_managed_text"],
+            ).read_managed_text
+            reads: list[str] = []
+
+            def read_once(memory_dir, path, **kwargs):
+                relative = Path(path).relative_to(Path(memory_dir)).as_posix()
+                reads.append(relative)
+                text = real_read(memory_dir, path, **kwargs)
+                if relative == "manifest.md":
+                    manifest.write_text(
+                        captured_manifest.replace(declared, "### Enabled areas\n- None enabled."),
+                        encoding="utf-8",
+                    )
+                return text
+
+            with patch(
+                "memory_custodian.snapshot.read_managed_text",
+                side_effect=read_once,
+            ), patch(
+                "memory_custodian.snapshot.managed_markdown_files",
+                wraps=__import__(
+                    "memory_custodian.snapshot", fromlist=["managed_markdown_files"],
+                ).managed_markdown_files,
+            ) as inventory:
+                snapshot = build_snapshot(memory, Path(root))
+
+            self.assertEqual(inventory.call_count, 1)
+            self.assertEqual(reads.count("manifest.md"), 1)
+            self.assertEqual(len(reads), len(set(reads)))
+            self.assertTrue(snapshot.manifest_contract.valid)
+            self.assertTrue(snapshot.file_for("areas/backend.md").canonical)
+
+    def test_planned_manifest_overlay_controls_contract_and_canonicality(self):
+        with tempfile.TemporaryDirectory() as root:
+            memory = self._init(root)
+            area = memory / "areas" / "backend.md"
+            area.parent.mkdir()
+            area.write_text("# Backend\n", encoding="utf-8")
+            manifest = memory / "manifest.md"
+            valid = manifest.read_text(encoding="utf-8")
+            declaration = (
+                "### Enabled areas\n"
+                "- `areas/backend.md`\n"
+                "  - activation: path\n"
+                "  - paths: `cli/**`"
+            )
+            planned_manifest = valid.replace(
+                "### Enabled areas\n- None enabled.", declaration, 1,
+            )
+            snapshot = build_snapshot(
+                memory,
+                Path(root),
+                planned_text={manifest: planned_manifest},
+            )
+
+            self.assertEqual(snapshot.manifest_text, planned_manifest)
+            self.assertTrue(snapshot.manifest_contract.valid)
+            self.assertTrue(snapshot.file_for("areas/backend.md").canonical)
+
+            invalid = planned_manifest.replace(
+                "- protocol_version: 0.7", "- protocol_version: 0.7.0", 1,
+            )
+            invalid_snapshot = build_snapshot(
+                memory,
+                Path(root),
+                planned_text={manifest: invalid},
+            )
+            self.assertEqual(
+                invalid_snapshot.manifest_contract.error,
+                "Protocol version equivalent to 0.7 must use the canonical value 0.7; manifest has '0.7.0'",
+            )
+
     def test_ordinary_check_reports_one_structural_owner_finding(self):
         with tempfile.TemporaryDirectory() as root:
             memory = self._init(root)

@@ -509,6 +509,48 @@ def manifest_contract_metadata(
     return metadata
 
 
+@dataclass(frozen=True)
+class ManifestContractResult:
+    """The strict contract result for one already-captured manifest.
+
+    ``metadata`` is stored as an immutable tuple so a snapshot can safely
+    carry it across all downstream consumers.  ``error`` is the exact
+    diagnostic produced by the contract validator, rather than a second
+    caller-specific interpretation of the manifest.
+    """
+
+    present: bool
+    metadata: tuple[tuple[str, str], ...] = ()
+    error: str | None = None
+
+    @property
+    def valid(self) -> bool:
+        return self.present and self.error is None
+
+    def as_dict(self) -> dict[str, str]:
+        return dict(self.metadata)
+
+
+def inspect_manifest_contract(
+    manifest: str,
+    *,
+    present: bool = True,
+    allow_missing_section: bool = True,
+) -> ManifestContractResult:
+    """Capture strict manifest-contract state without touching the filesystem."""
+
+    if not present:
+        return ManifestContractResult(False, (), "manifest.md is missing.")
+    try:
+        metadata = manifest_contract_metadata(
+            manifest,
+            allow_missing_section=allow_missing_section,
+        )
+    except ValueError as exc:
+        return ManifestContractResult(True, (), str(exc))
+    return ManifestContractResult(True, tuple(sorted(metadata.items())), None)
+
+
 def _protocol_section_lines(
     initialized_with: str,
     last_migrated_with: str,
@@ -873,16 +915,21 @@ def read_managed_text(
         ) from exc
 
 
-def canonical_memory_files(
+def canonical_memory_files_from_inventory(
     memory_dir: Path,
+    inventory: Iterable[Path],
+    manifest: str,
     *,
     include_archive: bool = False,
 ) -> tuple[Path, ...]:
-    """Select canonical shared storage from inventory and manifest authority."""
+    """Select canonical storage from one inventory and captured manifest.
 
-    inventory = managed_markdown_files(memory_dir)
-    manifest_path = memory_dir / "manifest.md"
-    manifest = read_managed_text(memory_dir, manifest_path, required=False)
+    This helper is deliberately filesystem-free.  Snapshot construction passes
+    it the paths and manifest text it has already captured, so deriving
+    authority cannot silently perform a second inventory or observe a later
+    manifest revision.
+    """
+
     declared = optional_index_paths(manifest) if manifest else set()
     root_storage = {"brief.md", "decisions.md", "constraints.md", "do-not-use.md", "inbox.md"}
     for task in CANONICAL_TASKS:
@@ -903,6 +950,24 @@ def canonical_memory_files(
         elif include_archive and relative.startswith("archive/") and path.name.casefold() != "readme.md":
             selected.append(path)
     return tuple(selected)
+
+
+def canonical_memory_files(
+    memory_dir: Path,
+    *,
+    include_archive: bool = False,
+) -> tuple[Path, ...]:
+    """Select canonical shared storage using the compatibility disk API."""
+
+    inventory = managed_markdown_files(memory_dir)
+    manifest_path = memory_dir / "manifest.md"
+    manifest = read_managed_text(memory_dir, manifest_path, required=False)
+    return canonical_memory_files_from_inventory(
+        memory_dir,
+        inventory,
+        manifest,
+        include_archive=include_archive,
+    )
 
 
 def iter_markdown_files(memory_dir: Path, include_archive: bool = False) -> Iterable[Path]:

@@ -151,22 +151,20 @@ def freshness_findings(
     *,
     snapshot: MemorySnapshot | None = None,
 ) -> tuple[QualityFinding, ...]:
-    manifest_path = memory_dir / "manifest.md"
-    if not manifest_path.exists():
-        return (QualityFinding("ERROR", "MC-ROUTING-007", "manifest.md is missing."),)
-    try:
-        manifest_contract_metadata(
-            read_managed_text(memory_dir, manifest_path),
-            allow_missing_section=True,
-        )
-    except ValueError as exc:
-        return (QualityFinding("ERROR", "MC-ROUTING-007", str(exc)),)
     # Build the managed-memory inventory exactly once.  Every subsequent
     # freshness check, relation check, and conflict analysis must consume the
     # same snapshot so concurrent edits cannot mix observations from different
     # file-system instants.  Callers that already have an inventory may pass it
     # explicitly (for example, a larger validation pipeline).
     snapshot = snapshot or build_snapshot(memory_dir, project_root)
+    if snapshot.manifest_contract.error:
+        return (
+            QualityFinding(
+                "ERROR",
+                "MC-ROUTING-007",
+                snapshot.manifest_contract.error,
+            ),
+        )
     findings: list[QualityFinding] = []
     head = _head_revision(project_root)
     saw_revision = False
