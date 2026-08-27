@@ -20,8 +20,10 @@ from .entries import (
     structured_relation_issues,
 )
 from .protocol import (
+    MarkdownDocument,
     canonical_memory_files,
     managed_markdown_files,
+    parse_markdown_units,
     read_managed_text,
 )
 from .reconciliations import (
@@ -52,6 +54,10 @@ class SnapshotFile:
     check_warnings: tuple[str, ...]
     canonical: bool
     archive: bool
+    # Keep the Markdown parse used for packing in the same captured source
+    # record as Entry parsing.  ``None`` means the envelope was malformed;
+    # entry_issues retains the structured diagnostic for conflict consumers.
+    markdown_document: MarkdownDocument | None = None
 
 
 @dataclass(frozen=True)
@@ -83,6 +89,22 @@ class MemorySnapshot:
     integrity_entries: tuple[StructuredEntry, ...]
     relation_issues: tuple[str, ...]
     integrity_relation_issues: tuple[str, ...]
+
+    def file_for(self, relative: str) -> SnapshotFile | None:
+        """Return one captured managed file by normalized relative path."""
+
+        normalized = str(relative).replace("\\", "/").lstrip("./")
+        return next(
+            (item for item in self.files if item.relative == normalized),
+            None,
+        )
+
+    @property
+    def manifest_text(self) -> str:
+        """Return the captured manifest, or empty text when it is absent."""
+
+        item = self.file_for("manifest.md")
+        return item.text if item is not None else ""
 
     @property
     def canonical_paths(self) -> frozenset[Path]:
@@ -276,6 +298,10 @@ def build_snapshot(
         relative = path.relative_to(memory_dir).as_posix()
         text = _overlay_text(memory_dir, path, overlay)
         archive = relative.startswith("archive/")
+        try:
+            markdown_document = parse_markdown_units(text)
+        except (TypeError, ValueError):
+            markdown_document = None
         if relative in {"subjects.md", "reconciliations.md"}:
             entries: tuple[StructuredEntry, ...] = ()
             entry_issues: tuple[str, ...] = ()
@@ -320,6 +346,7 @@ def build_snapshot(
                 (),
                 relative in canonical_keys,
                 archive,
+                markdown_document,
             )
         )
 
@@ -424,6 +451,7 @@ def build_snapshot(
             semantic_warnings[item.path],
             item.canonical,
             item.archive,
+            item.markdown_document,
         )
         for item in provisional_files
     )

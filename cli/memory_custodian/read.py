@@ -94,6 +94,10 @@ def _render_header(result: ContextRoutingResult, completeness: RoutingCompletene
 def run(args) -> int:
     project_root = resolve_project_root(args.project_root)
     memory_dir = resolve_memory_dir(project_root, args.memory_dir)
+    # Capture all shared managed-memory inputs before routing.  The routing
+    # result, budget pack, local shared-ID lookup, and conflict analysis must
+    # describe this one immutable view rather than a sequence of disk reads.
+    snapshot = build_snapshot(memory_dir, project_root)
     routing_invalid = False
     try:
         result = route_context(
@@ -104,6 +108,7 @@ def run(args) -> int:
             rules=getattr(args, "rule", []),
             profiles=args.profile,
             areas=args.area,
+            snapshot=snapshot,
         )
     except ValueError as exc:
         routing_invalid = True
@@ -115,12 +120,6 @@ def run(args) -> int:
             areas=args.area,
             error=exc,
         )
-    # Build the shared inventory before optional local inspection so malformed
-    # Entry files cannot make the local ID lookup parse them a second time.
-    # The same snapshot is then passed to conflict analysis below, ensuring a
-    # lexical error (such as an unclosed fence) reaches the structured
-    # MC-CONFLICT-007 path instead of escaping from context packing.
-    snapshot = None if routing_invalid else build_snapshot(memory_dir)
     overlay = LocalOverlay(LocalStatus.DISABLED, Path("."), "")
     if not routing_invalid and not getattr(args, "no_local", False):
         try:
@@ -128,7 +127,10 @@ def run(args) -> int:
             # permissively parsed legacy/invalid manifest.  A valid shared
             # routing result may still represent a pre-metadata project, in
             # which case local overlay loading remains disabled.
-            overlay_project_id = validated_project_identity(memory_dir)
+            overlay_project_id = validated_project_identity(
+                memory_dir,
+                manifest_text=snapshot.manifest_text,
+            )
         except (OSError, ValueError):
             overlay_project_id = None
         if overlay_project_id is not None:

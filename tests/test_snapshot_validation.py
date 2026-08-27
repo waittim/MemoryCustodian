@@ -10,6 +10,7 @@ import unittest
 from unittest.mock import patch
 
 from memory_custodian.conflicts import analyze_conflicts
+from memory_custodian.context import route_context
 from memory_custodian.entries import render_candidate_entry
 from memory_custodian.main import main
 from memory_custodian.snapshot import build_snapshot
@@ -87,6 +88,61 @@ class SnapshotValidationArchitectureTests(unittest.TestCase):
             self.assertIn("Unclosed fenced code block", output)
             self.assertIn("Context pack not approved for substantial work", output)
             self.assertNotIn("DO_NOT_PRINT_BACKEND", output)
+
+    def test_strict_read_keeps_first_snapshot_after_required_file_is_repaired(self):
+        """A repair after capture must not turn an invalid pack into approval."""
+
+        with tempfile.TemporaryDirectory() as root:
+            memory = self._init(root)
+            decisions = memory / "decisions.md"
+            valid = decisions.read_text(encoding="utf-8")
+            decisions.write_text(valid + "\n```text\nBROKEN\n", encoding="utf-8")
+
+            from memory_custodian.context import _pack as real_pack
+
+            captured_sources: list[str] = []
+
+            def pack_then_repair(*args, **kwargs):
+                if args and args[0] == "decisions.md":
+                    captured_sources.append(args[1])
+                result = real_pack(*args, **kwargs)
+                decisions.write_text(valid, encoding="utf-8")
+                return result
+
+            with patch("memory_custodian.context._pack", side_effect=pack_then_repair):
+                code, output, error = capture([
+                    "read", "--task", "implementation", "--strict-routing",
+                    "--project-root", root,
+                ])
+
+            self.assertEqual(code, 2, output + error)
+            self.assertTrue(captured_sources)
+            self.assertIn("BROKEN", captured_sources[0])
+            self.assertIn("Conflict status: INVALID", output)
+            self.assertIn("MC-CONFLICT-007 INVALID", output)
+            self.assertIn("Unclosed fenced code block", output)
+            self.assertIn("Context pack not approved for substantial work", output)
+
+    def test_snapshot_routing_does_not_read_managed_files_again(self):
+        """Routing and packing consume a supplied snapshot, never disk APIs."""
+
+        with tempfile.TemporaryDirectory() as root:
+            memory = self._init(root)
+            snapshot = build_snapshot(memory, Path(root))
+
+            with patch(
+                "memory_custodian.protocol.read_managed_text",
+                side_effect=AssertionError("route_context reread managed memory"),
+            ):
+                result = route_context(
+                    Path(root),
+                    memory,
+                    supplied_task="implementation",
+                    snapshot=snapshot,
+                )
+
+            self.assertEqual(result.completeness.value, "COMPLETE")
+            self.assertIn("decisions.md", {name for name, _text in result.contents})
 
     def test_alias_collision_has_same_current_and_planned_blocker(self):
         with tempfile.TemporaryDirectory() as root:

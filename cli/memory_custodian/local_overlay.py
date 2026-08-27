@@ -513,9 +513,23 @@ def project_identity(memory_dir: Path) -> str:
     ) or ""
 
 
-def validated_project_identity(memory_dir: Path) -> str:
+def validated_project_identity(
+    memory_dir: Path,
+    *,
+    manifest_text: str | None = None,
+) -> str:
+    """Return the validated shared project id from one captured manifest.
+
+    Existing callers omit ``manifest_text`` and retain the disk-backed API.
+    Read paths that already own a MemorySnapshot pass its captured value,
+    including an empty value for a missing manifest, so identity validation
+    cannot cross the snapshot boundary and observe a later repair.
+    """
+
     metadata = manifest_contract_metadata(
         read_managed_text(memory_dir, memory_dir / "manifest.md")
+        if manifest_text is None
+        else manifest_text
     )
     if compare_versions(
         metadata.get("protocol_version", "0.5"),

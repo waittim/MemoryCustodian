@@ -9,8 +9,7 @@ import re
 from .protocol import (
     budget_for,
     estimate_tokens,
-    manifest_task_modules,
-    parse_markdown_units,
+    parse_manifest_task_modules,
     render_markdown_document,
     resolve_manifest_memory_path,
     protocol_contract_metadata,
@@ -29,6 +28,7 @@ from .routes import (
     normalize_input_path,
     parse_optional_module_index,
 )
+from .snapshot import MemorySnapshot, build_snapshot
 
 
 @dataclass(frozen=True)
@@ -167,19 +167,21 @@ def _unit_ref(module_id: str, text: str, ordinal: int) -> str:
     return match.group(0) if match else f"{module_id}#unit-{ordinal}"
 
 
-def _pack(module_id: str, text: str, budget: int | None) -> tuple[str, tuple[BudgetOmission, ...], bool]:
-    normalized = text.strip()
-    # Validate the Markdown envelope before returning any module text.  A
-    # malformed selected module (most importantly an unclosed fenced block)
-    # must reach the shared snapshot/conflict model rather than aborting read
-    # while the context pack is being assembled.  Returning an empty packed
-    # value keeps the invalid source out of ordinary context output; the
-    # caller still records the routed module and the later conflict pass
-    # reports the precise MC-CONFLICT-007 diagnostic.
-    try:
-        document = parse_markdown_units(normalized)
-    except (TypeError, ValueError):
+def _pack(
+    module_id: str,
+    text: str,
+    budget: int | None,
+    *,
+    document=None,
+) -> tuple[str, tuple[BudgetOmission, ...], bool]:
+    # The routing path supplies the Markdown document captured in the shared
+    # snapshot.  A missing document means the snapshot already recorded a
+    # malformed Markdown envelope; keep the source out of the pack while the
+    # snapshot's conflict pass reports the diagnostic.  Do not parse disk (or
+    # silently recover) here.
+    if document is None:
         return "", (), False
+    normalized = text.strip()
     if budget is None or estimate_tokens(normalized) <= budget:
         return normalized, (), False
     chosen = []
@@ -215,12 +217,15 @@ def route_context(
     rules: list[str] | tuple[str, ...] = (),
     profiles: list[str] | tuple[str, ...] = (),
     areas: list[str] | tuple[str, ...] = (),
+    snapshot: MemorySnapshot | None = None,
 ) -> ContextRoutingResult:
-    manifest_path = memory_dir / "manifest.md"
-    if not manifest_path.exists():
+    # A caller that does not already own a snapshot retains the historical
+    # API, while the read command passes its one captured view explicitly.
+    snapshot = snapshot or build_snapshot(memory_dir, project_root)
+    manifest_file = snapshot.file_for("manifest.md")
+    if manifest_file is None:
         raise ValueError("manifest.md is missing; the MemoryCustodian setup is incomplete or corrupted")
-    from .protocol import read_managed_text
-    manifest = read_managed_text(memory_dir, manifest_path)
+    manifest = manifest_file.text
     normalized_by_value = {
         item.value: item
         for item in (normalize_input_path(project_root, value) for value in supplied_paths)
@@ -264,7 +269,7 @@ def route_context(
             "Enabled path-routed areas were not evaluated because no paths or explicit areas were supplied."
         )
 
-    base = manifest_task_modules(memory_dir, supplied_task)
+    base = parse_manifest_task_modules(manifest, supplied_task)
     optional = [
         _optional_route(
             declaration,
@@ -286,11 +291,16 @@ def route_context(
             results.append(module)
             continue
         path = resolve_manifest_memory_path(memory_dir, module.module_id)
-        if not path.exists():
+        relative = path.relative_to(memory_dir).as_posix()
+        source = snapshot.file_for(relative)
+        if source is None:
             results.append(module.with_result(loaded=False, absent=True))
             continue
         packed, module_omissions, oversized = _pack(
-            module.module_id, read_managed_text(memory_dir, path), budget_for(module.module_id)
+            module.module_id,
+            source.text,
+            budget_for(module.module_id),
+            document=source.markdown_document,
         )
         if packed:
             contents.append((module.module_id, packed))
