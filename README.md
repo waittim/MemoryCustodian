@@ -400,6 +400,11 @@ invalid Subjects, broken `Exception-To`, and inconsistent reconciliation records
 explicit exception is REVIEW; a deterministic duplicate owner is CONFLICT. `read` shows the matched-context status,
 and strict substantial reads refuse unresolved conflicts.
 
+Subject registry syntax or schema failures use the dedicated `MC-CONFLICT-010 INVALID` finding. The stable
+collision/reference findings remain distinct: `MC-CONFLICT-003` is duplicate Canonical-Ref, `MC-CONFLICT-004` is
+alias ownership by multiple active Subjects, and `MC-CONFLICT-005` is a missing, inactive, merged, or
+non-reciprocal Subject reference.
+
 Reconciliation records use a strict canonical parser: malformed headings, duplicate fields or blocks, unknown
 fields, unsorted/duplicate Entry IDs, invalid Evidence, duplicate record IDs, and inconsistent relations are
 `MC-CONFLICT-008 INVALID` rather than silently ignored. Relationship resolutions (`superseded`, `exception`, and

@@ -815,7 +815,15 @@ MC-CONFLICT-006  Invalid Exception-To relation
 MC-CONFLICT-007  Managed hard-memory entry lacks Subject or Facet
 MC-CONFLICT-008  Invalid or inconsistent reconciliation record
 MC-CONFLICT-009  Matched areas expose overlapping Subject/Facet ownership
+MC-CONFLICT-010  Invalid Subject registry syntax or schema
 ```
+
+`MC-CONFLICT-003` is reserved for duplicate active Canonical-Ref,
+`MC-CONFLICT-004` for alias ownership by multiple active Subjects, and
+`MC-CONFLICT-005` for missing, inactive, merged, or non-reciprocal Subject
+references. Other Subject registry parse or schema failures use
+`MC-CONFLICT-010`; they must not be disguised as one of those collision or
+reference findings.
 
 行为：
 

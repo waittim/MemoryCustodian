@@ -273,6 +273,12 @@ Project/area overlap requires a valid area-to-project `Exception-To` relationshi
 same Subject/Facet require review. Exact Canonical-Ref or normalized alias collisions are deterministic conflicts,
 while differently named Subjects are never auto-merged.
 
+Protocol 0.7 conflict findings keep Subject registry contracts distinct: `MC-CONFLICT-003` identifies duplicate
+active Canonical-Ref, `MC-CONFLICT-004` identifies alias ownership by multiple active Subjects, and
+`MC-CONFLICT-005` identifies missing, inactive, merged, or non-reciprocal Subject references. Other Subject
+registry syntax or schema failures use `MC-CONFLICT-010 INVALID`; they must not be mapped to a collision or
+reference code.
+
 `reconciliations.md` may contain active `MC-REC` records with at least two canonical Entry IDs, admissible Evidence,
 and `Resolution: distinct|superseded|exception|subject-merged`. Protocol 0.7 validates hand-maintained records and
 previews Subject merges, but transactional governance apply waits for Protocol 0.8. Relationship resolutions name

@@ -11,9 +11,9 @@ from .structural import active_structural_operand_issues, subject_index
 from .snapshot import MemorySnapshot, build_snapshot
 
 
-# The Protocol 0.7 contract reserves 001-009 for specific structural
-# findings. Subject registry schema errors have no dedicated public finding
-# in that contract, so keep them distinct from the collision codes.
+# Subject registry syntax/schema errors have a dedicated finding so they stay
+# distinct from the collision and merge-reference codes: 003 is Canonical-Ref,
+# 004 is alias ownership, and 005 is a Subject reference/lifecycle issue.
 _SUBJECT_REGISTRY_INVALID_CODE = "MC-CONFLICT-010"
 
 

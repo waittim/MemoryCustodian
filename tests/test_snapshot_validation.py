@@ -206,6 +206,46 @@ class SnapshotValidationArchitectureTests(unittest.TestCase):
                 self.assertIn(expected_code + " INVALID", preview)
                 self.assertIn("Unclosed fenced code block", preview)
 
+    def test_subject_registry_schema_uses_dedicated_stable_finding_code(self):
+        with tempfile.TemporaryDirectory() as root:
+            memory = self._init(root)
+            subject_id = "MC-SUBJ-20260826-99999999"
+            (memory / "subjects.md").write_text(
+                "# Subject Registry\n\n"
+                + subject_unit(subject_id, "Schema failure")
+                + "\nUnknown-Field: must be diagnosed as schema\n",
+                encoding="utf-8",
+            )
+
+            result = analyze_conflicts(memory)
+            schema_findings = [
+                finding for finding in result.findings
+                if "Unknown-Field" in finding.message
+            ]
+            self.assertEqual(len(schema_findings), 1)
+            self.assertEqual(schema_findings[0].code, "MC-CONFLICT-010")
+            self.assertEqual(schema_findings[0].status.value, "INVALID")
+            self.assertNotIn(schema_findings[0].code, {
+                "MC-CONFLICT-003", "MC-CONFLICT-004", "MC-CONFLICT-005",
+            })
+
+            code, output, error = capture([
+                "check", "--conflicts", "--project-root", root,
+            ])
+            self.assertEqual(code, 1, output + error)
+            self.assertIn("MC-CONFLICT-010 INVALID", output)
+            self.assertNotIn("MC-CONFLICT-003", output)
+            self.assertNotIn("MC-CONFLICT-004", output)
+            self.assertNotIn("MC-CONFLICT-005", output)
+
+            table = Path(
+                "docs/MemoryCustodian-plan-0.11.0-erasure-aligned-revised.md"
+            ).read_text(encoding="utf-8")
+            self.assertIn(
+                "MC-CONFLICT-010  Invalid Subject registry syntax or schema",
+                table,
+            )
+
     def test_check_builds_one_entry_inventory_for_all_downstream_validation(self):
         with tempfile.TemporaryDirectory() as root:
             memory = self._init(root)
