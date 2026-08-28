@@ -21,7 +21,15 @@ from .local_overlay import (
 from .locking import (
     project_mutation_guard,
 )
-from .protocol import resolve_memory_dir, resolve_project_root
+from .protocol import (
+    ENTRY_SCHEMA_MIGRATION_MESSAGE,
+    entry_schema_version_for_manifest,
+    entry_schema_migration_available,
+    protocol_metadata,
+    read_managed_text,
+    resolve_memory_dir,
+    resolve_project_root,
+)
 from .snapshot import build_snapshot
 
 
@@ -123,15 +131,40 @@ def run(args) -> int:
     manifest = memory_dir / "manifest.md"
     if not manifest.exists():
         raise ValueError("manifest.md is missing; the MemoryCustodian setup is incomplete or corrupted")
-    project_id = validated_project_identity(memory_dir)
+    manifest_text = read_managed_text(memory_dir, manifest)
+    entry_schema_version = entry_schema_version_for_manifest(manifest_text)
     command = args.local_command
+    # Status and reset are read-only diagnostics in Protocol 0.7.  They may
+    # inspect a distributed schema-1 overlay with its legacy body grammar so
+    # the migration warning is actionable.  Enable/link/add remain mutation
+    # gates and must reject the schema-1 manifest before touching local state.
+    allow_legacy_entry_schema = command in {"status", "reset"}
+    project_id = validated_project_identity(
+        memory_dir,
+        manifest_text=manifest_text,
+        allow_legacy_entry_schema=allow_legacy_entry_schema,
+    )
+    if allow_legacy_entry_schema and entry_schema_migration_available(
+        protocol_metadata(manifest_text)
+    ):
+        print(ENTRY_SCHEMA_MIGRATION_MESSAGE)
     if command == "status":
         shared_ids = memory_entry_ids(memory_dir)
-        render_overlay_status(inspect_overlay(project_root, project_id, shared_ids=shared_ids))
+        render_overlay_status(inspect_overlay(
+            project_root,
+            project_id,
+            shared_ids=shared_ids,
+            entry_schema_version=entry_schema_version,
+        ))
         return 0
     if command == "reset":
         shared_ids = memory_entry_ids(memory_dir)
-        overlay = inspect_overlay(project_root, project_id, shared_ids=shared_ids)
+        overlay = inspect_overlay(
+            project_root,
+            project_id,
+            shared_ids=shared_ids,
+            entry_schema_version=entry_schema_version,
+        )
         render_overlay_status(overlay)
         if overlay.status == LocalStatus.DISABLED:
             print("No local overlay state exists for this project; nothing to reset.")
@@ -204,14 +237,29 @@ def run(args) -> int:
             entry.entry_id for entry in locked_snapshot.relation_entries
         }
         if command == "enable":
-            directory = enable_overlay(project_root, locked_project_id, shared_ids=shared_ids)
+            directory = enable_overlay(
+                project_root,
+                locked_project_id,
+                shared_ids=shared_ids,
+                entry_schema_version=locked_snapshot.entry_schema_version,
+            )
             print(f"Local overlay enabled for project_id {locked_project_id}.")
             print(f"State directory: {directory}")
             print("Run `memory-custodian local link` before local content can load.")
             return 0
         if command == "link":
-            enable_overlay(project_root, locked_project_id, shared_ids=shared_ids)
-            roots = link_root(project_root, locked_project_id, shared_ids=shared_ids)
+            enable_overlay(
+                project_root,
+                locked_project_id,
+                shared_ids=shared_ids,
+                entry_schema_version=locked_snapshot.entry_schema_version,
+            )
+            roots = link_root(
+                project_root,
+                locked_project_id,
+                shared_ids=shared_ids,
+                entry_schema_version=locked_snapshot.entry_schema_version,
+            )
             print("Local overlay linked to this normalized project root.")
             if len(roots) > 1:
                 print("Local overlay status: REVIEW")
@@ -227,6 +275,7 @@ def run(args) -> int:
                 args.message,
                 evidence,
                 shared_ids=shared_ids,
+                entry_schema_version=locked_snapshot.entry_schema_version,
             )
             print(f"Added local preference {entry_id}.")
             return 0

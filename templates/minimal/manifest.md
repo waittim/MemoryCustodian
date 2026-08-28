@@ -4,7 +4,7 @@ Loading map for local project memory. Load only the files listed for the current
 
 ## MemoryCustodian Protocol
 - protocol_version: 0.7
-- entry_schema_version: 1
+- entry_schema_version: 2
 - subject_schema_version: 1
 - subject_registry: subjects.md
 - routing_schema_version: 1

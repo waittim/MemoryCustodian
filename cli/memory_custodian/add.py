@@ -6,8 +6,8 @@ from pathlib import Path
 import hashlib
 
 from .entries import (
+    LEGACY_ENTRY_SCHEMA_VERSION,
     generate_entry_id,
-    heading_entry_ids,
     line_safe_markdown_body,
     memory_entry_ids,
     parse_structured_entries,
@@ -21,7 +21,7 @@ from .entries import (
     validate_evidence,
     validate_scope,
 )
-from .local_overlay import LocalStatus, inspect_overlay, read_local_private_file
+from .local_overlay import LocalStatus, inspect_overlay
 from .locking import (
     create_private_file,
     discard_private_file,
@@ -31,13 +31,14 @@ from .locking import (
 from .mutations import TextMutation, apply_mutations
 from .plans import MutationPlan, digest_path, pending_plan_directory, print_plan
 from .protocol import (
+    CURRENT_ENTRY_SCHEMA_VERSION,
     CURRENT_PROTOCOL_VERSION,
     DECISION_ENTRY_BUDGET,
-    appended_text,
     budget_for,
     budget_state,
     changelog_text,
     compare_versions,
+    entry_schema_version_for_manifest,
     estimate_tokens,
     is_indexable_optional_path,
     is_safe_memory_name,
@@ -80,8 +81,17 @@ def _title(message: str) -> str:
 
 
 def _legacy_entry(kind: str, message: str, reason: str | None) -> str:
-    safe_message = line_safe_markdown_body(message)
-    safe_reason = line_safe_markdown_body(reason) if reason else None
+    safe_message = line_safe_markdown_body(
+        message,
+        entry_schema_version=LEGACY_ENTRY_SCHEMA_VERSION,
+    )
+    safe_reason = (
+        line_safe_markdown_body(
+            reason,
+            entry_schema_version=LEGACY_ENTRY_SCHEMA_VERSION,
+        )
+        if reason else None
+    )
     if kind == "decision":
         body = f"## {today()} - {_title(message)}\nDecision:\n{safe_message}"
         return body + (f"\nReason:\n{safe_reason}" if safe_reason else "")
@@ -163,7 +173,12 @@ def _report_budget(memory_dir: Path, path: Path, target: str) -> None:
             print("Next: consolidate or relocate scoped decisions before considering age-based archival.")
 
 
-def _find_entry(memory_dir: Path, entry_id: str):
+def _find_entry(
+    memory_dir: Path,
+    entry_id: str,
+    *,
+    entry_schema_version: str = CURRENT_ENTRY_SCHEMA_VERSION,
+):
     matches = []
     for path in managed_markdown_files(memory_dir):
         if (
@@ -172,7 +187,11 @@ def _find_entry(memory_dir: Path, entry_id: str):
         ):
             continue
         matches.extend(
-            entry for entry in parse_structured_entries(path, read_managed_text(memory_dir, path))
+            entry for entry in parse_structured_entries(
+                path,
+                read_managed_text(memory_dir, path),
+                entry_schema_version=entry_schema_version,
+            )
             if entry.entry_id.casefold() == entry_id.casefold()
         )
     if not matches:
@@ -190,6 +209,7 @@ def _validate_subject_and_conflict(
     kind: str,
     scope: str,
     candidate: bool,
+    entry_schema_version: str = CURRENT_ENTRY_SCHEMA_VERSION,
 ) -> tuple[str | None, str | None]:
     subject_id = args.subject.strip() if args.subject else None
     facet = args.facet.strip().casefold() if args.facet else None
@@ -202,7 +222,11 @@ def _validate_subject_and_conflict(
         raise ValueError("--subject and --facet must be supplied together.")
     old = None
     if args.supersedes:
-        old = _find_entry(memory_dir, args.supersedes)
+        old = _find_entry(
+            memory_dir,
+            args.supersedes,
+            entry_schema_version=entry_schema_version,
+        )
         old_relative = old.path.relative_to(memory_dir).as_posix()
         operand_issues = [
             *structured_entry_schema_issues(old, old_relative),
@@ -248,7 +272,11 @@ def _validate_subject_and_conflict(
         relative = path.relative_to(memory_dir).as_posix()
         if relative.startswith("archive/") or relative in {"subjects.md", "inbox.md"}:
             continue
-        for entry in parse_structured_entries(path, read_managed_text(memory_dir, path)):
+        for entry in parse_structured_entries(
+            path,
+            read_managed_text(memory_dir, path),
+            entry_schema_version=entry_schema_version,
+        ):
             if (
                 entry.status == "active"
                 and entry.scope.casefold() == scope.casefold()
@@ -277,7 +305,13 @@ def _validate_subject_and_conflict(
 
 
 def _build_mutations(
-    args, project_root: Path, memory_dir: Path, protocol_06: bool, *, fixed_id: str | None = None
+    args,
+    project_root: Path,
+    memory_dir: Path,
+    protocol_06: bool,
+    *,
+    fixed_id: str | None = None,
+    entry_schema_version: str = CURRENT_ENTRY_SCHEMA_VERSION,
 ) -> tuple[list[TextMutation], str, str]:
     kind = args.type
     target, scope = _target(args)
@@ -304,6 +338,7 @@ def _build_mutations(
             project_root,
             metadata["project_id"],
             shared_ids=ids,
+            entry_schema_version=entry_schema_version,
         )
         if overlay.status == LocalStatus.REVIEW:
             detail = "; ".join(overlay.warnings) or "local overlay requires review"
@@ -312,8 +347,11 @@ def _build_mutations(
                 + detail
             )
         if overlay.status == LocalStatus.BOUND:
-            for module in overlay.modules:
-                ids.update(heading_entry_ids(read_local_private_file(module)))
+            # ``inspect_overlay`` captured each module with the manifest's
+            # Entry grammar.  Reserve IDs from that same parsed view instead
+            # of reopening private files with a schema-agnostic heading scan.
+            for captured in overlay.captured_modules:
+                ids.update(entry.entry_id for entry in captured.entries)
         subject_id, facet = _validate_subject_and_conflict(
             args,
             project_root,
@@ -321,6 +359,7 @@ def _build_mutations(
             kind=kind,
             scope=scope,
             candidate=candidate,
+            entry_schema_version=entry_schema_version,
         )
         id_kind = (
             "inbox"
@@ -363,7 +402,11 @@ def _build_mutations(
     )
     mutations = [TextMutation(target_path, updated)]
     if args.supersedes:
-        old = _find_entry(memory_dir, args.supersedes)
+        old = _find_entry(
+            memory_dir,
+            args.supersedes,
+            entry_schema_version=entry_schema_version,
+        )
         if old.path == target_path:
             mutations[0] = TextMutation(
                 target_path,
@@ -372,6 +415,7 @@ def _build_mutations(
                     old.entry_id,
                     new_id,
                     relative_path=target,
+                    entry_schema_version=entry_schema_version,
                 ),
             )
         else:
@@ -381,6 +425,7 @@ def _build_mutations(
                     old.entry_id,
                     new_id,
                     relative_path=old.path.relative_to(memory_dir).as_posix(),
+                    entry_schema_version=entry_schema_version,
                 ))
             )
 
@@ -406,7 +451,11 @@ def _build_mutations(
                 continue
             resulting.extend(
                 entry
-                for entry in parse_structured_entries(mutation.path, mutation.text)
+                for entry in parse_structured_entries(
+                    mutation.path,
+                    mutation.text,
+                    entry_schema_version=entry_schema_version,
+                )
                 if entry.entry_id.casefold() in {
                     args.supersedes.casefold(), new_id.casefold()
                 }
@@ -455,6 +504,9 @@ def run(args) -> int:
         read_managed_text(memory_dir, manifest_path),
         allow_missing_section=True,
     )
+    entry_schema_version = entry_schema_version_for_manifest(
+        read_managed_text(memory_dir, manifest_path)
+    )
     comparison = compare_versions(metadata.get("protocol_version", "0.5"), CURRENT_PROTOCOL_VERSION)
     if comparison is None:
         raise ValueError("Project manifest has an invalid protocol version.")
@@ -499,6 +551,7 @@ def run(args) -> int:
                     project_root,
                     memory_dir,
                     False,
+                    entry_schema_version=entry_schema_version,
                 )
             except DecisionBudgetError as exc:
                 print(f"Decision entry budget: over/{DECISION_ENTRY_BUDGET} tokens")
@@ -512,7 +565,12 @@ def run(args) -> int:
             seed_path = _seed_path(fingerprint)
             fixed_id = read_private_file(seed_path).strip() if seed_path.exists() else None
             mutations, target, new_id = _build_mutations(
-                args, project_root, memory_dir, True, fixed_id=fixed_id or None
+                args,
+                project_root,
+                memory_dir,
+                True,
+                fixed_id=fixed_id or None,
+                entry_schema_version=entry_schema_version,
             )
             if not fixed_id:
                 create_private_file(seed_path, new_id + "\n")
@@ -547,7 +605,12 @@ def run(args) -> int:
                         "Project identity changed before supersede apply; preview again."
                     )
                 current_mutations, target, new_id = _build_mutations(
-                    args, project_root, memory_dir, True, fixed_id=new_id
+                    args,
+                    project_root,
+                    memory_dir,
+                    True,
+                    fixed_id=new_id,
+                    entry_schema_version=entry_schema_version,
                 )
                 current_plan = MutationPlan(
                     "add --supersedes",
@@ -586,7 +649,13 @@ def run(args) -> int:
                 raise ValueError("Project identity changed before add; re-run the command.")
             # Every source file is re-read and the mutation plan is rebuilt under the lock.
             try:
-                mutations, target, new_id = _build_mutations(args, project_root, memory_dir, True)
+                mutations, target, new_id = _build_mutations(
+                    args,
+                    project_root,
+                    memory_dir,
+                    True,
+                    entry_schema_version=entry_schema_version,
+                )
             except DecisionBudgetError as exc:
                 print(f"Decision entry budget: over/{DECISION_ENTRY_BUDGET} tokens")
                 print(f"Not added: {exc}")

@@ -4,6 +4,21 @@
 
 ## v0.11.0 - 2026-08-01
 
+### Protocol 0.7 Entry schema 1 to 2 compatibility boundary
+
+- The public `0.11.0` branch distributed Protocol 0.7 with Entry schema 1 before the body wrapper landed, so schema 1
+  is a supported legacy input despite having no formal release tag. Its parser treats a manually present
+  `memory-custodian-body-v1` fence as literal body text.
+- Protocol 0.7 Entry schema 2 is the current and only new-write format. CLI `0.11.0` or newer reports migration
+availability for schema 1, reads it with legacy semantics, and preview/applies a schema 1-to-2 migration that
+preserves literal wrapper text before schema-2 decoding is enabled. Strict reads, checks, conflicts, and writers do
+not treat schema 1 as current or silently reinterpret its bodies. The minimum supported writer is the schema-2-capable
+  `0.11.0` build; the pre-wrapper public `0.11.0` branch remains schema-1-only and must be upgraded before migration,
+  because it cannot safely decode schema-2 wrapper output.
+- `local_overlay_schema_version: 1` remains an independent local topology/binding schema; local Entry bodies use the
+  shared manifest's Entry schema. Bound local files migrate in the same preview/apply plan; an unbound, multi-root, or
+  REVIEW overlay blocks the shared schema flip until it is explicitly bound or repaired.
+
 ### Deterministic routing for explicit task and scope
 
 - Added Protocol 0.7 routing/conflict schema metadata, canonical task normalization, a normative optional-module

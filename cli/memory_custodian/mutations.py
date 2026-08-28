@@ -3,15 +3,32 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 from pathlib import Path
 import stat
+import tempfile
 
+from .locking import write_private_file
 from .protocol import write_text
 
 
 @dataclass(frozen=True)
 class TextMutation:
     path: Path
+    text: str
+
+
+@dataclass(frozen=True)
+class PrivateTextMutation:
+    """One private-state replacement whose public path is an alias.
+
+    Repo-relative ``TextMutation`` paths are intentionally unsuitable for the
+    repo-external local overlay.  Keep the real path for the secure writer and
+    a stable relative label for plan rendering/digests.
+    """
+
+    path: Path
+    relative: str
     text: str
 
 
@@ -94,5 +111,82 @@ def apply_mutations(mutations: list[TextMutation]) -> tuple[Path, ...]:
             write_text(mutation.path, mutation.text)
         except OSError as exc:
             raise PartialMutationError(mutation.path, tuple(completed), exc) from exc
+        completed.append(mutation.path)
+    return tuple(completed)
+
+
+def restore_text_file_exact(path: Path, text: str | None) -> None:
+    """Restore an exact UTF-8 text preimage without adding a newline.
+
+    Migration recovery needs a byte-faithful restore for files that may use
+    CRLF, trailing spaces, or no terminal newline.  Keep this helper separate
+    from the normal writer, whose public contract intentionally normalizes a
+    terminal newline.  ``None`` means the file did not exist and should be
+    removed if a failed migration created it.
+    """
+
+    candidate = path.expanduser().absolute()
+    _validate_write_target(candidate)
+    if text is None:
+        try:
+            info = candidate.lstat()
+        except FileNotFoundError:
+            return
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+            raise ValueError(f"Mutation recovery target is not a regular non-symlink file: {path}")
+        candidate.unlink()
+        return
+
+    try:
+        mode = stat.S_IMODE(candidate.lstat().st_mode)
+    except FileNotFoundError:
+        mode = 0o644
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            dir=candidate.parent,
+            prefix=f".{candidate.name}.",
+            suffix=".restore.tmp",
+            delete=False,
+        ) as handle:
+            temporary = Path(handle.name)
+            handle.write(text.encode("utf-8"))
+            handle.flush()
+            try:
+                os.fsync(handle.fileno())
+            except OSError:
+                pass
+        os.chmod(temporary, mode)
+        os.replace(temporary, candidate)
+        temporary = None
+    finally:
+        if temporary is not None:
+            try:
+                temporary.unlink()
+            except FileNotFoundError:
+                pass
+
+
+def apply_private_mutations(
+    mutations: list[PrivateTextMutation],
+) -> tuple[Path, ...]:
+    """Apply private overlay replacements through the owner-only writer."""
+
+    paths = [mutation.path for mutation in mutations]
+    if len(paths) != len(set(paths)):
+        raise ValueError("Private mutation plan contains the same file more than once.")
+    completed: list[Path] = []
+    for mutation in mutations:
+        if not isinstance(mutation.text, str):
+            raise ValueError(f"Private mutation content is not text: {mutation.path}")
+        try:
+            write_private_file(mutation.path, mutation.text)
+        except OSError as exc:
+            raise PartialMutationError(
+                mutation.path,
+                tuple(completed),
+                exc,
+            ) from exc
         completed.append(mutation.path)
     return tuple(completed)

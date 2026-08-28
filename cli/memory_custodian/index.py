@@ -8,23 +8,19 @@ import hashlib
 from pathlib import Path
 import re
 
-from .conflicts import canonical_entries
 from .entries import (
     StructuredEntry,
-    heading_entry_ids,
     parse_structured_entries,
     render_active_entry,
     structured_entry_schema_issues,
     structured_entry_storage_issues,
     structured_relation_issues,
-    memory_entry_ids,
     validate_evidence,
     validate_scope,
 )
 from .local_overlay import (
     LocalStatus,
     inspect_overlay,
-    read_local_private_file,
     validated_project_identity,
 )
 from .protocol import (
@@ -38,6 +34,7 @@ from .protocol import (
     resolve_project_root,
     read_managed_text,
 )
+from .snapshot import build_snapshot
 from .subjects import load_subjects, validate_subject_registry
 from .plans import digest_text
 from .structural import (
@@ -87,13 +84,15 @@ def build_index(
     include_archive: bool = False,
     include_local: bool = False,
 ) -> tuple[IndexedEntry, ...]:
-    relation_entries = canonical_entries(memory_dir, include_archive=True)
+    snapshot = build_snapshot(memory_dir, project_root)
+    relation_entries = snapshot.relation_entries
+    canonical = snapshot.relation_entries if include_archive else snapshot.entries
     records = [
         IndexedEntry(
             entry.entry_id, entry.status, entry.scope,
             entry.path.relative_to(memory_dir).as_posix(), entry.text, entry,
         )
-        for entry in canonical_entries(memory_dir, include_archive=include_archive)
+        for entry in canonical
     ]
     records.extend(_legacy_records(memory_dir, include_archive=include_archive))
     reconciliation = memory_dir / "reconciliations.md"
@@ -130,8 +129,13 @@ def build_index(
     if include_local:
         overlay = inspect_overlay(
             project_root,
-            validated_project_identity(memory_dir),
-            shared_ids=memory_entry_ids(memory_dir),
+            validated_project_identity(
+                memory_dir,
+                manifest_text=snapshot.manifest_text,
+                allow_legacy_entry_schema=snapshot.entry_schema_version == "1",
+            ),
+            shared_ids={entry.entry_id for entry in snapshot.relation_entries},
+            entry_schema_version=snapshot.entry_schema_version,
         )
         if overlay.status == LocalStatus.REVIEW:
             detail = "; ".join(overlay.warnings) or "manual review is required"
@@ -140,12 +144,11 @@ def build_index(
             raise ValueError("Local overlay is not bound to this project root.")
         if overlay.directory is None:
             raise ValueError("Local overlay review state has no safe directory.")
-        from .entries import parse_structured_entries
-        for path in overlay.modules:
-            for entry in parse_structured_entries(path, read_local_private_file(path)):
+        for captured in overlay.captured_modules:
+            for entry in captured.entries:
                 records.append(IndexedEntry(
                     entry.entry_id, entry.status, entry.scope,
-                    f"local/{path.relative_to(overlay.directory).as_posix()}", entry.text, entry,
+                    f"local/{captured.relative}", entry.text, entry,
                 ))
     by_id: dict[str, list[IndexedEntry]] = {}
     for record in records:
@@ -232,6 +235,7 @@ def run_promote(args) -> int:
     memory_dir = resolve_memory_dir(project_root, args.memory_dir)
     manifest = read_managed_text(memory_dir, memory_dir / "manifest.md")
     metadata = manifest_contract_metadata(manifest)
+    snapshot = build_snapshot(memory_dir, project_root)
     if compare_versions(metadata["protocol_version"], CURRENT_PROTOCOL_VERSION) != 0:
         raise ValueError("Promotion preview requires Protocol 0.7.")
     registry_issues = validate_subject_registry(memory_dir, project_root)
@@ -266,12 +270,13 @@ def run_promote(args) -> int:
         raise ValueError("Promotion target escapes the managed memory directory.") from exc
     new_id = _promoted_id(candidate, active_kind)
     blockers: list[str] = []
-    shared_ids = memory_entry_ids(memory_dir)
+    shared_ids = {entry.entry_id for entry in snapshot.relation_entries}
     try:
         overlay = inspect_overlay(
             project_root,
             metadata["project_id"],
             shared_ids=shared_ids,
+            entry_schema_version=snapshot.entry_schema_version,
         )
     except (OSError, RuntimeError, ValueError) as exc:
         overlay = None
@@ -287,17 +292,14 @@ def run_promote(args) -> int:
             detail = "; ".join(overlay.warnings) or "manual review is required"
             blockers.append(f"Local overlay requires review: {detail}")
         if overlay.directory is not None:
-            for module in overlay.modules:
-                try:
-                    local_text = read_local_private_file(module)
-                    module_ids = heading_entry_ids(local_text)
-                except (OSError, RuntimeError, ValueError) as exc:
-                    blockers.append(
-                        f"Local overlay module {module.name} could not be inspected safely: {exc}"
-                    )
-                    continue
+            for captured in overlay.captured_modules:
+                local_text = captured.text
+                module_ids = [entry.entry_id for entry in captured.entries]
                 local_ids.update(module_ids)
-                relative_module = module.relative_to(overlay.directory).as_posix()
+                if captured.diagnostics:
+                    blockers.extend(captured.diagnostics)
+                    continue
+                relative_module = captured.relative
                 local_dependencies.append(
                     f"module:{relative_module}:ids={','.join(sorted(item.casefold() for item in module_ids))}:"
                     f"{digest_text(local_text)}"
@@ -336,7 +338,7 @@ def run_promote(args) -> int:
         blockers.append(
             f"Candidate-Type {candidate_type!r} does not match requested promotion type {args.type!r}"
         )
-    if new_id.casefold() in {entry_id.casefold() for entry_id in memory_entry_ids(memory_dir)}:
+    if new_id.casefold() in {entry_id.casefold() for entry_id in shared_ids}:
         blockers.append(f"Generated active Entry ID already exists: {new_id}")
     subject_id = candidate.structured.fields.get("Provisional-Subject", "")
     facet = candidate.structured.fields.get("Provisional-Facet", "")
@@ -382,9 +384,15 @@ def run_promote(args) -> int:
         promoted_from=candidate.entry_id,
     )
     prospective_candidate = parse_structured_entries(
-        memory_dir / candidate.source, promoted_candidate_text,
+        memory_dir / candidate.source,
+        promoted_candidate_text,
+        entry_schema_version=snapshot.entry_schema_version,
     )
-    prospective_active = parse_structured_entries(target_path, prospective_entry_text)
+    prospective_active = parse_structured_entries(
+        target_path,
+        prospective_entry_text,
+        entry_schema_version=snapshot.entry_schema_version,
+    )
     if len(prospective_candidate) != 1:
         blockers.append("Candidate transition does not produce exactly one structured Entry")
     if len(prospective_active) != 1:

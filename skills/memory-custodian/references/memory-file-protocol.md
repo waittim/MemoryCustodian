@@ -49,10 +49,30 @@ Area decisions use `MC-AREA` with a `Decision` body. Area constraints, preferenc
 their semantic `MC-CON`, `MC-PREF`, and `MC-DNU` IDs and typed bodies while using `Scope: area:<slug>` and
 `areas/<slug>.md`. Validation is bidirectional: Entry ID, typed body, storage path, and Scope must agree.
 
-Protocol 0.7 manifests include entry and Subject schema version 1 plus routing and conflict schema version 1, a
+Protocol 0.7 manifests include Entry schema version 2, Subject schema version 1, and routing and conflict schema
+version 1, a
 persistent UUIDv4 `project_id`, `subject_registry: subjects.md`, `admission_policy: evidence-required`,
 `routing_policy: explicit-task-and-scope`, and `conflict_policy: canonical-subject-and-review`. The project ID is
 identity for external locks and local-overlay namespaces, not authentication or authorization.
+
+### Protocol 0.7 Entry schema 1 to 2 boundary
+
+`entry_schema_version` is interpreted together with `protocol_version`. Protocol 0.7/schema 1 was publicly
+available on the `0.11.0` branch before the body wrapper was added, so it is a distributed legacy format even though
+it has no formal release tag. It uses plain typed-body lines and treats a manually present
+`memory-custodian-body-v1` fence as literal body text.
+
+Protocol 0.7/schema 2 is the current grammar. Its explicit, versioned `memory-custodian-body-v1` wrapper protects
+column-zero fields, headings, and bullets. CLI `0.11.0` or newer can read schema 1 with its literal-body semantics,
+reports migration availability, and migrates to schema 2; it must not silently decode schema-1 source as schema 2.
+Schema 2 is the write format. A schema-1 manifest is not current and all strict reads, checks, conflicts, and writers
+must direct the user to preview/apply migration first. The minimum supported writer is the schema-2-capable `0.11.0`
+build; the pre-wrapper public `0.11.0` branch remains schema-1-only, must be upgraded before migration, and cannot
+safely decode schema-2 wrapper output, so a package version alone is not sufficient unless the build exposes schema 2.
+The local overlay's `local_overlay_schema_version: 1` is an independent
+topology/binding schema; its Entry bodies follow the shared manifest's Entry schema selection. A bound local overlay
+is migrated alongside the shared files in the same preview/apply plan. An unbound, multi-root, or otherwise REVIEW
+overlay blocks the shared schema flip rather than being guessed at; bind or repair it first.
 
 ## Concurrency and plan confirmation
 
@@ -332,12 +352,14 @@ Exception-To and active merged-Subject references.
 
 Writers serialize body lines that resemble protocol fields or H2 headings as body text and parse-check rendered
 active, candidate, local, migrated, and Subject records before writing. Typed Entry bodies and Subject titles must be
-non-empty. Plain body text keeps its source whitespace, including four-space indented code. When a body contains a
-visible column-zero field, H2, or top-level list line that would otherwise be structural, the shared writer encloses
-the whole body in a standard Markdown fence whose exact info string is `memory-custodian-body-v1`; the fence is
-chosen longer than every same-character run in the body. The parser removes only this explicit, versioned wrapper
-when it occurs immediately after a body field. The former `&#8283;` entity has no protocol meaning and is preserved
-as ordinary user content, including in pre-existing files. `show` presents the decoded body without the wrapper.
+non-empty. Plain body text keeps its source whitespace, including four-space indented code. Schema-2 writers use an
+explicit standard Markdown fence when a body contains a visible column-zero field, H2, or top-level list line that
+would otherwise be structural; its exact info string is `memory-custodian-body-v1`, and the fence is chosen longer
+than every same-character run in the body. Only the schema-2 parser removes this explicit, versioned wrapper when it
+occurs immediately after a body field. The schema-1 parser treats a manually present marker and its complete fenced
+block as literal body text until migration. The former `&#8283;` entity has no protocol meaning and is preserved as
+ordinary user content, including in pre-existing files. `show` presents the decoded body without the wrapper only
+for schema-2 input.
 Protocol 0.5 bullet writers indent continuation lines so one accepted input remains exactly one semantic unit.
 Migration validates each prospective structured Entry with the shared schema and storage rules; a legacy unit that
 cannot be migrated unambiguously remains unchanged and blocks apply. Subject aliases and titles are canonical single

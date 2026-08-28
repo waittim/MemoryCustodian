@@ -42,6 +42,12 @@ from .routes import (
 DOCS_MEMORY_ROOT = "docs"
 CURRENT_PACKAGE_LABEL = f"memory-custodian {__version__}"
 CURRENT_PROTOCOL_VERSION = __protocol_version__
+LEGACY_ENTRY_SCHEMA_VERSION = "1"
+CURRENT_ENTRY_SCHEMA_VERSION = __entry_schema_version__
+ENTRY_SCHEMA_MIGRATION_MESSAGE = (
+    "Project uses Protocol 0.7 entry schema 1; migration to entry schema 2 is available. "
+    "Run `memory-custodian migrate --apply` after reviewing the preview."
+)
 
 BUDGETS = {
     "brief.md": 500,
@@ -214,6 +220,51 @@ def compare_versions(left: str, right: str) -> int | None:
     if padded_left > padded_right:
         return 1
     return 0
+
+
+def entry_schema_version_for_manifest(manifest: str) -> str:
+    """Choose Entry decoding semantics from one captured manifest.
+
+    Unknown, malformed, or absent declarations fail closed to the legacy
+    parser.  In particular, schema 1 must never be sent through the schema 2
+    body-fence decoder merely because the installed CLI is newer.
+    """
+
+    try:
+        # Select the grammar from the captured Protocol scalar section only.
+        # Routing and the rest of the manifest contract are validated by their
+        # own gates; an unrelated routing error must not make an otherwise
+        # unique schema-2 declaration fall back to the schema-1 parser.  The
+        # strict lexical parser rejects duplicate and malformed fields.
+        # Custom Protocol metadata remains an allowed extension; only the
+        # protocol and entry-schema scalars select the body grammar.
+        metadata = strict_protocol_metadata(
+            manifest,
+            allow_missing_section=True,
+        )
+    except (TypeError, ValueError):
+        # A malformed or contradictory declaration must never opt a source
+        # into the current wrapper decoder.  The caller's contract gate will
+        # report the actual metadata error; the parser stays fail-closed.
+        return LEGACY_ENTRY_SCHEMA_VERSION
+    # Entry grammar is scoped to the canonical Protocol tuple.  Older, newer,
+    # or non-canonical-but-equivalent protocol spellings are not evidence that
+    # this CLI may decode schema 2.
+    if metadata.get("protocol_version") != CURRENT_PROTOCOL_VERSION:
+        return LEGACY_ENTRY_SCHEMA_VERSION
+    declared = metadata.get("entry_schema_version")
+    if declared in {LEGACY_ENTRY_SCHEMA_VERSION, CURRENT_ENTRY_SCHEMA_VERSION}:
+        return declared
+    return LEGACY_ENTRY_SCHEMA_VERSION
+
+
+def entry_schema_migration_available(metadata: dict[str, str]) -> bool:
+    """Return whether a current Protocol 0.7 manifest needs Entry migration."""
+
+    return (
+        metadata.get("protocol_version") == CURRENT_PROTOCOL_VERSION
+        and metadata.get("entry_schema_version") == LEGACY_ENTRY_SCHEMA_VERSION
+    )
 
 
 def read_text(path: Path) -> str:
@@ -428,6 +479,7 @@ def protocol_contract_metadata(
     manifest: str,
     *,
     allow_missing_section: bool = False,
+    allow_legacy_entry_schema: bool = False,
 ) -> dict[str, str]:
     """Return strict metadata after validating the declared version contract."""
 
@@ -475,6 +527,17 @@ def protocol_contract_metadata(
     }
     for key, expected in required.items():
         actual = metadata.get(key)
+        if (
+            key == "entry_schema_version"
+            and allow_legacy_entry_schema
+            and actual == LEGACY_ENTRY_SCHEMA_VERSION
+        ):
+            continue
+        if (
+            key == "entry_schema_version"
+            and actual == LEGACY_ENTRY_SCHEMA_VERSION
+        ):
+            raise ValueError(ENTRY_SCHEMA_MIGRATION_MESSAGE)
         if actual != expected:
             raise ValueError(
                 f"Protocol {CURRENT_PROTOCOL_VERSION} requires {key}: {expected}; "
@@ -496,12 +559,14 @@ def manifest_contract_metadata(
     manifest: str,
     *,
     allow_missing_section: bool = False,
+    allow_legacy_entry_schema: bool = False,
 ) -> dict[str, str]:
     """Validate Protocol metadata and deterministic manifest routing together."""
 
     metadata = protocol_contract_metadata(
         manifest,
         allow_missing_section=allow_missing_section,
+        allow_legacy_entry_schema=allow_legacy_entry_schema,
     )
     route_issues = validate_manifest_routes(manifest)
     if route_issues:
@@ -522,10 +587,11 @@ class ManifestContractResult:
     present: bool
     metadata: tuple[tuple[str, str], ...] = ()
     error: str | None = None
+    migration_available: bool = False
 
     @property
     def valid(self) -> bool:
-        return self.present and self.error is None
+        return self.present and self.error is None and not self.migration_available
 
     def as_dict(self) -> dict[str, str]:
         return dict(self.metadata)
@@ -550,10 +616,21 @@ def inspect_manifest_contract(
         metadata = manifest_contract_metadata(
             manifest,
             allow_missing_section=allow_missing_section,
+            allow_legacy_entry_schema=True,
         )
     except ValueError as exc:
         return ManifestContractResult(
-            True, tuple(sorted(captured_metadata.items())), str(exc),
+            True,
+            tuple(sorted(captured_metadata.items())),
+            str(exc),
+            entry_schema_migration_available(captured_metadata),
+        )
+    if entry_schema_migration_available(metadata):
+        return ManifestContractResult(
+            True,
+            tuple(sorted(metadata.items())),
+            ENTRY_SCHEMA_MIGRATION_MESSAGE,
+            True,
         )
     return ManifestContractResult(True, tuple(sorted(metadata.items())), None)
 

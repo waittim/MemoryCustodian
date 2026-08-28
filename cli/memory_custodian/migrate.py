@@ -1,8 +1,9 @@
-"""Conservative, preview-first Protocol 0.5 to 0.6 migration."""
+"""Conservative, preview-first migration to the current Protocol 0.7 contract."""
 
 from __future__ import annotations
 
 import hashlib
+from dataclasses import dataclass
 from pathlib import Path
 import re
 import stat
@@ -13,15 +14,29 @@ from .entries import (
     entry_unit_issues,
     heading_entry_ids,
     line_safe_markdown_body,
+    migrate_entry_schema,
     memory_entry_ids,
     parse_structured_entries,
     structured_entry_schema_issues,
     structured_entry_storage_issues,
     validate_evidence,
+    LEGACY_ENTRY_SCHEMA_VERSION,
 )
-from .locking import project_mutation_guard
+from .locking import (
+    discard_private_file,
+    project_mutation_guard,
+    read_private_file,
+    write_private_file,
+)
 from .markdown import visible_lines
-from .mutations import TextMutation, apply_mutations
+from .mutations import (
+    PrivateTextMutation,
+    TextMutation,
+    apply_mutations,
+    apply_private_mutations,
+    restore_text_file_exact,
+)
+from .local_overlay import LocalStatus, inspect_overlay
 from .plans import (
     MutationPlan,
     digest_text,
@@ -31,9 +46,11 @@ from .plans import (
     print_plan,
 )
 from .protocol import (
+    CURRENT_ENTRY_SCHEMA_VERSION,
     CURRENT_PROTOCOL_VERSION,
     changelog_text,
     compare_versions,
+    entry_schema_version_for_manifest,
     manifest_with_complete_task_routing,
     manifest_with_current_protocol_metadata,
     manifest_with_current_task_routing,
@@ -41,7 +58,6 @@ from .protocol import (
     manifest_with_optional_index,
     manifest_with_protocol_07_optional_routes,
     managed_markdown_files,
-    MarkdownUnit,
     parse_markdown_units,
     protocol_metadata,
     read_managed_text,
@@ -49,11 +65,94 @@ from .protocol import (
     valid_project_id,
     resolve_memory_dir,
     resolve_project_root,
-    render_markdown_document,
     today,
 )
 from .routes import parse_optional_module_index
 from .templates import render_template
+from .snapshot import build_snapshot
+
+
+@dataclass(frozen=True)
+class _MigrationPreimage:
+    """One exact shared or private file state captured before migration apply."""
+
+    path: Path
+    label: str
+    text: str | None
+    private: bool
+
+
+def _capture_migration_preimages(
+    memory_dir: Path,
+    shared_mutations: tuple[TextMutation, ...],
+    private_mutations: tuple[PrivateTextMutation, ...],
+) -> tuple[_MigrationPreimage, ...]:
+    """Capture every apply operand before any migration write is attempted."""
+
+    preimages: list[_MigrationPreimage] = []
+    for mutation in shared_mutations:
+        try:
+            mutation.path.lstat()
+        except FileNotFoundError:
+            text = None
+        else:
+            text = read_managed_text(memory_dir, mutation.path, required=True)
+        preimages.append(
+            _MigrationPreimage(
+                mutation.path,
+                mutation.path.relative_to(memory_dir).as_posix(),
+                text,
+                False,
+            )
+        )
+    for mutation in private_mutations:
+        try:
+            mutation.path.lstat()
+        except FileNotFoundError:
+            text = None
+        else:
+            text = read_private_file(mutation.path)
+        preimages.append(
+            _MigrationPreimage(
+                mutation.path,
+                f"local/{mutation.relative}",
+                text,
+                True,
+            )
+        )
+    return tuple(preimages)
+
+
+def _restore_migration_preimages(
+    preimages: tuple[_MigrationPreimage, ...],
+    manifest_path: Path,
+) -> tuple[str, ...]:
+    """Best-effort restore of all migration operands, with manifest first."""
+
+    # Restore the grammar selector before the other operands.  If an
+    # individual recovery write fails, every subsequent attempt still runs,
+    # but the manifest is never intentionally left at schema 2 while a local
+    # or shared operand is still at schema 1.
+    ordered = sorted(
+        preimages,
+        key=lambda item: (
+            item.path != manifest_path or item.private,
+            item.label,
+        ),
+    )
+    failures: list[str] = []
+    for preimage in ordered:
+        try:
+            if preimage.private:
+                if preimage.text is None:
+                    discard_private_file(preimage.path)
+                else:
+                    write_private_file(preimage.path, preimage.text)
+            else:
+                restore_text_file_exact(preimage.path, preimage.text)
+        except Exception as exc:
+            failures.append(f"{preimage.label}: {exc}")
+    return tuple(failures)
 
 
 def _legacy_key(relative: str, section: str, index: int) -> str:
@@ -148,7 +247,11 @@ def _migrate_decisions(
                 *safe_body,
             ]
         )
-        parsed = parse_structured_entries(Path(relative), migrated)
+        parsed = parse_structured_entries(
+            Path(relative),
+            migrated,
+            entry_schema_version=CURRENT_ENTRY_SCHEMA_VERSION,
+        )
         if len(parsed) != 1 or parsed[0].entry_id.casefold() != entry_id.casefold():
             manual += 1
             continue
@@ -266,7 +369,83 @@ def _migration_sources(memory_dir: Path, manifest: str) -> dict[str, str]:
     return sources
 
 
-def _validate_existing_formal_entries(project_root: Path, memory_dir: Path) -> None:
+def _entry_schema_sources(memory_dir: Path) -> dict[str, str]:
+    """Capture every managed Entry-bearing source for schema migration."""
+
+    sources: dict[str, str] = {}
+    for path in managed_markdown_files(memory_dir):
+        relative = path.relative_to(memory_dir).as_posix()
+        if relative in {"manifest.md", "subjects.md", "reconciliations.md"}:
+            continue
+        if path.name.casefold() == "readme.md":
+            continue
+        sources[relative] = read_managed_text(memory_dir, path)
+    return sources
+
+
+def _local_schema_migrations(
+    project_root: Path,
+    memory_dir: Path,
+    project_id: str | None,
+    *,
+    entry_schema_version: str,
+) -> tuple[tuple[PrivateTextMutation, ...], int, tuple[str, ...]]:
+    """Capture bound local Entries before the shared manifest flips grammar.
+
+    Local state is repo-external, but its Entry grammar is selected by the
+    shared manifest.  A bound schema-1 overlay therefore has to migrate in
+    the same confirmed operation; otherwise changing the shared manifest to
+    schema 2 would make the next read strip a literal body wrapper.  Unsafe,
+    unbound, or multi-root overlays are blocked rather than guessed at.
+    """
+
+    if (
+        not project_id
+        or entry_schema_version == CURRENT_ENTRY_SCHEMA_VERSION
+    ):
+        return (), 0, ()
+    try:
+        overlay = inspect_overlay(
+            project_root,
+            project_id,
+            shared_ids=set(memory_entry_ids(memory_dir)),
+            entry_schema_version=entry_schema_version,
+        )
+    except (OSError, RuntimeError, ValueError) as exc:
+        return (), 0, (f"Local overlay could not be inspected safely: {exc}",)
+    if overlay.status == LocalStatus.DISABLED:
+        return (), 0, ()
+    if overlay.status != LocalStatus.BOUND:
+        detail = "; ".join(overlay.warnings) or overlay.status.value
+        return (
+            (),
+            0,
+            (
+                "Local overlay must be bound and free of review warnings before "
+                f"Entry schema migration ({detail}).",
+            ),
+        )
+    migrations: list[PrivateTextMutation] = []
+    changed = 0
+    for captured in overlay.captured_modules:
+        migrated, count = migrate_entry_schema(
+            captured.path,
+            captured.text,
+            from_schema=entry_schema_version,
+            to_schema=CURRENT_ENTRY_SCHEMA_VERSION,
+        )
+        if count:
+            migrations.append(PrivateTextMutation(captured.path, captured.relative, migrated))
+            changed += count
+    return tuple(migrations), changed, ()
+
+
+def _validate_existing_formal_entries(
+    project_root: Path,
+    memory_dir: Path,
+    *,
+    entry_schema_version: str = LEGACY_ENTRY_SCHEMA_VERSION,
+) -> None:
     """Reject formal Entries that an upgrade would otherwise grandfather as 0.7."""
 
     issues: list[str] = []
@@ -280,7 +459,11 @@ def _validate_existing_formal_entries(project_root: Path, memory_dir: Path) -> N
         for entry_id in heading_entry_ids(text):
             key = entry_id.casefold()
             id_counts[key] = id_counts.get(key, 0) + 1
-        for entry in parse_structured_entries(path, text):
+        for entry in parse_structured_entries(
+            path,
+            text,
+            entry_schema_version=entry_schema_version,
+        ):
             issues.extend(structured_entry_schema_issues(entry, relative))
             issues.extend(structured_entry_storage_issues(entry, relative))
             if entry.status not in {"active", "candidate", "superseded", "promoted"}:
@@ -357,6 +540,7 @@ def _build_plan(project_root: Path, memory_dir: Path) -> tuple[MutationPlan, lis
             raise ValueError(
                 f"Project protocol {version} is newer than this CLI supports ({CURRENT_PROTOCOL_VERSION})."
             )
+    entry_schema_version = entry_schema_version_for_manifest(original)
     seed_path: Path | None = None
     project_id = metadata.get("project_id")
     if project_id and not valid_project_id(project_id):
@@ -369,15 +553,51 @@ def _build_plan(project_root: Path, memory_dir: Path) -> tuple[MutationPlan, lis
         provisional_project_id,
     )
     sources = _migration_sources(memory_dir, original)
-    _validate_existing_formal_entries(project_root, memory_dir)
+    entry_sources = _entry_schema_sources(memory_dir)
+    _validate_existing_formal_entries(
+        project_root,
+        memory_dir,
+        entry_schema_version=entry_schema_version,
+    )
+    local_schema_migrations, local_schema_migrated_count, local_blockers = (
+        _local_schema_migrations(
+            project_root,
+            memory_dir,
+            project_id,
+            entry_schema_version=entry_schema_version,
+        )
+    )
+    schema_migrated: dict[str, str] = {}
+    schema_migrated_count = 0
+    if entry_schema_version != CURRENT_ENTRY_SCHEMA_VERSION:
+        for relative, source in entry_sources.items():
+            migrated_source, migrated_count = migrate_entry_schema(
+                Path(relative),
+                source,
+                from_schema=entry_schema_version,
+                to_schema=CURRENT_ENTRY_SCHEMA_VERSION,
+            )
+            if migrated_count:
+                schema_migrated[relative] = migrated_source
+                schema_migrated_count += migrated_count
     from .integrity import cross_unit_integrity_findings
 
+    preflight_text = {
+        memory_dir / relative: text
+        for relative, text in schema_migrated.items()
+    }
+    preflight_text[memory_dir / "manifest.md"] = preflight_manifest
     cross_issues, _cross_warnings = cross_unit_integrity_findings(
         project_root,
         memory_dir,
         preflight_manifest,
         project_id=project_id,
         allow_missing_subjects=True,
+        snapshot=build_snapshot(
+            memory_dir,
+            project_root,
+            planned_text=preflight_text,
+        ),
     )
     if cross_issues:
         preview = "; ".join(cross_issues[:5])
@@ -413,8 +633,28 @@ def _build_plan(project_root: Path, memory_dir: Path) -> tuple[MutationPlan, lis
     ) = _upgraded_manifest(original, project_id)
     mutations: list[TextMutation] = []
     changes: list[str] = []
+
+    def put_mutation(path: Path, text: str) -> None:
+        for index, existing in enumerate(mutations):
+            if existing.path == path:
+                mutations[index] = TextMutation(path, text)
+                return
+        mutations.append(TextMutation(path, text))
+
+    for relative, migrated_source in schema_migrated.items():
+        put_mutation(memory_dir / relative, migrated_source)
+    if schema_migrated_count:
+        changes.append(
+            "managed Entry files: encode schema 1 bodies with the schema 2 "
+            "memory-custodian-body-v1 grammar"
+        )
+    if local_schema_migrated_count:
+        changes.append(
+            "bound local Entry files: encode schema 1 bodies with the schema 2 "
+            "memory-custodian-body-v1 grammar"
+        )
     if updated != original:
-        mutations.append(TextMutation(manifest_path, updated))
+        put_mutation(manifest_path, updated)
     if metadata_changed or updated != original:
         changes.append("manifest.md: upgrade protocol metadata to 0.7 and preserve/generate project_id")
     if routing_changed:
@@ -426,7 +666,7 @@ def _build_plan(project_root: Path, memory_dir: Path) -> tuple[MutationPlan, lis
 
     subjects_path = memory_dir / "subjects.md"
     if not subjects_path.exists():
-        mutations.append(TextMutation(subjects_path, render_template("subjects.md", today())))
+        put_mutation(subjects_path, render_template("subjects.md", today()))
         changes.append("subjects.md: create managed Subject registry scaffold")
 
     decisions_path = memory_dir / "decisions.md"
@@ -434,14 +674,14 @@ def _build_plan(project_root: Path, memory_dir: Path) -> tuple[MutationPlan, lis
     migrated_count = 0
     used_entry_ids = {entry_id.casefold() for entry_id in memory_entry_ids(memory_dir)}
     if "decisions.md" in sources:
-        decisions = sources["decisions.md"]
+        decisions = schema_migrated.get("decisions.md", sources["decisions.md"])
         migrated, migrated_count, manual, generated = _migrate_decisions(
             decisions,
             suffixes,
             used_ids=used_entry_ids,
         )
         if migrated != decisions:
-            mutations.append(TextMutation(decisions_path, migrated))
+            put_mutation(decisions_path, migrated)
             changes.append(f"decisions.md: add stable IDs and legacy-unverified Evidence to {migrated_count} structured entries")
             changes.extend(f"decisions.md: generated Entry ID {entry_id}" for entry_id in generated)
         if manual:
@@ -454,7 +694,7 @@ def _build_plan(project_root: Path, memory_dir: Path) -> tuple[MutationPlan, lis
         if relative not in sources:
             continue
         slug = Path(relative).stem
-        area_original = sources[relative]
+        area_original = schema_migrated.get(relative, sources[relative])
         area_updated, area_count, area_manual, area_generated = _migrate_decisions(
             area_original,
             suffixes,
@@ -464,7 +704,7 @@ def _build_plan(project_root: Path, memory_dir: Path) -> tuple[MutationPlan, lis
             used_ids=used_entry_ids,
         )
         if area_updated != area_original:
-            mutations.append(TextMutation(area_path, area_updated))
+            put_mutation(area_path, area_updated)
             changes.append(
                 f"{relative}: add stable area IDs and legacy-unverified Evidence to {area_count} structured entries"
             )
@@ -473,14 +713,13 @@ def _build_plan(project_root: Path, memory_dir: Path) -> tuple[MutationPlan, lis
             manual_reports.append(f"{area_manual} ambiguous {relative} H2 section(s)")
 
     if changelog_original is not None and mutations:
-        mutations.append(
-            TextMutation(
-                changelog_path,
-                changelog_text(
-                    changelog_original,
-                    "Migrated project memory to Protocol 0.7 without rewriting legacy freeform units.",
-                ),
-            )
+        put_mutation(
+            changelog_path,
+            changelog_text(
+                changelog_original,
+                "Migrated project memory to Protocol 0.7 and Entry schema 2 "
+                "without rewriting legacy freeform units.",
+            ),
         )
     warnings = []
     for report in manual_reports:
@@ -501,8 +740,14 @@ def _build_plan(project_root: Path, memory_dir: Path) -> tuple[MutationPlan, lis
             CURRENT_PROTOCOL_VERSION,
             tuple(mutations),
             tuple(warnings),
-            tuple(f"Manual migration required for {report}." for report in manual_reports),
+            tuple(
+                [
+                    *(f"Manual migration required for {report}." for report in manual_reports),
+                    *local_blockers,
+                ]
+            ),
             project_root=project_root,
+            private_mutations=local_schema_migrations,
         ),
         changes,
         tuple(path for path in (seed_path, entry_seed_path) if path is not None),
@@ -519,7 +764,7 @@ def run(args) -> int:
         raise ValueError(f"manifest.md missing: {manifest_path}")
 
     plan, changes, seed_paths = _build_plan(project_root, memory_dir)
-    if not plan.mutations:
+    if not plan.mutations and not plan.private_mutations:
         print("MemoryCustodian migrate: no changes needed")
         return 0
     print("MemoryCustodian migrate plan:")
@@ -561,10 +806,55 @@ def run(args) -> int:
             raise ValueError(
                 f"Stale or mismatched plan: confirmed {args.confirm_plan}, current Plan ID is {current.plan_id}. No files written."
             )
-        apply_mutations(list(current.mutations))
+        # Migration is the one multi-root operation that can change the
+        # parser selected by the shared manifest.  Capture exact preimages
+        # before writing anything, keep the manifest's schema flip last among
+        # shared writes, and restore every operand on any failure.  This is
+        # intentionally separate from the general MutationPlan writer: its
+        # normal partial-write behavior remains unchanged.
+        preimages = _capture_migration_preimages(
+            memory_dir,
+            tuple(current.mutations),
+            tuple(current.private_mutations),
+        )
+        non_manifest = tuple(
+            mutation
+            for mutation in current.mutations
+            if mutation.path != manifest_path
+        )
+        manifest_mutations = tuple(
+            mutation
+            for mutation in current.mutations
+            if mutation.path == manifest_path
+        )
+        try:
+            if non_manifest:
+                apply_mutations(list(non_manifest))
+            if current.private_mutations:
+                apply_private_mutations(list(current.private_mutations))
+            if manifest_mutations:
+                apply_mutations(list(manifest_mutations))
+        except Exception as exc:
+            recovery_failures = _restore_migration_preimages(
+                preimages,
+                manifest_path,
+            )
+            if recovery_failures:
+                details = "; ".join(recovery_failures)
+                raise ValueError(
+                    "Migration apply failed and recovery was partial; schema 1 "
+                    f"preimages could not be restored for: {details}. "
+                    "Inspect the listed files before retrying."
+                ) from exc
+            raise ValueError(
+                "Migration apply failed; all shared and local files were restored "
+                "to their schema 1 preimages. No migration was applied."
+            ) from exc
     for path in {*seed_paths, *current_seed_paths}:
         discard_pending_seed(path)
     print("Applied migration. Written files:")
     for mutation in current.mutations:
         print(f"- {mutation.path}")
+    for mutation in current.private_mutations:
+        print(f"- local/{mutation.relative}")
     return 0

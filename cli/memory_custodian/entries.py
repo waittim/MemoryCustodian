@@ -8,7 +8,8 @@ from pathlib import Path, PurePosixPath
 import re
 import uuid
 
-ENTRY_SCHEMA_VERSION = "1"
+ENTRY_SCHEMA_VERSION = "2"
+LEGACY_ENTRY_SCHEMA_VERSION = "1"
 TYPE_CODES = {
     "decision": "DEC",
     "constraint": "CON",
@@ -362,16 +363,64 @@ def _body_fence_opening(raw_line: str) -> bool:
     return match is not None and match.group(2).strip() == BODY_FENCE_INFO
 
 
-def line_safe_markdown_body(value: str) -> str:
+def _legacy_line_safe_markdown_body(value: str) -> str:
+    """Serialize the public schema-1 body escape used before wrappers.
+
+    Protocol 0.7/schema 1 writers protected visible field-like lines with a
+    four-space Markdown indented-code prefix.  Keep this serializer isolated
+    to compatibility writes; schema 2 must use the versioned fence below.
+    """
+
+    safe: list[str] = []
+    fence_character: str | None = None
+    fence_length = 0
+    for line in value.splitlines():
+        if fence_character is not None:
+            safe.append(line)
+            if re.fullmatch(
+                rf" {{0,3}}{re.escape(fence_character)}{{{fence_length},}}[ \t]*",
+                line,
+            ):
+                fence_character = None
+                fence_length = 0
+            continue
+        opening = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", line)
+        if opening:
+            marker = opening.group(1)
+            if marker[0] == "`" and "`" in opening.group(2):
+                raise ValueError("Backtick fence info strings must not contain backticks")
+            fence_character = marker[0]
+            fence_length = len(marker)
+            safe.append(line)
+            continue
+        if FIELD_RE.match(line) or line.startswith(("## ", "- ", "* ", "+ ")):
+            safe.append("    " + line)
+        else:
+            safe.append(line)
+    if fence_character is not None:
+        raise ValueError("Body contains an unclosed fenced code block.")
+    return "\n".join(safe)
+
+
+def line_safe_markdown_body(
+    value: str,
+    *,
+    entry_schema_version: str | int | None = None,
+) -> str:
     """Serialize body text without creating column-zero protocol structure.
 
     Ordinary Markdown remains unchanged.  A body with visible protocol-like
     lines is enclosed in the explicit, versioned ``memory-custodian-body-v1``
     fenced-block form.  The wrapper is standard Markdown and is removed only
     when it occurs directly as the body representation of a formal Entry;
-    there is no private character/entity escape and no indentation heuristic.
+    there is no private character/entity escape.  The explicit schema-1 mode
+    is retained solely for compatibility writers that still target the old
+    four-space body escape.
     """
 
+    schema = normalize_entry_schema_version(entry_schema_version)
+    if schema == LEGACY_ENTRY_SCHEMA_VERSION:
+        return _legacy_line_safe_markdown_body(value)
     if not _body_requires_fence(value) and not _body_starts_with_wrapper(value):
         return value.replace("\r\n", "\n").replace("\r", "\n")
     fence = _body_fence(value)
@@ -424,6 +473,24 @@ def _body_fence_close(raw_line: str, character: str, length: int) -> bool:
     ) is not None
 
 
+def _decoded_legacy_body_line(raw_line: str, visible) -> str:
+    """Decode the schema-1 writer's explicit four-space body protection.
+
+    The public Protocol 0.7/schema 1 implementation protected a body line
+    that looked like an Entry field, heading, or list item by prefixing four
+    spaces.  Keep ordinary indented Markdown code literal; only that narrow,
+    protocol-shaped form is decoded.  Schema 2 never calls this helper: its
+    versioned fenced wrapper is the only body envelope it owns.
+    """
+
+    if not visible.indented_code or not raw_line.startswith("    "):
+        return raw_line
+    candidate = raw_line[4:]
+    if FIELD_RE.match(candidate) or candidate.startswith(("## ", "- ", "* ", "+ ")):
+        return candidate
+    return raw_line
+
+
 def _validate_rendered_entry(
     text: str,
     entry_id: str,
@@ -434,7 +501,10 @@ def _validate_rendered_entry(
 ) -> None:
     if not _normalized_body(body):
         raise ValueError(f"Rendered Entry {body_field} body must not be empty.")
-    parsed = parse_structured_entries(Path("__rendered_entry__.md"), text)
+    parsed = parse_structured_entries(
+        Path("__rendered_entry__.md"), text,
+        entry_schema_version=ENTRY_SCHEMA_VERSION,
+    )
     if len(parsed) != 1 or parsed[0].entry_id.casefold() != entry_id.casefold():
         raise ValueError("Rendered Entry did not round-trip as exactly one structured Entry.")
     entry = parsed[0]
@@ -563,10 +633,31 @@ def render_candidate_entry(
     return rendered
 
 
-def parse_structured_entries(path: Path, text: str) -> list[StructuredEntry]:
+def normalize_entry_schema_version(value: str | int | None) -> str:
+    """Return the parser grammar for an Entry source.
+
+    Schema 1 is the pre-wrapper grammar.  It is intentionally retained only
+    as an explicit compatibility mode: a body that happens to contain a
+    ``memory-custodian-body-v1`` fence is literal source in that mode.
+    """
+
+    normalized = str(value if value is not None else ENTRY_SCHEMA_VERSION)
+    if normalized not in {LEGACY_ENTRY_SCHEMA_VERSION, ENTRY_SCHEMA_VERSION}:
+        raise ValueError(f"Unsupported Entry schema version: {normalized}")
+    return normalized
+
+
+def parse_structured_entries(
+    path: Path,
+    text: str,
+    *,
+    entry_schema_version: str | int | None = None,
+) -> list[StructuredEntry]:
     from .protocol import parse_markdown_units
     from .markdown import canonical_h2_parts, visible_lines
 
+    schema = normalize_entry_schema_version(entry_schema_version)
+    decode_body_fence = schema == ENTRY_SCHEMA_VERSION
     sections = [
         unit.text
         for unit in parse_markdown_units(text).units
@@ -611,7 +702,12 @@ def parse_structured_entries(path: Path, text: str) -> list[StructuredEntry]:
                 continue
             visible = visible_by_index.get(line_index)
             opened = _body_fence_open(raw_line)
-            if current_field in body_fields and not current_body and opened is not None:
+            if (
+                decode_body_fence
+                and current_field in body_fields
+                and not current_body
+                and opened is not None
+            ):
                 body_fence = opened
                 continue
             display_lines.append(raw_line)
@@ -621,7 +717,11 @@ def parse_structured_entries(path: Path, text: str) -> list[StructuredEntry]:
                 continue
             if visible.indented_code:
                 if current_field is not None:
-                    current_body.append(raw_line)
+                    current_body.append(
+                        _decoded_legacy_body_line(raw_line, visible)
+                        if schema == LEGACY_ENTRY_SCHEMA_VERSION
+                        else raw_line
+                    )
                 continue
             line = visible.text
             matched_field = FIELD_RE.match(line)
@@ -672,7 +772,12 @@ def parse_structured_entries(path: Path, text: str) -> list[StructuredEntry]:
     return parsed
 
 
-def parse_entry_units(path: Path, text: str) -> tuple[EntryUnit, ...]:
+def parse_entry_units(
+    path: Path,
+    text: str,
+    *,
+    entry_schema_version: str | int | None = None,
+) -> tuple[EntryUnit, ...]:
     """Return source units with an explicit raw/semantic Entry boundary.
 
     Formal Entries are matched to their original Markdown units by source
@@ -686,7 +791,11 @@ def parse_entry_units(path: Path, text: str) -> tuple[EntryUnit, ...]:
 
     document = parse_markdown_units(text)
     structured_by_source: dict[str, list[StructuredEntry]] = {}
-    for entry in parse_structured_entries(path, text):
+    for entry in parse_structured_entries(
+        path,
+        text,
+        entry_schema_version=entry_schema_version,
+    ):
         structured_by_source.setdefault(entry.text, []).append(entry)
 
     units: list[EntryUnit] = []
@@ -698,6 +807,115 @@ def parse_entry_units(path: Path, text: str) -> tuple[EntryUnit, ...]:
                 structured = candidates.pop(0)
         units.append(EntryUnit(source, structured))
     return tuple(units)
+
+
+def migrate_entry_schema(
+    path: Path,
+    text: str,
+    *,
+    from_schema: str | int,
+    to_schema: str | int | None = None,
+) -> tuple[str, int]:
+    """Encode existing formal Entry bodies for a newer Entry schema.
+
+    The source is parsed explicitly with ``from_schema`` before any body
+    fence is interpreted.  This is the important compatibility boundary for
+    schema 1: a manually present ``memory-custodian-body-v1`` block is first
+    captured as literal body text, then escaped as a literal when schema 2 is
+    written.  Non-formal Markdown units are left byte-for-byte untouched.
+    """
+
+    source_schema = normalize_entry_schema_version(from_schema)
+    target_schema = normalize_entry_schema_version(to_schema)
+    if source_schema == target_schema:
+        return text, 0
+    if (source_schema, target_schema) != (
+        LEGACY_ENTRY_SCHEMA_VERSION,
+        ENTRY_SCHEMA_VERSION,
+    ):
+        raise ValueError("Only Entry schema 1-to-2 migration is supported.")
+    from .markdown import canonical_h2_parts, visible_lines
+    from .protocol import parse_markdown_units
+
+    body_fields = TYPED_BODY_FIELDS | {"Reason", "Promotion-Requirement"}
+    replacements: list[tuple[int, int, int, str]] = []
+    for unit in parse_markdown_units(text).units:
+        if unit.kind != "h2":
+            continue
+        lines = unit.text.splitlines()
+        if not lines or not canonical_h2_parts(lines[0], ENTRY_HEADING_ID_RE):
+            continue
+        parsed = parse_structured_entries(
+            path,
+            unit.text,
+            entry_schema_version=source_schema,
+        )
+        if len(parsed) != 1:
+            continue
+        entry = parsed[0]
+        visible = {
+            line.index: line
+            for line in visible_lines(unit.text)
+            if not line.indented_code
+        }
+        field_lines: list[tuple[int, str]] = []
+        for index, line in sorted(visible.items()):
+            match = FIELD_RE.fullmatch(line.text)
+            if match:
+                field_lines.append((index, match.group(1)))
+        if not field_lines:
+            continue
+        replacements_for_unit: list[tuple[int, int, list[str]]] = []
+        for position, (field_index, field_name) in enumerate(field_lines):
+            if field_name not in body_fields or entry.field_counts.get(field_name) != 1:
+                continue
+            body = entry.field_bodies.get(field_name, "")
+            if not body.strip():
+                continue
+            next_index = (
+                field_lines[position + 1][0]
+                if position + 1 < len(field_lines)
+                else len(lines)
+            )
+            encoded = line_safe_markdown_body(
+                body,
+                entry_schema_version=target_schema,
+            ).splitlines()
+            # Keep a readable field separator while making the body range
+            # itself unambiguous to the target parser.
+            if next_index < len(lines):
+                encoded.append("")
+            replacements_for_unit.append((field_index, next_index, encoded))
+        if not replacements_for_unit:
+            continue
+        updated_lines = list(lines)
+        for start, end, encoded in sorted(replacements_for_unit, reverse=True):
+            updated_lines[start + 1:end] = encoded
+            # Inline typed bodies are uncommon but legal in the field grammar.
+            # Move that value into the same explicit body representation used
+            # by multiline fields instead of leaving an undecoded prefix.
+            if FIELD_RE.fullmatch(updated_lines[start] or ""):
+                updated_lines[start] = f"{field_lines[[item[0] for item in field_lines].index(start)][1]}:"
+        updated = "\n".join(updated_lines)
+        if updated != unit.text:
+            replacements.append((unit.start_line, unit.end_line, len(lines), updated))
+
+    if not replacements:
+        return text, 0
+    source_lines = text.splitlines(keepends=True)
+    for start, end, old_line_count, replacement in sorted(replacements, reverse=True):
+        if start < 0 or end > len(source_lines) or start + old_line_count > end:
+            raise ValueError("Entry schema migration source changed while building an exact-range mutation.")
+        original = source_lines[start:end]
+        eol = "\r\n" if any(line.endswith("\r\n") for line in original) else "\n"
+        # ``parse_markdown_units`` trims separator blank lines from a unit's
+        # semantic text. Replace only the unit content and retain those
+        # trailing source lines so migration does not collapse unrelated
+        # Markdown units into the closing body fence.
+        trailing = source_lines[start + old_line_count:end]
+        replacement_lines = [line + eol for line in replacement.splitlines()]
+        source_lines[start:end] = [*replacement_lines, *trailing]
+    return "".join(source_lines), len(replacements)
 
 
 def expected_typed_body(entry: StructuredEntry, relative_path: str) -> str | None:
@@ -923,6 +1141,7 @@ def parse_entry_inventory(
     project_root: Path,
     *,
     require_active_identity: bool = False,
+    entry_schema_version: str | int | None = None,
 ) -> tuple[tuple[StructuredEntry, ...], tuple[str, ...]]:
     """Parse entries together with the complete integrity issues for a file.
 
@@ -936,7 +1155,11 @@ def parse_entry_inventory(
     issues: list[str] = []
     try:
         issues.extend(entry_unit_issues(text, relative_path))
-        parsed = tuple(parse_structured_entries(path, text))
+        parsed = tuple(parse_structured_entries(
+            path,
+            text,
+            entry_schema_version=entry_schema_version,
+        ))
     except (TypeError, ValueError) as exc:
         return (), (f"{relative_path}: Markdown entry parsing failed: {exc}",)
     for entry in parsed:
@@ -1164,6 +1387,7 @@ def supersede_entry(
     new_id: str,
     *,
     relative_path: str = "__supersession__.md",
+    entry_schema_version: str | int | None = None,
 ) -> str:
     from .markdown import visible_lines
     from .protocol import parse_markdown_units
@@ -1175,7 +1399,11 @@ def supersede_entry(
         if unit.kind != "h2":
             continue
         section = unit.text
-        parsed = parse_structured_entries(Path(relative_path), section)
+        parsed = parse_structured_entries(
+            Path(relative_path),
+            section,
+            entry_schema_version=entry_schema_version,
+        )
         if len(parsed) != 1 or parsed[0].entry_id.casefold() != old_id.casefold():
             continue
         entry = parsed[0]
@@ -1199,7 +1427,11 @@ def supersede_entry(
             f"Superseded-By: {new_id}",
         ]
         section = "\n".join(lines)
-        resulting = parse_structured_entries(Path(relative_path), section)
+        resulting = parse_structured_entries(
+            Path(relative_path),
+            section,
+            entry_schema_version=entry_schema_version,
+        )
         if len(resulting) != 1 or (
             structured_entry_schema_issues(resulting[0], relative_path)
             or (

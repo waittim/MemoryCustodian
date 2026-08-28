@@ -8,6 +8,8 @@ from .locking import project_mutation_guard
 from .mutations import TextMutation, apply_mutations
 from .plans import MutationPlan, print_plan
 from .protocol import (
+    ENTRY_SCHEMA_MIGRATION_MESSAGE,
+    LEGACY_ENTRY_SCHEMA_VERSION,
     is_indexable_optional_path,
     compare_versions,
     CURRENT_PROTOCOL_VERSION,
@@ -106,6 +108,15 @@ def _repair_manifest(text: str, project_id: str) -> tuple[str, bool]:
             raise ValueError(
                 f"Project protocol {version} requires preview-first migration to {CURRENT_PROTOCOL_VERSION}; "
                 "run `memory-custodian migrate` instead of init --repair."
+            )
+        if (
+            comparison == 0
+            and protocol_metadata(text).get("entry_schema_version")
+            == LEGACY_ENTRY_SCHEMA_VERSION
+        ):
+            raise ValueError(
+                ENTRY_SCHEMA_MIGRATION_MESSAGE
+                + " `init --repair` cannot flip the manifest without migrating Entry bodies."
             )
     updated, metadata_changed = manifest_with_current_protocol_metadata(
         text,

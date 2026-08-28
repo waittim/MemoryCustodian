@@ -14,7 +14,12 @@ from .local_overlay import (
     render_overlay_status,
     validated_project_identity,
 )
-from .protocol import budget_for, resolve_memory_dir, resolve_project_root
+from .protocol import (
+    ENTRY_SCHEMA_MIGRATION_MESSAGE,
+    budget_for,
+    resolve_memory_dir,
+    resolve_project_root,
+)
 from .routes import ModuleDisposition, RouteReason, RoutedModule, RoutingCompleteness
 from .snapshot import build_snapshot
 
@@ -96,6 +101,7 @@ def run(args) -> int:
     # result, budget pack, local shared-ID lookup, and conflict analysis must
     # describe this one immutable view rather than a sequence of disk reads.
     snapshot = build_snapshot(memory_dir, project_root)
+    migration_required = snapshot.manifest_contract.migration_available
     routing_invalid = False
     try:
         result = route_context(
@@ -128,6 +134,7 @@ def run(args) -> int:
             overlay_project_id = validated_project_identity(
                 memory_dir,
                 manifest_text=snapshot.manifest_text,
+                allow_legacy_entry_schema=not args.strict_routing,
             )
         except (OSError, ValueError):
             overlay_project_id = None
@@ -136,6 +143,7 @@ def run(args) -> int:
                 project_root,
                 overlay_project_id,
                 shared_ids={entry.entry_id for entry in snapshot.relation_entries},
+                entry_schema_version=snapshot.entry_schema_version,
             )
     local_contents: list[tuple[str, str]] = []
     local_scope_warnings: list[str] = []
@@ -213,9 +221,12 @@ def run(args) -> int:
         for module in oversized:
             print(f"- {module.module_id}: one atomic entry exceeds the {budget_for(module.module_id)}-token budget and was included whole")
     render_conflict_result(conflicts)
-    if result.warnings:
+    render_warnings = list(result.warnings)
+    if migration_required:
+        render_warnings.append(ENTRY_SCHEMA_MIGRATION_MESSAGE)
+    if render_warnings:
         print("Warnings:")
-        for warning in result.warnings:
+        for warning in render_warnings:
             print(f"- {warning}")
     if routing_invalid:
         print(f"Error: {result.warnings[0]}", file=sys.stderr)
@@ -225,7 +236,8 @@ def run(args) -> int:
     rejected = False
     if args.strict_routing:
         rejected = (
-            completeness != RoutingCompleteness.COMPLETE
+            migration_required
+            or completeness != RoutingCompleteness.COMPLETE
             or conflicts.status in {ConflictStatus.CONFLICT, ConflictStatus.INVALID}
         )
         if conflicts.status == ConflictStatus.REVIEW and result.canonical_task in {"planning", "implementation", "artifact", "history"}:
@@ -244,7 +256,8 @@ def run(args) -> int:
     # remain available, while safe metadata and routing dispositions are
     # still rendered for inspection.
     if not args.names_only and not (
-        args.strict_routing and conflicts.status == ConflictStatus.INVALID
+        args.strict_routing
+        and (migration_required or conflicts.status == ConflictStatus.INVALID)
     ):
         for name, text in result.contents:
             print(f"\n## {name}\n")
@@ -254,7 +267,10 @@ def run(args) -> int:
         if completeness == RoutingCompleteness.INCOMPLETE and conflicts.status not in {ConflictStatus.CONFLICT, ConflictStatus.INVALID}:
             return 1
         return 2
-    if not args.names_only:
+    if not args.names_only and not (
+        args.strict_routing
+        and (migration_required or conflicts.status == ConflictStatus.INVALID)
+    ):
         for name, text in local_contents:
             print(f"\n## {name}\n")
             print(text)

@@ -32,9 +32,11 @@ from .plans import (
     print_plan,
 )
 from .protocol import (
+    CURRENT_ENTRY_SCHEMA_VERSION,
     CURRENT_PROTOCOL_VERSION,
     MarkdownUnit,
     compare_versions,
+    entry_schema_version_for_manifest,
     ensure_newline,
     managed_markdown_files,
     manifest_contract_metadata,
@@ -120,9 +122,14 @@ def _remove_units(
     *,
     exact_entry_id: str | None = None,
     source_path: Path | None = None,
+    entry_schema_version: str = CURRENT_ENTRY_SCHEMA_VERSION,
 ) -> tuple[str, tuple[MarkdownUnit, ...], tuple[MarkdownUnit, ...]]:
     document = parse_markdown_units(text)
-    entry_units = parse_entry_units(source_path or Path("__forget__.md"), text)
+    entry_units = parse_entry_units(
+        source_path or Path("__forget__.md"),
+        text,
+        entry_schema_version=entry_schema_version,
+    )
     needle = topic.casefold()
 
     def matches_unit(entry_unit: EntryUnit) -> bool:
@@ -211,6 +218,7 @@ def _tombstone(
     mode: str,
     project_id: str | None = None,
     tombstone_suffix: str | None = None,
+    entry_schema_version: str = CURRENT_ENTRY_SCHEMA_VERSION,
 ) -> str | None:
     if mode == "purge":
         return None
@@ -252,7 +260,13 @@ def _tombstone(
         "Do not reintroduce unless the user explicitly reverses this. "
         f"Reason: the user asked MemoryCustodian to forget this topic. Mode: soft. Date: {today()}."
     )
-    return f"## Tombstone: {title}\n{line_safe_markdown_body(statement)}"
+    return (
+        f"## Tombstone: {title}\n"
+        + line_safe_markdown_body(
+            statement,
+            entry_schema_version=entry_schema_version,
+        )
+    )
 
 
 def _update_existing_tombstones(
@@ -262,9 +276,14 @@ def _update_existing_tombstones(
     project_id: str | None = None,
     tombstone_suffix: str | None = None,
     source_path: Path | None = None,
+    entry_schema_version: str = CURRENT_ENTRY_SCHEMA_VERSION,
 ) -> tuple[str, tuple[MarkdownUnit, ...], tuple[MarkdownUnit, ...]]:
     document = parse_markdown_units(text)
-    entry_units = parse_entry_units(source_path or Path("__forget_tombstones__.md"), text)
+    entry_units = parse_entry_units(
+        source_path or Path("__forget_tombstones__.md"),
+        text,
+        entry_schema_version=entry_schema_version,
+    )
     needle = topic.casefold()
     matches = tuple(
         entry_unit.source
@@ -294,7 +313,13 @@ def _update_existing_tombstones(
     )
     kept = [unit for unit in document.units if unit not in matches]
     if mode == "hard":
-        generic = _tombstone(topic, mode, project_id, tombstone_suffix)
+        generic = _tombstone(
+            topic,
+            mode,
+            project_id,
+            tombstone_suffix,
+            entry_schema_version,
+        )
         has_generic_guard = any(
             "Redacted user-requested removal" in entry_unit.display_text
             and "Do not reconstruct removed content" in entry_unit.display_text
@@ -409,6 +434,7 @@ def _build_forget_mutation_plan(
     protocol_version: str,
     tombstone_suffix: str | None = None,
     privacy_nonce: str | None = None,
+    entry_schema_version: str = CURRENT_ENTRY_SCHEMA_VERSION,
 ) -> ForgetBuild:
     topic = args.topic.strip()
     targets = _target_files(memory_dir, args.mode, include_do_not_use=bool(getattr(args, "entry_id", None)))
@@ -420,6 +446,7 @@ def _build_forget_mutation_plan(
             topic,
             exact_entry_id=getattr(args, "entry_id", None),
             source_path=path,
+            entry_schema_version=entry_schema_version,
         )
         plans.append(FilePlan(path, updated, matches, blockers))
     matched_plans = [plan for plan in plans if plan.matches]
@@ -436,21 +463,34 @@ def _build_forget_mutation_plan(
             project_id,
             tombstone_suffix,
             tombstone_path,
+            entry_schema_version=entry_schema_version,
         )
         if candidate != ensure_newline(read_managed_text(memory_dir, tombstone_path)):
             tombstone_updated = candidate
-    tombstone = _tombstone(topic, args.mode, project_id, tombstone_suffix)
+    tombstone = _tombstone(
+        topic,
+        args.mode,
+        project_id,
+        tombstone_suffix,
+        entry_schema_version,
+    )
     extra_blockers: list[str] = []
     soft_guard_exists = False
     if args.mode == "soft" and tombstone:
         existing_counts = memory_entry_id_counts(memory_dir)
-        rendered = parse_structured_entries(tombstone_path, tombstone)
+        rendered = parse_structured_entries(
+            tombstone_path,
+            tombstone,
+            entry_schema_version=entry_schema_version,
+        )
         tombstone_id = rendered[0].entry_id if len(rendered) == 1 else None
         expected_guard = rendered[0] if len(rendered) == 1 else None
         existing_guards = [
             entry
             for entry in parse_structured_entries(
-                tombstone_path, read_managed_text(memory_dir, tombstone_path)
+                tombstone_path,
+                read_managed_text(memory_dir, tombstone_path),
+                entry_schema_version=entry_schema_version,
             )
             if tombstone_id and entry.entry_id.casefold() == tombstone_id.casefold()
         ]
@@ -493,7 +533,11 @@ def _build_forget_mutation_plan(
                 read_managed_text(memory_dir, tombstone_path), tombstone
             )
     elif args.mode == "hard" and tombstone and tombstone_updated is not None:
-        rendered = parse_structured_entries(tombstone_path, tombstone)
+        rendered = parse_structured_entries(
+            tombstone_path,
+            tombstone,
+            entry_schema_version=entry_schema_version,
+        )
         tombstone_id = rendered[0].entry_id if len(rendered) == 1 else None
         if tombstone_id and memory_entry_id_counts(memory_dir).get(
             tombstone_id.casefold(), 0
@@ -667,6 +711,7 @@ def run(args) -> int:
         manifest_text,
         allow_missing_section=True,
     )
+    entry_schema_version = entry_schema_version_for_manifest(manifest_text)
     comparison = compare_versions(
         metadata.get("protocol_version", "0.5"),
         CURRENT_PROTOCOL_VERSION,
@@ -726,6 +771,7 @@ def run(args) -> int:
         metadata.get("protocol_version", "0.5"),
         tombstone_suffix,
         privacy_nonce,
+        entry_schema_version,
     )
     mutation_plan = build.plan
     targets = list(build.targets)
@@ -843,6 +889,7 @@ def run(args) -> int:
                 current_metadata.get("protocol_version", "0.5"),
                 tombstone_suffix,
                 privacy_nonce,
+                entry_schema_version,
             )
             current_plan = current_build.plan
             _require_locked_plan_is_applicable(current_build, args.allow_broad_match)
@@ -875,6 +922,7 @@ def run(args) -> int:
                 current_metadata.get("protocol_version", "0.5"),
                 tombstone_suffix,
                 privacy_nonce,
+                entry_schema_version,
             )
             current_plan = current_build.plan
             _require_locked_plan_is_applicable(current_build, args.allow_broad_match)

@@ -51,7 +51,13 @@ def run(args) -> int:
         exit_code = 1
     protocol_version = metadata.get("protocol_version")
     if protocol_error:
-        print(f"Protocol metadata: INVALID ({protocol_error})")
+        if snapshot.manifest_contract.migration_available:
+            print(
+                "Protocol version: 0.7 / entry schema 1 "
+                "(migration available to entry schema 2)"
+            )
+        else:
+            print(f"Protocol metadata: INVALID ({protocol_error})")
     elif protocol_version:
         comparison = compare_versions(protocol_version, CURRENT_PROTOCOL_VERSION)
         if comparison == 0:

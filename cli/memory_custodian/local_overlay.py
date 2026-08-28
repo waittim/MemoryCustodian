@@ -17,6 +17,7 @@ from .entries import (
     generate_entry_id,
     heading_entry_ids,
     LIFECYCLE_FIELDS,
+    normalize_entry_schema_version,
     parse_structured_entries,
     render_active_entry,
     structured_entry_schema_issues,
@@ -31,7 +32,9 @@ from .locking import (
     write_private_file,
 )
 from .protocol import (
+    CURRENT_ENTRY_SCHEMA_VERSION,
     CURRENT_PROTOCOL_VERSION,
+    ENTRY_SCHEMA_MIGRATION_MESSAGE,
     compare_versions,
     manifest_contract_metadata,
     project_id_from_manifest,
@@ -172,7 +175,7 @@ def read_local_private_file(path: Path) -> str:
             raise ValueError(f"Local private state file is not owned by the current user: {path}")
         if os.name != "nt" and stat.S_IMODE(opened.st_mode) != 0o600:
             raise ValueError(f"Local private state file must use mode 0600: {path}")
-        with os.fdopen(descriptor, "r", encoding="utf-8") as handle:
+        with os.fdopen(descriptor, "r", encoding="utf-8", newline="") as handle:
             descriptor = -1
             return handle.read()
     finally:
@@ -221,10 +224,16 @@ def link_root(
     project_id: str,
     *,
     shared_ids: set[str] | None = None,
+    entry_schema_version: str = CURRENT_ENTRY_SCHEMA_VERSION,
 ) -> tuple[str, ...]:
     directory = overlay_directory(project_id)
     modules = _parse_manifest(directory / "manifest.md", project_id)
-    issues = _local_module_issues(modules, directory, project_root)
+    issues = _local_module_issues(
+        modules,
+        directory,
+        project_root,
+        entry_schema_version=entry_schema_version,
+    )
     issues.extend(_cross_storage_id_issues(modules, shared_ids))
     if issues:
         raise ValueError("Local overlay content is invalid: " + "; ".join(issues))
@@ -262,6 +271,7 @@ def enable_overlay(
     project_id: str,
     *,
     shared_ids: set[str] | None = None,
+    entry_schema_version: str = CURRENT_ENTRY_SCHEMA_VERSION,
 ) -> Path:
     project_state = _project_state(project_id)
     _read_bindings(project_id)
@@ -269,7 +279,12 @@ def enable_overlay(
     if directory.exists() or directory.is_symlink():
         _validate_local_directory(directory)
         modules = _parse_manifest(directory / "manifest.md", project_id)
-        issues = _local_module_issues(modules, directory, project_root)
+        issues = _local_module_issues(
+            modules,
+            directory,
+            project_root,
+            entry_schema_version=entry_schema_version,
+        )
         issues.extend(_cross_storage_id_issues(modules, shared_ids))
         if issues:
             raise ValueError("Local overlay content is invalid: " + "; ".join(issues))
@@ -283,7 +298,12 @@ def enable_overlay(
     if not preferences.exists():
         write_private_file(preferences, "# Local Preferences\n\nEntries are newest first.\n")
     modules = _parse_manifest(manifest, project_id)
-    issues = _local_module_issues(modules, directory, project_root)
+    issues = _local_module_issues(
+        modules,
+        directory,
+        project_root,
+        entry_schema_version=entry_schema_version,
+    )
     issues.extend(_cross_storage_id_issues(modules, shared_ids))
     if issues:
         raise ValueError("Local overlay content is invalid: " + "; ".join(issues))
@@ -454,6 +474,7 @@ def _capture_local_file(
     project_root: Path,
     *,
     text: str | None = None,
+    entry_schema_version: str = CURRENT_ENTRY_SCHEMA_VERSION,
 ) -> CapturedLocalFile:
     """Capture one local module and all diagnostics from that captured text."""
 
@@ -476,7 +497,11 @@ def _capture_local_file(
         diagnostics.append(f"{relative}: Markdown entry parsing failed: {exc}")
         return CapturedLocalFile(path, relative, text, diagnostics=tuple(diagnostics))
     try:
-        entries = tuple(parse_structured_entries(path, text))
+        entries = tuple(parse_structured_entries(
+            path,
+            text,
+            entry_schema_version=entry_schema_version,
+        ))
     except (OSError, RuntimeError, TypeError, ValueError) as exc:
         diagnostics.append(f"{relative}: Markdown entry parsing failed: {exc}")
         return CapturedLocalFile(path, relative, text, diagnostics=tuple(diagnostics))
@@ -496,6 +521,7 @@ def _captured_modules(
     project_root: Path,
     *,
     captured_text: Mapping[Path, str] | None = None,
+    entry_schema_version: str = CURRENT_ENTRY_SCHEMA_VERSION,
 ) -> tuple[CapturedLocalFile, ...]:
     return tuple(
         _capture_local_file(
@@ -503,6 +529,7 @@ def _captured_modules(
             directory,
             project_root,
             text=(captured_text[path] if captured_text is not None and path in captured_text else None),
+            entry_schema_version=entry_schema_version,
         )
         for path in modules
     )
@@ -514,13 +541,19 @@ def _local_module_issues(
     project_root: Path,
     *,
     captured_files: Mapping[Path, CapturedLocalFile] | None = None,
+    entry_schema_version: str = CURRENT_ENTRY_SCHEMA_VERSION,
 ) -> list[str]:
     """Validate local modules, reusing captured text and parsed Entries."""
 
     files = tuple(
         captured_files[path]
         if captured_files is not None and path in captured_files
-        else _capture_local_file(path, directory, project_root)
+        else _capture_local_file(
+            path,
+            directory,
+            project_root,
+            entry_schema_version=entry_schema_version,
+        )
         for path in modules
     )
     issues = [diagnostic for item in files for diagnostic in item.diagnostics]
@@ -569,6 +602,7 @@ def inspect_overlay(
     *,
     disabled: bool = False,
     shared_ids: set[str] | None = None,
+    entry_schema_version: str = CURRENT_ENTRY_SCHEMA_VERSION,
 ) -> LocalOverlay:
     if disabled or not project_id:
         return LocalOverlay(LocalStatus.DISABLED, Path("."), project_id)
@@ -648,6 +682,7 @@ def inspect_overlay(
         directory,
         project_root,
         captured_text=module_texts,
+        entry_schema_version=entry_schema_version,
     )
     captured_by_path = {item.path: item for item in module_files}
     entry_issues = _local_module_issues(
@@ -655,6 +690,7 @@ def inspect_overlay(
         directory,
         project_root,
         captured_files=captured_by_path,
+        entry_schema_version=entry_schema_version,
     )
     cross_storage_issues = _cross_storage_id_issues(
         modules,
@@ -704,19 +740,23 @@ def validated_project_identity(
     memory_dir: Path,
     *,
     manifest_text: str | None = None,
+    allow_legacy_entry_schema: bool = False,
 ) -> str:
     """Return the validated shared project id from one captured manifest.
 
     Existing callers omit ``manifest_text`` and retain the disk-backed API.
     Read paths that already own a MemorySnapshot pass its captured value,
     including an empty value for a missing manifest, so identity validation
-    cannot cross the snapshot boundary and observe a later repair.
+    cannot cross the snapshot boundary and observe a later repair.  A
+    compatibility reader may explicitly allow distributed schema-1 metadata;
+    mutation callers retain the strict default.
     """
 
     metadata = manifest_contract_metadata(
         read_managed_text(memory_dir, memory_dir / "manifest.md")
         if manifest_text is None
-        else manifest_text
+        else manifest_text,
+        allow_legacy_entry_schema=allow_legacy_entry_schema,
     )
     if compare_versions(
         metadata.get("protocol_version", "0.5"),
@@ -733,8 +773,17 @@ def add_local_preference(
     evidence: tuple[str, ...],
     *,
     shared_ids: set[str] | None = None,
+    entry_schema_version: str = CURRENT_ENTRY_SCHEMA_VERSION,
 ) -> str:
-    overlay = inspect_overlay(project_root, project_id, shared_ids=shared_ids)
+    schema = normalize_entry_schema_version(entry_schema_version)
+    if schema != CURRENT_ENTRY_SCHEMA_VERSION:
+        raise ValueError(ENTRY_SCHEMA_MIGRATION_MESSAGE)
+    overlay = inspect_overlay(
+        project_root,
+        project_id,
+        shared_ids=shared_ids,
+        entry_schema_version=schema,
+    )
     if overlay.status == LocalStatus.REVIEW:
         detail = "; ".join(overlay.warnings) or "manual review is required"
         raise ValueError(f"Local overlay requires review before writes: {detail}")

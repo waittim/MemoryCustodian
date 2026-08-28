@@ -20,10 +20,12 @@ from .entries import (
     structured_relation_issues,
 )
 from .protocol import (
+    CURRENT_ENTRY_SCHEMA_VERSION,
     ManifestContractResult,
     MarkdownDocument,
     canonical_memory_files_from_inventory,
     inspect_manifest_contract,
+    entry_schema_version_for_manifest,
     managed_markdown_files,
     parse_markdown_units,
     read_managed_text,
@@ -103,6 +105,9 @@ class MemorySnapshot:
     # so status/integrity can preserve the distinction between an absent and
     # an intentionally empty enabled directory without probing disk later.
     managed_directories: frozenset[Path] = frozenset()
+    # Entry decoding is selected from the captured shared manifest.  The
+    # local overlay has its own topology schema but shares this Entry grammar.
+    entry_schema_version: str = CURRENT_ENTRY_SCHEMA_VERSION
 
     def file_for(self, relative: str) -> SnapshotFile | None:
         """Return one captured managed file by normalized relative path."""
@@ -341,6 +346,7 @@ def build_snapshot(
         manifest_text,
         present=manifest_path in captured_text,
     )
+    entry_schema_version = entry_schema_version_for_manifest(manifest_text)
     canonical = canonical_memory_files_from_inventory(
         memory_dir,
         inventory,
@@ -371,6 +377,7 @@ def build_snapshot(
                 relative,
                 project_root,
                 require_active_identity=False,
+                entry_schema_version=entry_schema_version,
             )
             entries = tuple(parsed)
             entry_issues = tuple(parsed_issues)
@@ -530,4 +537,5 @@ def build_snapshot(
         integrity_relation_issues,
         manifest_contract,
         managed_directories,
+        entry_schema_version,
     )

@@ -9,7 +9,6 @@ import subprocess
 from .entries import (
     StructuredEntry,
     parse_entry_inventory,
-    parse_structured_entries,
     structured_relation_issues,
 )
 from .reconciliations import (
@@ -23,6 +22,7 @@ from .subjects import (
     Subject, normalize_alias, normalize_canonical_ref, parse_subject_registry,
     subject_registry_issues,
 )
+from .protocol import CURRENT_ENTRY_SCHEMA_VERSION, entry_schema_version_for_manifest
 from .structural import active_structural_operand_issues, subject_index
 
 
@@ -89,6 +89,7 @@ def _entries(
     *,
     subjects: tuple[Subject, ...] = (),
     merged_subject_ids: set[str] | None = None,
+    entry_schema_version: str = CURRENT_ENTRY_SCHEMA_VERSION,
 ) -> tuple[tuple[StructuredEntry, ...], tuple[str, ...]]:
     result: list[StructuredEntry] = []
     issues: list[str] = []
@@ -101,6 +102,7 @@ def _entries(
         parsed, file_issues = parse_entry_inventory(
             Path(relative), text, memory_path, project_root,
             require_active_identity=not memory_path.startswith("archive/"),
+            entry_schema_version=entry_schema_version,
         )
         result.extend(parsed)
         issues.extend(file_issues)
@@ -217,6 +219,12 @@ def merge_review(project_root: Path, memory_dir: Path, target_ref: str) -> Merge
         )))
         registry = f"{memory_relative}/subjects.md"
         reconciliations = f"{memory_relative}/reconciliations.md"
+        entry_schemas = {
+            revision: entry_schema_version_for_manifest(
+                _show(project_root, revision, f"{memory_relative}/manifest.md")
+            )
+            for revision in (base, "HEAD", target_ref)
+        }
         base_subject_units, _base_subject_issues = _subjects(project_root, base, registry)
         head_subject_units, head_subject_issues = _subjects(project_root, "HEAD", registry)
         target_subject_units, target_subject_issues = _subjects(project_root, target_ref, registry)
@@ -228,6 +236,7 @@ def merge_review(project_root: Path, memory_dir: Path, target_ref: str) -> Merge
                 for subject in base_subject_units
                 if subject.status == "merged"
             },
+            entry_schema_version=entry_schemas[base],
         )
         head_entry_units, head_entry_issues = _entries(
             project_root, "HEAD", all_files, memory_relative,
@@ -237,6 +246,7 @@ def merge_review(project_root: Path, memory_dir: Path, target_ref: str) -> Merge
                 for subject in head_subject_units
                 if subject.status == "merged"
             },
+            entry_schema_version=entry_schemas["HEAD"],
         )
         target_entry_units, target_entry_issues = _entries(
             project_root, target_ref, all_files, memory_relative,
@@ -246,6 +256,7 @@ def merge_review(project_root: Path, memory_dir: Path, target_ref: str) -> Merge
                 for subject in target_subject_units
                 if subject.status == "merged"
             },
+            entry_schema_version=entry_schemas[target_ref],
         )
         base_records, _base_record_issues = _reconciliations(
             project_root, base, reconciliations, base_entry_units, base_subject_units,

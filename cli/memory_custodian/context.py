@@ -237,7 +237,12 @@ def route_context(
         "areas": _requested(areas),
     }
     version = protocol_contract_metadata(
-        manifest, allow_missing_section=True,
+        manifest,
+        allow_missing_section=True,
+        # Schema 1 is a distributed Protocol 0.7 input.  Routing can still
+        # inspect it with its legacy Entry grammar; ``read --strict-routing``
+        # applies the migration gate after this compatibility view is built.
+        allow_legacy_entry_schema=True,
     ).get("protocol_version", "0.5")
     declarations = parse_optional_module_index(manifest, legacy_compatible=version != "0.7")
     canonical = canonical_task(supplied_task)

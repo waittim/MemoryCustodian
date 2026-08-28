@@ -29,6 +29,7 @@ from .entries import parse_structured_entries
 from .protocol import (
     CURRENT_PROTOCOL_VERSION,
     compare_versions,
+    entry_schema_version_for_manifest,
     manifest_contract_metadata,
 )
 
@@ -703,10 +704,17 @@ def run(args) -> int:
         raise FileNotFoundError(f"Inbox not found: {inbox}")
 
     original = read_managed_text(memory_dir, inbox)
+    entry_schema_version = entry_schema_version_for_manifest(
+        read_managed_text(memory_dir, memory_dir / "manifest.md")
+    )
     tombstone_path = memory_dir / "do-not-use.md"
     tombstones = read_managed_text(memory_dir, tombstone_path, required=False)
     structured_candidates = [
-        entry for entry in parse_structured_entries(inbox, original)
+        entry for entry in parse_structured_entries(
+            inbox,
+            original,
+            entry_schema_version=entry_schema_version,
+        )
         if entry.status == "candidate"
     ]
     legacy_items = [

@@ -4046,7 +4046,7 @@ class MergeAndDeterminismReleaseTests(unittest.TestCase):
         cases = (
             (lambda text: text.replace("protocol_version: 0.7", "protocol_version: 0.6"), "requires Protocol 0.7"),
             (lambda text: text.replace("protocol_version: 0.7", "protocol_version: 0.8"), "newer than this CLI"),
-            (lambda text: re.sub(r"(?m)^- entry_schema_version:.*\n", "", text), "entry_schema_version: 1"),
+            (lambda text: re.sub(r"(?m)^- entry_schema_version:.*\n", "", text), "entry_schema_version: 2"),
             (
                 lambda text: text.replace(
                     "- protocol_version: 0.7",
@@ -4056,8 +4056,8 @@ class MergeAndDeterminismReleaseTests(unittest.TestCase):
             ),
             (
                 lambda text: text.replace(
-                    "- entry_schema_version: 1",
-                    "- entry_schema_version: 1\n- entry_schema_version: 1",
+                    "- entry_schema_version: 2",
+                    "- entry_schema_version: 2\n- entry_schema_version: 2",
                 ),
                 "Duplicate protocol metadata field: entry_schema_version",
             ),

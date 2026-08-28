@@ -335,7 +335,7 @@ memory-custodian exception remove MC-CON-20260801-a1b2c3d4
 memory-custodian reconcile preview --entry MC-CON-... --entry MC-CON-... --resolution distinct --title "Distinct invariants" --evidence user-confirmed
 ```
 
-Protocol 0.7 retains entry and Subject schema version 1. Formal entries use stable IDs such as
+Protocol 0.7 uses Entry schema version 2 and Subject schema version 1. Formal entries use stable IDs such as
 `MC-DEC-20260728-a1b2c3d4`; active writes require Evidence;
 `agent-observed` and `conversation-unconfirmed` can create only candidates, which normal task context never loads.
 Managed active decisions, constraints, and rejected approaches also reference a stable `MC-SUBJ` identity and a
@@ -348,6 +348,18 @@ matrix is an extension boundary, not a claim that v0.11 imposes narrower type-sp
 Legacy 0.5 prose and bullets remain readable after conservative migration and are reported as legacy coverage rather
 than silently rewritten. Migration assigns a random UUIDv4 once, persists it outside the repository between preview
 and apply, and also upgrades clearly structured decisions in enabled `areas/*.md` files.
+
+Entry schema versions are scoped by the `protocol_version` tuple. Protocol 0.7/schema 1 was publicly available on
+the `0.11.0` branch and is therefore a distributed legacy format, even without a formal release tag. CLI `0.11.0`
+or newer reads schema 1 with its original literal-body semantics, reports migration availability, and migrates to the
+current Protocol 0.7/schema 2 grammar. Schema 2 uses the explicit `memory-custodian-body-v1` wrapper for ambiguous
+body lines; strict reads/checks/conflicts/writers must not treat schema 1 as current or silently decode its manual
+wrapper. The minimum supported writer is the schema-2-capable `0.11.0` build (the pre-wrapper public `0.11.0`
+branch remains schema-1-only); that legacy CLI must be upgraded before migration and cannot safely decode schema-2
+wrapper output. Newer builds must expose the same schema-2 grammar. The independent local overlay
+topology remains `local_overlay_schema_version: 1`, while local Entry body decoding follows the shared manifest's Entry
+schema. Bound local files are included in the same schema-1-to-2 preview/apply; an unbound, multi-root, or REVIEW local
+overlay blocks the shared flip until it is explicitly bound or repaired.
 
 `forget`, `compact`, `migrate`, and destructive replacement are preview-first. The preview prints repo-relative
 target files, operations, warnings, blockers, and a Plan ID. Ordinary plans include base/output digests; hard and
@@ -467,9 +479,11 @@ Migration derives operands only from normalized declarations, checks containment
 snapshots all text operands before persisting preview seeds.
 
 Entry bodies are serialized so column-zero field-like lines and `##` headings remain body text rather than becoming
-protocol fields or additional Entries. Plain bodies preserve source whitespace, while ambiguous column-zero lines use
-the explicit standard-Markdown `memory-custodian-body-v1` fenced form; the parser removes that versioned wrapper and
-treats legacy `&#8283;` text as ordinary content. Active, candidate, local, and migrated Entry output requires a
+protocol fields or additional Entries. In the current schema-2 grammar, plain bodies preserve source whitespace while
+ambiguous column-zero lines use the explicit standard-Markdown `memory-custodian-body-v1` fenced form; the schema-2
+parser removes that versioned wrapper. A schema-1 parser does not decode that marker: it treats the complete manual
+wrapper as literal body text until migration. Both schemas treat legacy `&#8283;` text as ordinary content. Active,
+candidate, local, and migrated Entry output requires a
 non-empty typed body and is parse-checked before writing. Protocol 0.5 bullet compatibility writes indent every
 continuation line so one CLI input remains one semantic unit. Subject titles and aliases are canonical non-empty single lines and rendered Subjects must round-trip as active,
 non-merged records, so raw CLI text cannot apply deferred governance relations.

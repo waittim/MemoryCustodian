@@ -99,6 +99,7 @@ def cross_unit_integrity_findings(
             project_root,
             project_id,
             shared_ids={entry.entry_id for entry in snapshot.relation_entries},
+            entry_schema_version=snapshot.entry_schema_version,
         )
     if overlay is not None and overlay.status == LocalStatus.REVIEW:
         target = issues if overlay.corrupt else warnings

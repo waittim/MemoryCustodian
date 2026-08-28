@@ -28,6 +28,7 @@ from .plans import (
 from .protocol import (
     CURRENT_PROTOCOL_VERSION,
     compare_versions,
+    entry_schema_version_for_manifest,
     manifest_contract_metadata,
     managed_markdown_files,
     prepended_text,
@@ -266,6 +267,9 @@ def _list(args) -> int:
 
 def _show(args) -> int:
     _project_root, memory_dir, _project_id = _project(args)
+    entry_schema_version = entry_schema_version_for_manifest(
+        read_managed_text(memory_dir, memory_dir / "manifest.md")
+    )
     subject = _find(load_subjects(memory_dir), args.subject_id)
     print(f"Subject ID: {subject.subject_id}")
     print(f"Title: {subject.title}")
@@ -285,7 +289,11 @@ def _show(args) -> int:
     for path in managed_markdown_files(memory_dir):
         if path.name == "subjects.md" or path.name.casefold() == "readme.md":
             continue
-        for entry in parse_structured_entries(path, read_managed_text(memory_dir, path)):
+        for entry in parse_structured_entries(
+            path,
+            read_managed_text(memory_dir, path),
+            entry_schema_version=entry_schema_version,
+        ):
             if any(
                 entry.fields.get(field, "").casefold() == subject.subject_id.casefold()
                 for field in ("Subject", "Provisional-Subject")

@@ -39,7 +39,7 @@ v0.11 的治理能力以**检测、解释、inventory 与 preview**为主。会�
 
 * Package version：`0.11.0`
 * Protocol version：`0.7`
-* Entry schema version：`1`
+* Entry schema version：`2`
 * Routing schema version：`1`
 * Subject schema version：`1`
 * Conflict schema version：`1`
@@ -158,7 +158,7 @@ Agent 可以负责：
 ```md
 ## MemoryCustodian Protocol
 - protocol_version: 0.7
-- entry_schema_version: 1
+- entry_schema_version: 2
 - subject_schema_version: 1
 - subject_registry: subjects.md
 - routing_schema_version: 1
@@ -170,6 +170,11 @@ Agent 可以负责：
 - routing_policy: explicit-task-and-scope
 - conflict_policy: canonical-subject-and-review
 ```
+
+`entry_schema_version: 2` is the current Protocol 0.7 grammar. The public pre-wrapper `0.11.0` branch exposed
+schema 1, which remains a distributed legacy input: read it with its original literal-body semantics and use the
+preview-first schema 1-to-2 migration before any schema-2 write. The schema-2-capable `0.11.0` build is the minimum
+writer; `memory-custodian-body-v1` is the exact current body-wrapper info string.
 
 必须保留 v0.10 的合法：
 

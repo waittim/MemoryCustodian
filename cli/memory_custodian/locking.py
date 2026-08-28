@@ -146,7 +146,7 @@ def create_private_file(path: Path, content: str) -> bool:
     except FileExistsError:
         validate_private_file(path)
         return False
-    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+    with os.fdopen(descriptor, "w", encoding="utf-8", newline="") as handle:
         handle.write(content)
         handle.flush()
         try:
@@ -166,7 +166,7 @@ def write_private_file(path: Path, content: str) -> None:
     flags = _private_open_flags(os.O_CREAT | os.O_EXCL | os.O_WRONLY)
     descriptor = os.open(temporary, flags, 0o600)
     try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="") as handle:
             handle.write(content)
             handle.flush()
             try:
@@ -187,7 +187,7 @@ def write_private_file(path: Path, content: str) -> None:
 def read_private_file(path: Path) -> str:
     validate_private_file(path)
     descriptor = os.open(path, _private_open_flags(os.O_RDONLY))
-    with os.fdopen(descriptor, "r", encoding="utf-8") as handle:
+    with os.fdopen(descriptor, "r", encoding="utf-8", newline="") as handle:
         return handle.read()
 
 

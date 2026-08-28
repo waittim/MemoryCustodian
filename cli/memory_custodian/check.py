@@ -295,7 +295,13 @@ def run(args) -> int:
     metadata = snapshot.manifest_contract.as_dict()
     overlay_project_id = (
         metadata.get("project_id")
-        if snapshot.manifest_contract.valid
+        if (
+            (
+                snapshot.manifest_contract.valid
+                or snapshot.manifest_contract.migration_available
+            )
+            and metadata.get("project_id")
+        )
         and compare_versions(
             metadata.get("protocol_version", "0.5"),
             CURRENT_PROTOCOL_VERSION,
@@ -307,6 +313,7 @@ def run(args) -> int:
             project_root,
             overlay_project_id,
             shared_ids={entry.entry_id for entry in snapshot.relation_entries},
+            entry_schema_version=snapshot.entry_schema_version,
         )
         if overlay_project_id is not None
         else None
