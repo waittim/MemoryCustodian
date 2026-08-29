@@ -10,17 +10,15 @@ Subject: MC-SUBJ-20260729-7e5c3a91
 Facet: compatibility
 Evidence:
 - repo:cli/memory_custodian/entries.py
-- repo:cli/memory_custodian/forget.py
 - test:tests/test_protocol_07_release_gaps.py
-- doc:skills/memory-custodian/references/memory-file-protocol.md
 
 Decision:
-`memory-custodian-body-v1` fence; legacy entity ordinary. Selectors/search semantic display text; mutation/storage raw source.
+Use `memory-custodian-body-v1`; treat legacy entities literally. Search decoded text; mutate raw source.
 
 Reason:
-Versioned delimiters preserve semantics.
+Preserves parse/write semantics.
 
-## MC-DEC-20260801-07000007 — Adopt Protocol 0.7 deterministic governance
+## MC-DEC-20260801-07000007 — Protocol 0.7 governance
 
 Status: active
 Scope: project
@@ -29,17 +27,16 @@ Facet: architecture
 Evidence:
 - user-confirmed
 - repo:cli/memory_custodian/local_overlay.py
-- repo:cli/memory_custodian/local.py
 - test:tests/test_local_snapshot.py
 Supersedes: MC-DEC-20260729-ef44900b
 
 Decision:
-Use explicit routing and structural review. Strict reads use one bound-overlay capture; local mutations recapture IDs under lock. Defer to 0.8.
+Use explicit routing and review. Strict reads consume one overlay snapshot; local writes refresh IDs under lock. Defer further governance to 0.8.
 
 Reason:
-Prevents mixed-time reads and stale IDs.
+Avoids mixed-time reads/stale IDs.
 
-## MC-DEC-20260721-3578b077 — Target Python 3.10+ minimum version
+## MC-DEC-20260721-3578b077 — Support Python 3.10–3.14
 
 Status: active
 Scope: project
@@ -49,11 +46,11 @@ Evidence:
 - legacy-unverified
 
 Decision:
-Support Python 3.10+ and test every supported minor from Python 3.10 through 3.14.
+Support and test Python 3.10 through 3.14.
 Reason:
-The stdlib-only CLI needs no newer-minor feature, and full minor coverage keeps the open-ended range honest.
+No newer Python feature is required.
 
-## MC-DEC-20260712-53d9eded — Prioritize useful and reachable memory over chronological accumulation.
+## MC-DEC-20260712-53d9eded — Prefer reachable memory
 
 Status: active
 Scope: project
@@ -63,11 +60,11 @@ Evidence:
 - legacy-unverified
 
 Decision:
-Prioritize useful and reachable memory over chronological accumulation; keep each decision concise and scope-specific.
+Prefer concise, reachable, scope-specific memory over chronology.
 Reason:
-Structural validity alone does not make memory reachable or useful.
+Reachability determines utility.
 
-## MC-DEC-20260708-ab7efbab — Support Gemini through thin context and Agent Skills
+## MC-DEC-20260708-ab7efbab — Gemini thin-context support
 
 Status: active
 Scope: project
@@ -77,11 +74,11 @@ Evidence:
 - legacy-unverified
 
 Decision:
-Support Gemini with thin `GEMINI.md` bootstrap snippets, `--with-gemini`, and `./install.sh gemini` linking the skill into Gemini's skills directory.
+Support Gemini through thin `GEMINI.md`, `--with-gemini`, and `./install.sh gemini` skill linking.
 Reason:
-Gemini context imports are eager, so durable memory stays manifest-routed.
+Avoid eager durable-memory imports.
 
-## MC-DEC-20260705-00552a27 — Add target compaction for active memory budgets
+## MC-DEC-20260705-00552a27 — Targeted active-memory compaction
 
 Status: active
 Scope: project
@@ -91,11 +88,11 @@ Evidence:
 - legacy-unverified
 
 Decision:
-Add `compact --target <file>` for over-budget active files. It dry-runs by default, dedupes simple bullet files, archives old complete H2 entries for decisions/changelog, and has `status`/`check` suggest the command.
+Provide preview-first `compact --target <file>` with bullet dedupe, reviewed H2 archival, and `status`/`check` guidance.
 Reason:
-Budget failures need an offline reviewable maintenance path.
+Keep maintenance offline and reviewable.
 
-## MC-DEC-20260704-ddfc2d0c — Treat Claude as a plugin-root distribution target
+## MC-DEC-20260704-ddfc2d0c — Claude plugin-root distribution
 
 Status: active
 Scope: project
@@ -105,11 +102,11 @@ Evidence:
 - legacy-unverified
 
 Decision:
-Support Claude Code through `.claude-plugin/`, `skills/`, `bin/`, local `--plugin-dir` testing, and `./install.sh claude`.
+Support Claude Code through `.claude-plugin/`, shared skills/bin, `--plugin-dir` tests, and `./install.sh claude`.
 Reason:
-Claude needs a verifiable plugin-root install surface.
+Provide a verifiable install surface.
 
-## MC-DEC-20260704-342e05b7 — Add deterministic skill evals first
+## MC-DEC-20260704-342e05b7 — Offline skill evals first
 
 Status: active
 Scope: project
@@ -119,6 +116,6 @@ Evidence:
 - legacy-unverified
 
 Decision:
-Maintain offline skill eval scenarios and a checker before live agent eval infrastructure.
+Maintain offline skill scenarios and a checker before live-agent evals.
 Reason:
-Guard behavior offline without a heavyweight harness.
+Avoid a heavyweight harness.

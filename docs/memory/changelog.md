@@ -3,25 +3,20 @@
 Entries are newest first.
 
 ## 2026-08-09
-- Closed v0.11 cross-module audit gaps in manifest topology, migration containment and formal-entry validation, local
-  overlay identity/path/relation safety, cross-store ID allocation, promotion/supersession integrity, stale-root
-  recovery, source-preserving field bodies and exact-range writes, canonical H2/Subject/reconciliation grammar,
-  no-follow reads with separate inventory/storage authority, revision-wide registry checks, migration-wide integrity,
-  order-preserving archive merges, precise forgetting, cycle detection, and AMBIGUOUS deferral.
-- Unified manifest Markdown section walking, made route topology and Optional index uniqueness fail closed, hardened
-  local reset against symlinks/binary state, and made migration operand validation seed-free on failure.
+- Closed v0.11 audit gaps across routing/migration, local overlay safety, ID and relation integrity, source-preserving
+  writes, registry/reconciliation grammar, forgetting, cycle detection, and archive merges.
+- Unified manifest traversal; hardened optional indexes, local reset, and seed-free migration failure.
 
 ## 2026-08-01
-- Closed v0.11 audit gaps in activation completeness, lifecycle-aware reconciliation, route-complete strict contracts, dependency-bound governance/local plans, relation-safe forgetting, and freshness.
-- Upgraded dogfood memory to Protocol 0.7 deterministic routing, structural conflict review, and bound local-overlay contracts.
+- Closed v0.11 gaps in activation, reconciliation, strict routing, governance/local plans, forgetting, and freshness.
+- Upgraded dogfood memory to Protocol 0.7 routing, conflict review, and bound local overlays.
 - Assigned stable Subjects and Facets to remaining active legacy decisions.
 
 ## 2026-07-29
-- Expanded Ubuntu full-suite and Windows smoke CI across every supported Python minor from 3.10 through 3.14.
-- Fixed area-scoped entry identity, bidirectional storage validation, nested memory Plan roots, malformed lock recovery, and preview seed expiry.
-- Unified mutation guards and separated private execution plans from redacted public previews.
-- Aligned Protocol 0.6 with stable Subject/Facet governance, deterministic routing provenance, and explicit managed-memory erasure boundaries.
-- Closed release-audit gaps in enable/init locking, full-line redaction, Evidence revalidation, random hard-forget IDs, and provisional Subject integrity.
+- Expanded Ubuntu and Windows CI across Python 3.10–3.14.
+- Fixed scoped identity, storage validation, nested Plan roots, lock recovery, and preview seed expiry.
+- Unified mutation guards and separated private execution from redacted previews.
+- Aligned Protocol 0.6 governance/routing/erasure boundaries and closed release-audit safety gaps.
 
 ## 2026-07-28
 - Closed the v0.10 release audit gaps, added deterministic maintenance previews, and made archives idempotent.
@@ -31,9 +26,8 @@ Entries are newest first.
 
 ## 2026-07-21
 - Removed the obsolete NightNotes script because it recursively deleted user-provided targets.
-- Cleaned submission artifacts, added NightNotes drift coverage, and made release notes, evidence, policy boundaries, and author metadata consistent.
-- Restored Python 3.10+ support and CI coverage across Python 3.10 and 3.13 after verifying the implementation has no Python 3.13 dependency.
-- Made the NightNotes demo reproducible, linked the published video and live evaluation, standardized its tombstone, and aligned public plugin privacy metadata.
+- Cleaned submission artifacts and aligned release notes, evidence, policy, metadata, and plugin privacy.
+- Restored Python 3.10+ support and made the NightNotes demo reproducible with drift coverage.
 - Compacted decisions.md: archived 1 old entries.
 
 ## 2026-07-08
@@ -43,11 +37,6 @@ Entries are newest first.
 - Added target compaction for over-budget active memory files and semantically compacted decisions memory to stay within budget.
 
 ## 2026-07-04
-- Added lightweight session-start bootstrap memory guidance, deterministic Codex archive packaging, Claude local marketplace metadata, and package/plugin version 0.5.0.
-- Changed dated memory entries to newest-first where appropriate: decisions, tombstones, and inbox candidates.
-- Added Claude Code plugin-root installation docs, installer support, bin wrapper, and packaging tests.
-- Bumped package and plugin version metadata to 0.4.1 for the skill eval release.
-- Added deterministic MemoryCustodian skill eval scenarios and a checker for core behavior-contract drift.
-- Added Codex plugin support files: repo-local marketplace, plugin asset, CLI wrapper, and plugin packaging tests.
-- Compressed dogfood memory files and minimal templates to keep high-frequency context short.
-- Added the memory-update reminder to generated agent bootstrap snippets.
+- Added session bootstrap guidance, Codex packaging/plugin files, Claude marketplace/install surfaces, and release metadata.
+- Made dated memory newest-first and added deterministic skill-contract scenarios/checker.
+- Compressed dogfood/templates and added generated memory-update reminders.
