@@ -236,29 +236,42 @@ def run(args) -> int:
         shared_ids = {
             entry.entry_id for entry in locked_snapshot.relation_entries
         }
-        if command == "enable":
-            directory = enable_overlay(
+        if command in {"enable", "link"}:
+            overlay = inspect_overlay(
                 project_root,
                 locked_project_id,
                 shared_ids=shared_ids,
                 entry_schema_version=locked_snapshot.entry_schema_version,
+                capture_unbound=True,
             )
+        if command == "enable":
+            overlay = enable_overlay(
+                project_root,
+                locked_project_id,
+                shared_ids=shared_ids,
+                entry_schema_version=locked_snapshot.entry_schema_version,
+                overlay=overlay,
+            )
+            if overlay.directory is None:
+                raise ValueError("Local overlay enable did not produce a usable directory.")
             print(f"Local overlay enabled for project_id {locked_project_id}.")
-            print(f"State directory: {directory}")
+            print(f"State directory: {overlay.directory}")
             print("Run `memory-custodian local link` before local content can load.")
             return 0
         if command == "link":
-            enable_overlay(
+            overlay = enable_overlay(
                 project_root,
                 locked_project_id,
                 shared_ids=shared_ids,
                 entry_schema_version=locked_snapshot.entry_schema_version,
+                overlay=overlay,
             )
             roots = link_root(
                 project_root,
                 locked_project_id,
                 shared_ids=shared_ids,
                 entry_schema_version=locked_snapshot.entry_schema_version,
+                overlay=overlay,
             )
             print("Local overlay linked to this normalized project root.")
             if len(roots) > 1:

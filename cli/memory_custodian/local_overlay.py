@@ -219,24 +219,48 @@ def _read_bindings(project_id: str) -> tuple[str, ...]:
     return tuple(sorted(dict.fromkeys(roots)))
 
 
+def _accept_overlay_snapshot(
+    overlay: LocalOverlay,
+    project_id: str,
+    operation: str,
+    *,
+    allow_disabled: bool = False,
+) -> LocalOverlay:
+    """Accept one inspected overlay for a mutation without reopening it."""
+
+    if overlay.project_id != project_id:
+        raise ValueError("Local overlay inspection belongs to a different project_id.")
+    if overlay.corrupt:
+        detail = "; ".join(overlay.warnings) or "manual review is required"
+        raise ValueError("Local overlay content is invalid: " + detail)
+    if overlay.snapshot is None:
+        if allow_disabled and overlay.status == LocalStatus.DISABLED:
+            return overlay
+        detail = "; ".join(overlay.warnings) or "manual review is required"
+        raise ValueError(f"Local overlay requires review before {operation}: {detail}")
+    return overlay
+
+
 def link_root(
     project_root: Path,
     project_id: str,
     *,
     shared_ids: set[str] | None = None,
     entry_schema_version: str = CURRENT_ENTRY_SCHEMA_VERSION,
+    overlay: LocalOverlay | None = None,
 ) -> tuple[str, ...]:
-    directory = overlay_directory(project_id)
-    modules = _parse_manifest(directory / "manifest.md", project_id)
-    issues = _local_module_issues(
-        modules,
-        directory,
-        project_root,
-        entry_schema_version=entry_schema_version,
-    )
-    issues.extend(_cross_storage_id_issues(modules, shared_ids))
-    if issues:
-        raise ValueError("Local overlay content is invalid: " + "; ".join(issues))
+    if overlay is None:
+        overlay = inspect_overlay(
+            project_root,
+            project_id,
+            shared_ids=shared_ids,
+            entry_schema_version=entry_schema_version,
+            capture_unbound=True,
+        )
+    overlay = _accept_overlay_snapshot(overlay, project_id, "linking")
+    directory = overlay.directory
+    if directory is None:
+        raise ValueError("Local overlay inspection did not capture a usable directory.")
     roots = set(_read_bindings(project_id))
     current = _normalized_root(project_root)
     if current not in roots and len(roots) == 1:
@@ -252,7 +276,7 @@ def link_root(
         _binding_path(project_id),
         json.dumps({"project_id": project_id, "roots": list(ordered)}, sort_keys=True, indent=2) + "\n",
     )
-    return _read_bindings(project_id)
+    return ordered
 
 
 def _manifest_text(project_id: str) -> str:
@@ -272,23 +296,31 @@ def enable_overlay(
     *,
     shared_ids: set[str] | None = None,
     entry_schema_version: str = CURRENT_ENTRY_SCHEMA_VERSION,
-) -> Path:
+    overlay: LocalOverlay | None = None,
+) -> LocalOverlay:
+    if overlay is None:
+        overlay = inspect_overlay(
+            project_root,
+            project_id,
+            shared_ids=shared_ids,
+            entry_schema_version=entry_schema_version,
+            capture_unbound=True,
+        )
+    overlay = _accept_overlay_snapshot(
+        overlay,
+        project_id,
+        "enabling",
+        allow_disabled=True,
+    )
     project_state = _project_state(project_id)
     _read_bindings(project_id)
     directory = project_state / "local"
     if directory.exists() or directory.is_symlink():
+        if overlay.snapshot is None:
+            detail = "; ".join(overlay.warnings) or "local overlay changed after inspection"
+            raise ValueError("Local overlay requires review before enabling: " + detail)
         _validate_local_directory(directory)
-        modules = _parse_manifest(directory / "manifest.md", project_id)
-        issues = _local_module_issues(
-            modules,
-            directory,
-            project_root,
-            entry_schema_version=entry_schema_version,
-        )
-        issues.extend(_cross_storage_id_issues(modules, shared_ids))
-        if issues:
-            raise ValueError("Local overlay content is invalid: " + "; ".join(issues))
-        return directory
+        return overlay
     directory = ensure_private_directory(directory)
     ensure_private_directory(directory / "profiles")
     manifest = directory / "manifest.md"
@@ -297,17 +329,14 @@ def enable_overlay(
         write_private_file(manifest, _manifest_text(project_id))
     if not preferences.exists():
         write_private_file(preferences, "# Local Preferences\n\nEntries are newest first.\n")
-    modules = _parse_manifest(manifest, project_id)
-    issues = _local_module_issues(
-        modules,
-        directory,
+    created = inspect_overlay(
         project_root,
+        project_id,
+        shared_ids=shared_ids,
         entry_schema_version=entry_schema_version,
+        capture_unbound=True,
     )
-    issues.extend(_cross_storage_id_issues(modules, shared_ids))
-    if issues:
-        raise ValueError("Local overlay content is invalid: " + "; ".join(issues))
-    return directory
+    return _accept_overlay_snapshot(created, project_id, "enabling")
 
 
 def _parse_manifest(
@@ -603,6 +632,7 @@ def inspect_overlay(
     disabled: bool = False,
     shared_ids: set[str] | None = None,
     entry_schema_version: str = CURRENT_ENTRY_SCHEMA_VERSION,
+    capture_unbound: bool = False,
 ) -> LocalOverlay:
     if disabled or not project_id:
         return LocalOverlay(LocalStatus.DISABLED, Path("."), project_id)
@@ -652,7 +682,7 @@ def inspect_overlay(
             corrupt=True,
         )
     current = _normalized_root(project_root)
-    if current not in roots:
+    if current not in roots and not capture_unbound:
         return LocalOverlay(
             LocalStatus.UNBOUND, directory, project_id,
             warnings=("Existing local overlay is not bound to this normalized project root; run `memory-custodian local link`.",),
@@ -715,11 +745,17 @@ def inspect_overlay(
             corrupt=True,
             snapshot=local_snapshot,
         )
-    status = LocalStatus.REVIEW if len(roots) > 1 else LocalStatus.BOUND
-    warnings = (
-        ("The same project_id is explicitly bound to multiple roots; review cross-repository overlay reuse.",)
-        if len(roots) > 1 else ()
-    )
+    if current not in roots:
+        status = LocalStatus.UNBOUND
+        warnings = (
+            "Existing local overlay is not bound to this normalized project root; run `memory-custodian local link`.",
+        )
+    else:
+        status = LocalStatus.REVIEW if len(roots) > 1 else LocalStatus.BOUND
+        warnings = (
+            ("The same project_id is explicitly bound to multiple roots; review cross-repository overlay reuse.",)
+            if len(roots) > 1 else ()
+        )
     return LocalOverlay(
         status,
         directory,

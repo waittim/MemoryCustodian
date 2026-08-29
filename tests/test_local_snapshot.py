@@ -7,6 +7,7 @@ from io import StringIO
 import os
 from pathlib import Path
 import re
+import shutil
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -165,6 +166,147 @@ class LocalSnapshotRaceTests(unittest.TestCase):
                 ])
                 self.assertEqual(status_code, 0, status_output + status_error)
                 self.assertIn("Local overlay status: BOUND", status_output)
+
+    def test_local_link_uses_one_captured_overlay_when_later_read_would_change_scope(self):
+        with tempfile.TemporaryDirectory() as first, tempfile.TemporaryDirectory() as second, tempfile.TemporaryDirectory() as state:
+            with patch.dict(os.environ, {"XDG_STATE_HOME": state}):
+                _memory, preferences, _project_id = self._setup_bound_overlay(first)
+                self.assertEqual(main([
+                    "local", "add", "Keep the captured preference.",
+                    "--type", "preference", "--evidence", "user-confirmed",
+                    "--project-root", first,
+                ]), 0)
+                shutil.copytree(Path(first) / "docs", Path(second) / "docs")
+                original = preferences.read_text(encoding="utf-8")
+                invalid = original.replace(
+                    "Scope: local-user", "Scope: project", 1,
+                )
+                original_read = local_overlay.read_local_private_file
+                module_reads = 0
+
+                def race_read(path: Path) -> str:
+                    nonlocal module_reads
+                    value = original_read(path)
+                    if path == preferences:
+                        module_reads += 1
+                        if module_reads == 2:
+                            # This is the edit that used to land between the
+                            # schema pass and the final ID-only pass.
+                            preferences.write_text(invalid, encoding="utf-8")
+                    return value
+
+                with patch.object(local_overlay, "read_local_private_file", side_effect=race_read):
+                    code, output, error = self._capture([
+                        "local", "link", "--project-root", second,
+                    ])
+
+                self.assertEqual(code, 0, output + error)
+                self.assertIn("linked", output)
+                self.assertEqual(
+                    module_reads,
+                    1,
+                    "local link must capture and validate each module once",
+                )
+                self.assertEqual(
+                    preferences.read_text(encoding="utf-8"),
+                    original,
+                    "the later-read race must never be reached after capture",
+                )
+                binding = preferences.parents[1] / "bindings.json"
+                self.assertIn(str(Path(second).resolve()), binding.read_text(encoding="utf-8"))
+
+    def test_initial_enable_and_link_capture_generated_overlay_once(self):
+        for command in ("enable", "link"):
+            with self.subTest(command=command), tempfile.TemporaryDirectory() as root, tempfile.TemporaryDirectory() as state:
+                with patch.dict(os.environ, {"XDG_STATE_HOME": state}):
+                    self.assertEqual(main(["init", "--project-root", root]), 0)
+                    memory = Path(root) / "docs" / "memory"
+                    project_id = re.search(
+                        r"(?m)^- project_id: (\S+)",
+                        (memory / "manifest.md").read_text(encoding="utf-8"),
+                    ).group(1)
+                    preferences = (
+                        Path(state)
+                        / "memory-custodian"
+                        / "projects"
+                        / project_id
+                        / "local"
+                        / "preferences.md"
+                    )
+                    original_read = local_overlay.read_local_private_file
+                    module_reads = 0
+
+                    def tracked_read(path: Path) -> str:
+                        nonlocal module_reads
+                        value = original_read(path)
+                        if path == preferences:
+                            module_reads += 1
+                        return value
+
+                    with patch.object(local_overlay, "read_local_private_file", side_effect=tracked_read):
+                        code, output, error = self._capture([
+                            "local", command, "--project-root", root,
+                        ])
+
+                    self.assertEqual(code, 0, output + error)
+                    self.assertEqual(
+                        module_reads,
+                        1,
+                        "initial local mutation must capture generated modules once",
+                    )
+                    self.assertIn(
+                        "enabled" if command == "enable" else "linked",
+                        output,
+                    )
+                    if command == "link":
+                        self.assertTrue((preferences.parents[1] / "bindings.json").exists())
+
+    def test_post_create_scope_corruption_blocks_enable_and_link(self):
+        with tempfile.TemporaryDirectory() as root, tempfile.TemporaryDirectory() as state:
+            with patch.dict(os.environ, {"XDG_STATE_HOME": state}):
+                self.assertEqual(main(["init", "--project-root", root]), 0)
+                memory = Path(root) / "docs" / "memory"
+                project_id = re.search(
+                    r"(?m)^- project_id: (\S+)",
+                    (memory / "manifest.md").read_text(encoding="utf-8"),
+                ).group(1)
+                project_state = (
+                    Path(state) / "memory-custodian" / "projects" / project_id
+                )
+                binding = project_state / "bindings.json"
+                real_write = local_overlay.write_private_file
+
+                def write_then_corrupt(path: Path, text: str) -> None:
+                    real_write(path, text)
+                    if path.name == "preferences.md":
+                        path.write_text(
+                            "# Local Preferences\n\n"
+                            "## MC-PREF-20260828-badc0de0 — Generated race\n\n"
+                            "Status: active\nScope: project\n"
+                            "Evidence:\n- user-confirmed\n\n"
+                            "Preference:\nInjected invalid scope.\n",
+                            encoding="utf-8",
+                        )
+
+                with patch.object(
+                    local_overlay,
+                    "write_private_file",
+                    side_effect=write_then_corrupt,
+                ):
+                    enable_code, enable_output, enable_error = self._capture([
+                        "local", "enable", "--project-root", root,
+                    ])
+
+                self.assertEqual(enable_code, 2, enable_output + enable_error)
+                self.assertNotIn("enabled", enable_output.casefold())
+                self.assertFalse(binding.exists())
+
+                link_code, link_output, link_error = self._capture([
+                    "local", "link", "--project-root", root,
+                ])
+                self.assertEqual(link_code, 2, link_output + link_error)
+                self.assertNotIn("linked", link_output.casefold())
+                self.assertFalse(binding.exists())
 
 
 if __name__ == "__main__":
