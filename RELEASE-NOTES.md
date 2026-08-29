@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-## v0.11.0 - 2026-08-01
+## v0.11.0 - 2026-08-29
 
 ### Protocol 0.7 Entry schema 1 to 2 compatibility boundary
 
