@@ -45,6 +45,19 @@ class LocalSnapshotRaceTests(unittest.TestCase):
         )
         return memory, preferences, project_id
 
+    def _assert_no_published_overlay(self, project_state: Path) -> None:
+        local = project_state / "local"
+        self.assertFalse(
+            local.exists() or local.is_symlink(),
+            "failed first enable must not publish local/",
+        )
+        staging = sorted(
+            path.name
+            for path in project_state.iterdir()
+            if path.name.startswith(".local-staging-")
+        )
+        self.assertEqual(staging, [], "failed first enable must clean staging")
+
     def test_read_uses_captured_local_text_after_replacement(self):
         with tempfile.TemporaryDirectory() as project_root, tempfile.TemporaryDirectory() as state:
             with patch.dict(os.environ, {"XDG_STATE_HOME": state}):
@@ -239,7 +252,7 @@ class LocalSnapshotRaceTests(unittest.TestCase):
                     def tracked_read(path: Path) -> str:
                         nonlocal module_reads
                         value = original_read(path)
-                        if path == preferences:
+                        if path.name == "preferences.md":
                             module_reads += 1
                         return value
 
@@ -261,7 +274,103 @@ class LocalSnapshotRaceTests(unittest.TestCase):
                     if command == "link":
                         self.assertTrue((preferences.parents[1] / "bindings.json").exists())
 
-    def test_post_create_scope_corruption_blocks_enable_and_link(self):
+    def test_post_create_scope_corruption_rolls_back_and_retries(self):
+        for command in ("enable", "link"):
+            with self.subTest(command=command), tempfile.TemporaryDirectory() as root, tempfile.TemporaryDirectory() as state:
+                with patch.dict(os.environ, {"XDG_STATE_HOME": state}):
+                    self.assertEqual(main(["init", "--project-root", root]), 0)
+                    memory = Path(root) / "docs" / "memory"
+                    project_id = re.search(
+                        r"(?m)^- project_id: (\S+)",
+                        (memory / "manifest.md").read_text(encoding="utf-8"),
+                    ).group(1)
+                    project_state = (
+                        Path(state) / "memory-custodian" / "projects" / project_id
+                    )
+                    binding = project_state / "bindings.json"
+                    real_write = local_overlay.write_private_file
+
+                    def write_then_corrupt(path: Path, text: str) -> None:
+                        real_write(path, text)
+                        if path.name == "preferences.md":
+                            path.write_text(
+                                "# Local Preferences\n\n"
+                                "## MC-PREF-20260828-badc0de0 — Generated race\n\n"
+                                "Status: active\nScope: project\n"
+                                "Evidence:\n- user-confirmed\n\n"
+                                "Preference:\nInjected invalid scope.\n",
+                                encoding="utf-8",
+                            )
+
+                    with patch.object(
+                        local_overlay,
+                        "write_private_file",
+                        side_effect=write_then_corrupt,
+                    ):
+                        code, output, error = self._capture([
+                            "local", command, "--project-root", root,
+                        ])
+
+                    self.assertEqual(code, 2, output + error)
+                    self.assertNotIn(command, output.casefold())
+                    self.assertFalse(binding.exists())
+                    self._assert_no_published_overlay(project_state)
+
+                    retry_code, retry_output, retry_error = self._capture([
+                        "local", command, "--project-root", root,
+                    ])
+                    self.assertEqual(retry_code, 0, retry_output + retry_error)
+                    self.assertIn(command, retry_output.casefold())
+                    self.assertTrue((project_state / "local").is_dir())
+                    if command == "link":
+                        self.assertTrue(binding.exists())
+
+    def test_preferences_write_failure_rolls_back_and_retries(self):
+        for command in ("enable", "link"):
+            with self.subTest(command=command), tempfile.TemporaryDirectory() as root, tempfile.TemporaryDirectory() as state:
+                with patch.dict(os.environ, {"XDG_STATE_HOME": state}):
+                    self.assertEqual(main(["init", "--project-root", root]), 0)
+                    memory = Path(root) / "docs" / "memory"
+                    project_id = re.search(
+                        r"(?m)^- project_id: (\S+)",
+                        (memory / "manifest.md").read_text(encoding="utf-8"),
+                    ).group(1)
+                    project_state = (
+                        Path(state) / "memory-custodian" / "projects" / project_id
+                    )
+                    binding = project_state / "bindings.json"
+                    real_write = local_overlay.write_private_file
+
+                    def fail_preferences(path: Path, text: str) -> None:
+                        if path.name == "preferences.md":
+                            raise OSError("simulated preferences write failure")
+                        real_write(path, text)
+
+                    with patch.object(
+                        local_overlay,
+                        "write_private_file",
+                        side_effect=fail_preferences,
+                    ):
+                        code, output, error = self._capture([
+                            "local", command, "--project-root", root,
+                        ])
+
+                    self.assertEqual(code, 1, output + error)
+                    self.assertEqual(output, "")
+                    self.assertIn("preferences write failure", error)
+                    self.assertFalse(binding.exists())
+                    self._assert_no_published_overlay(project_state)
+
+                    retry_code, retry_output, retry_error = self._capture([
+                        "local", command, "--project-root", root,
+                    ])
+                    self.assertEqual(retry_code, 0, retry_output + retry_error)
+                    self.assertIn(command, retry_output.casefold())
+                    self.assertTrue((project_state / "local").is_dir())
+                    if command == "link":
+                        self.assertTrue(binding.exists())
+
+    def test_cleanup_failure_reports_exact_partial_staging_state(self):
         with tempfile.TemporaryDirectory() as root, tempfile.TemporaryDirectory() as state:
             with patch.dict(os.environ, {"XDG_STATE_HOME": state}):
                 self.assertEqual(main(["init", "--project-root", root]), 0)
@@ -276,37 +385,56 @@ class LocalSnapshotRaceTests(unittest.TestCase):
                 binding = project_state / "bindings.json"
                 real_write = local_overlay.write_private_file
 
-                def write_then_corrupt(path: Path, text: str) -> None:
-                    real_write(path, text)
+                def fail_preferences(path: Path, text: str) -> None:
                     if path.name == "preferences.md":
-                        path.write_text(
-                            "# Local Preferences\n\n"
-                            "## MC-PREF-20260828-badc0de0 — Generated race\n\n"
-                            "Status: active\nScope: project\n"
-                            "Evidence:\n- user-confirmed\n\n"
-                            "Preference:\nInjected invalid scope.\n",
-                            encoding="utf-8",
-                        )
+                        raise OSError("simulated preferences write failure")
+                    real_write(path, text)
 
                 with patch.object(
                     local_overlay,
                     "write_private_file",
-                    side_effect=write_then_corrupt,
+                    side_effect=fail_preferences,
+                ), patch.object(
+                    local_overlay.shutil,
+                    "rmtree",
+                    side_effect=OSError("simulated cleanup failure"),
                 ):
-                    enable_code, enable_output, enable_error = self._capture([
-                        "local", "enable", "--project-root", root,
+                    code, output, error = self._capture([
+                        "local", "link", "--project-root", root,
                     ])
 
-                self.assertEqual(enable_code, 2, enable_output + enable_error)
-                self.assertNotIn("enabled", enable_output.casefold())
+                self.assertNotEqual(code, 0, output + error)
+                self.assertEqual(output, "")
+                self.assertNotIn("enabled", output.casefold())
+                self.assertNotIn("linked", output.casefold())
+                self.assertIn("partial staging state", error)
+                self.assertIn("simulated cleanup failure", error)
                 self.assertFalse(binding.exists())
-
-                link_code, link_output, link_error = self._capture([
-                    "local", "link", "--project-root", root,
-                ])
-                self.assertEqual(link_code, 2, link_output + link_error)
-                self.assertNotIn("linked", link_output.casefold())
-                self.assertFalse(binding.exists())
+                self.assertFalse(
+                    (project_state / "local").exists()
+                    or (project_state / "local").is_symlink()
+                )
+                marker = "partial staging state remains at "
+                self.assertIn(marker, error)
+                staging_text = error.split(marker, 1)[1].split(
+                    "; cleanup failed:", 1
+                )[0]
+                staging = Path(staging_text)
+                self.assertEqual(staging.parent, project_state)
+                self.assertTrue(staging.name.startswith(".local-staging-"))
+                self.assertTrue(staging.is_dir())
+                self.assertEqual(
+                    tuple(
+                        path.name
+                        for path in project_state.iterdir()
+                        if path.name.startswith(".local-staging-")
+                    ),
+                    (staging.name,),
+                )
+                # The injected cleanup failure is intentionally restored before
+                # removing the exact residual staging path.
+                shutil.rmtree(staging)
+                self.assertFalse(staging.exists())
 
 
 if __name__ == "__main__":

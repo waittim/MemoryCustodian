@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 import json
 import os
 from pathlib import Path
 import re
+import shutil
 import stat
 from typing import Mapping
+import uuid
 
 from .entries import (
     StructuredEntry,
@@ -241,6 +243,100 @@ def _accept_overlay_snapshot(
     return overlay
 
 
+def _new_staging_directory(project_state: Path) -> Path:
+    """Create a private sibling directory for a first overlay publication."""
+
+    for _ in range(32):
+        candidate = project_state / f".local-staging-{uuid.uuid4().hex}"
+        try:
+            candidate.mkdir(mode=0o700)
+        except FileExistsError:
+            continue
+        try:
+            _validate_local_directory(candidate)
+        except (OSError, RuntimeError, ValueError):
+            cleanup_error = _cleanup_staging_directory(candidate, project_state)
+            if cleanup_error:
+                raise ValueError(
+                    f"Unable to secure local overlay staging directory {candidate}; "
+                    f"cleanup failed: {cleanup_error}"
+                )
+            raise
+        return candidate
+    raise OSError("Unable to allocate a unique local overlay staging directory.")
+
+
+def _cleanup_staging_directory(
+    staging: Path,
+    project_state: Path,
+) -> str | None:
+    """Best-effort removal of one staging directory, without following links."""
+
+    try:
+        _validate_local_directory(project_state)
+    except (OSError, RuntimeError, ValueError) as exc:
+        return f"project state is no longer a secure directory: {exc}"
+    if staging.parent != project_state:
+        return "staging path is outside its project state directory"
+    try:
+        metadata = staging.lstat()
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        return str(exc)
+    if stat.S_ISLNK(metadata.st_mode):
+        try:
+            staging.unlink()
+        except FileNotFoundError:
+            return None
+        except OSError as exc:
+            return str(exc)
+        return None
+    if not stat.S_ISDIR(metadata.st_mode):
+        return "staging path is not a directory; it was left untouched"
+    try:
+        _validate_local_directory(staging)
+        shutil.rmtree(staging)
+    except FileNotFoundError:
+        return None
+    except (OSError, RuntimeError, ValueError) as exc:
+        return str(exc)
+    return None
+
+
+def _rebase_overlay(
+    overlay: LocalOverlay,
+    source: Path,
+    destination: Path,
+) -> LocalOverlay:
+    """Move captured path metadata from staged to the published directory."""
+
+    if overlay.directory != source:
+        raise ValueError("Local overlay snapshot does not belong to its staging directory.")
+    snapshot = overlay.snapshot
+    if snapshot is None:
+        modules = tuple(destination / path.relative_to(source) for path in overlay.modules)
+        return replace(overlay, directory=destination, modules=modules)
+    files = tuple(
+        replace(
+            item,
+            path=destination / item.relative,
+            entries=tuple(
+                replace(entry, path=destination / item.relative)
+                for entry in item.entries
+            ),
+        )
+        for item in snapshot.files
+    )
+    modules = tuple(destination / item.relative for item in snapshot.module_files)
+    return replace(
+        overlay,
+        directory=destination,
+        modules=modules,
+        snapshot=replace(snapshot, directory=destination, files=files),
+    )
+
+
 def link_root(
     project_root: Path,
     project_id: str,
@@ -313,7 +409,7 @@ def enable_overlay(
         allow_disabled=True,
     )
     project_state = _project_state(project_id)
-    _read_bindings(project_id)
+    roots = _read_bindings(project_id)
     directory = project_state / "local"
     if directory.exists() or directory.is_symlink():
         if overlay.snapshot is None:
@@ -321,22 +417,47 @@ def enable_overlay(
             raise ValueError("Local overlay requires review before enabling: " + detail)
         _validate_local_directory(directory)
         return overlay
-    directory = ensure_private_directory(directory)
-    ensure_private_directory(directory / "profiles")
-    manifest = directory / "manifest.md"
-    preferences = directory / "preferences.md"
-    if not manifest.exists():
+    staging: Path | None = None
+    try:
+        # Build the complete first overlay beside the final path.  Nothing
+        # under ``local/`` exists until the staged snapshot is accepted.
+        staging = _new_staging_directory(project_state)
+        ensure_private_directory(staging / "profiles")
+        manifest = staging / "manifest.md"
+        preferences = staging / "preferences.md"
         write_private_file(manifest, _manifest_text(project_id))
-    if not preferences.exists():
-        write_private_file(preferences, "# Local Preferences\n\nEntries are newest first.\n")
-    created = inspect_overlay(
-        project_root,
-        project_id,
-        shared_ids=shared_ids,
-        entry_schema_version=entry_schema_version,
-        capture_unbound=True,
-    )
-    return _accept_overlay_snapshot(created, project_id, "enabling")
+        write_private_file(
+            preferences,
+            "# Local Preferences\n\nEntries are newest first.\n",
+        )
+        created = _inspect_overlay_directory(
+            project_root,
+            project_id,
+            staging,
+            roots,
+            shared_ids=shared_ids,
+            entry_schema_version=entry_schema_version,
+            capture_unbound=True,
+        )
+        accepted = _accept_overlay_snapshot(created, project_id, "enabling")
+        published = _rebase_overlay(accepted, staging, directory)
+        _validate_local_directory(project_state)
+        if directory.exists() or directory.is_symlink():
+            raise ValueError(
+                "Local overlay appeared during staged enable; no changes were applied."
+            )
+        os.replace(staging, directory)
+        staging = None
+        return published
+    except Exception as exc:
+        if staging is not None:
+            cleanup_error = _cleanup_staging_directory(staging, project_state)
+            if cleanup_error:
+                raise ValueError(
+                    f"Local overlay creation failed: {exc}; partial staging state "
+                    f"remains at {staging}; cleanup failed: {cleanup_error}"
+                ) from exc
+        raise
 
 
 def _parse_manifest(
@@ -625,68 +746,25 @@ def _cross_storage_id_issues(
     return issues
 
 
-def inspect_overlay(
+def _inspect_overlay_directory(
     project_root: Path,
     project_id: str,
+    directory: Path,
+    roots: tuple[str, ...],
     *,
-    disabled: bool = False,
-    shared_ids: set[str] | None = None,
-    entry_schema_version: str = CURRENT_ENTRY_SCHEMA_VERSION,
-    capture_unbound: bool = False,
+    shared_ids: set[str] | None,
+    entry_schema_version: str,
+    capture_unbound: bool,
 ) -> LocalOverlay:
-    if disabled or not project_id:
-        return LocalOverlay(LocalStatus.DISABLED, Path("."), project_id)
-    try:
-        directory = overlay_directory(project_id)
-    except OSError as exc:
-        return LocalOverlay(
-            LocalStatus.REVIEW,
-            None,
-            project_id,
-            warnings=(f"Unsafe local overlay project directory: {exc}",),
-            corrupt=True,
-        )
-    except ValueError as exc:
-        return LocalOverlay(
-            LocalStatus.REVIEW,
-            None,
-            project_id,
-            warnings=(f"Unsafe local overlay project directory: {exc}",),
-            corrupt=True,
-        )
-    if not directory.exists():
-        binding = directory.parent / "bindings.json"
-        if not binding.exists() and not binding.is_symlink():
-            return LocalOverlay(LocalStatus.DISABLED, directory, project_id)
-        try:
-            _read_bindings(project_id)
-            warning = "Local overlay binding exists but the required local directory is missing."
-        except ValueError as exc:
-            warning = str(exc)
-        return LocalOverlay(
-            LocalStatus.REVIEW,
-            directory,
-            project_id,
-            warnings=(warning,),
-            corrupt=True,
-        )
-    manifest = directory / "manifest.md"
-    try:
-        roots = _read_bindings(project_id)
-    except ValueError as exc:
-        return LocalOverlay(
-            LocalStatus.REVIEW,
-            directory,
-            project_id,
-            warnings=(str(exc),),
-            corrupt=True,
-        )
+    """Capture and validate one already-secured local overlay directory."""
+
     current = _normalized_root(project_root)
     if current not in roots and not capture_unbound:
         return LocalOverlay(
             LocalStatus.UNBOUND, directory, project_id,
             warnings=("Existing local overlay is not bound to this normalized project root; run `memory-custodian local link`.",),
         )
+    manifest = directory / "manifest.md"
     try:
         # Capture the manifest and every declared module once.  The returned
         # snapshot is the only local input a downstream read is allowed to
@@ -763,6 +841,72 @@ def inspect_overlay(
         modules,
         warnings,
         snapshot=local_snapshot,
+    )
+
+
+def inspect_overlay(
+    project_root: Path,
+    project_id: str,
+    *,
+    disabled: bool = False,
+    shared_ids: set[str] | None = None,
+    entry_schema_version: str = CURRENT_ENTRY_SCHEMA_VERSION,
+    capture_unbound: bool = False,
+) -> LocalOverlay:
+    if disabled or not project_id:
+        return LocalOverlay(LocalStatus.DISABLED, Path("."), project_id)
+    try:
+        directory = overlay_directory(project_id)
+    except OSError as exc:
+        return LocalOverlay(
+            LocalStatus.REVIEW,
+            None,
+            project_id,
+            warnings=(f"Unsafe local overlay project directory: {exc}",),
+            corrupt=True,
+        )
+    except ValueError as exc:
+        return LocalOverlay(
+            LocalStatus.REVIEW,
+            None,
+            project_id,
+            warnings=(f"Unsafe local overlay project directory: {exc}",),
+            corrupt=True,
+        )
+    if not directory.exists():
+        binding = directory.parent / "bindings.json"
+        if not binding.exists() and not binding.is_symlink():
+            return LocalOverlay(LocalStatus.DISABLED, directory, project_id)
+        try:
+            _read_bindings(project_id)
+            warning = "Local overlay binding exists but the required local directory is missing."
+        except ValueError as exc:
+            warning = str(exc)
+        return LocalOverlay(
+            LocalStatus.REVIEW,
+            directory,
+            project_id,
+            warnings=(warning,),
+            corrupt=True,
+        )
+    try:
+        roots = _read_bindings(project_id)
+    except ValueError as exc:
+        return LocalOverlay(
+            LocalStatus.REVIEW,
+            directory,
+            project_id,
+            warnings=(str(exc),),
+            corrupt=True,
+        )
+    return _inspect_overlay_directory(
+        project_root,
+        project_id,
+        directory,
+        roots,
+        shared_ids=shared_ids,
+        entry_schema_version=entry_schema_version,
+        capture_unbound=capture_unbound,
     )
 
 
