@@ -6,9 +6,20 @@ from dataclasses import dataclass
 import hashlib
 from pathlib import Path
 import re
+import subprocess
 import uuid
 
-from .entries import parse_structured_entries
+from .entries import (
+    ENTRY_ID_RE,
+    EntryUnit,
+    parse_entry_units,
+    memory_entry_id_counts,
+    parse_structured_entries,
+    render_active_entry,
+    render_markdown_bullet,
+    line_safe_markdown_body,
+)
+from .conflicts import ConflictStatus, analyze_snapshot
 from .locking import project_mutation_guard
 from .erasure import ErasureScope, render_apply_boundary, render_scope, scope_for_forget
 from .mutations import TextMutation, apply_mutations
@@ -21,21 +32,23 @@ from .plans import (
     print_plan,
 )
 from .protocol import (
+    CURRENT_ENTRY_SCHEMA_VERSION,
     CURRENT_PROTOCOL_VERSION,
     MarkdownUnit,
     compare_versions,
+    entry_schema_version_for_manifest,
     ensure_newline,
-    iter_markdown_files,
+    managed_markdown_files,
+    manifest_contract_metadata,
     optional_index_paths,
     parse_markdown_units,
-    read_text,
+    read_managed_text,
     render_markdown_document,
     resolve_memory_dir,
     resolve_project_root,
-    project_id_from_manifest,
-    protocol_metadata,
     today,
 )
+from .snapshot import MemorySnapshot, build_snapshot
 from .subjects import SUBJECT_ID_RE
 
 
@@ -47,50 +60,154 @@ class FilePlan:
     blockers: tuple[MarkdownUnit, ...]
 
 
-def _target_files(memory_dir: Path, mode: str) -> list[Path]:
+@dataclass(frozen=True)
+class ForgetBuild:
+    plan: MutationPlan
+    targets: tuple[Path, ...]
+    file_plans: tuple[FilePlan, ...]
+    tombstone_matches: tuple[MarkdownUnit, ...]
+    tombstone_blockers: tuple[MarkdownUnit, ...]
+    broad_reasons: tuple[str, ...]
+    changelog_written: bool
+
+
+def _target_files(memory_dir: Path, mode: str, *, include_do_not_use: bool = False) -> list[Path]:
     excluded = {"manifest.md", "do-not-use.md"}
     if mode == "purge":
-        candidates = iter_markdown_files(memory_dir, include_archive=True)
+        candidates = managed_markdown_files(memory_dir)
         return sorted(
-            {path for path in candidates if path.name != "README.md" and path.relative_to(memory_dir).as_posix() not in excluded}
+            {path for path in candidates if path.name.casefold() != "readme.md" and path.relative_to(memory_dir).as_posix() not in excluded}
         )
 
-    manifest = read_text(memory_dir / "manifest.md")
+    manifest = read_managed_text(memory_dir, memory_dir / "manifest.md")
     enabled = optional_index_paths(manifest)
     active_core = {"brief.md", "decisions.md", "constraints.md", "preferences.md", "inbox.md", "changelog.md"}
+    if mode == "hard":
+        # Hard erasure covers the active governance authorities as well as
+        # ordinary memory.  Purge already inventories every managed Markdown
+        # file; soft forget deliberately remains scoped to memory content.
+        active_core.update({"subjects.md", "reconciliations.md"})
     candidates: set[Path] = set()
-    for path in iter_markdown_files(memory_dir, include_archive=False):
+    for path in managed_markdown_files(memory_dir):
         relative = path.relative_to(memory_dir).as_posix()
+        if relative.startswith("archive/"):
+            continue
         if relative in active_core or relative in enabled:
             candidates.add(path)
-    return sorted(path for path in candidates if path.name != "README.md" and path.name != "do-not-use.md")
+    return sorted(
+        path for path in candidates
+        if path.name.casefold() != "readme.md" and (include_do_not_use or path.name != "do-not-use.md")
+    )
 
 
-def _remove_units(text: str, topic: str) -> tuple[str, tuple[MarkdownUnit, ...], tuple[MarkdownUnit, ...]]:
+def _history_check(project_root: Path, memory_dir: Path, selector: str, requested: bool) -> str:
+    if not requested:
+        return "not-requested"
+    try:
+        relative = memory_dir.relative_to(project_root).as_posix()
+        result = subprocess.run(
+            ["git", "log", "--all", "--format=%H", f"-S{selector}", "--", relative],
+            cwd=project_root, text=True, capture_output=True, check=False, timeout=30,
+        )
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return "unavailable"
+    if result.returncode != 0:
+        return "unavailable"
+    return "reachable-copy-detected" if result.stdout.strip() else "no-reachable-copy-detected"
+
+
+def _remove_units(
+    text: str,
+    topic: str,
+    *,
+    exact_entry_id: str | None = None,
+    source_path: Path | None = None,
+    entry_schema_version: str = CURRENT_ENTRY_SCHEMA_VERSION,
+) -> tuple[str, tuple[MarkdownUnit, ...], tuple[MarkdownUnit, ...]]:
     document = parse_markdown_units(text)
+    entry_units = parse_entry_units(
+        source_path or Path("__forget__.md"),
+        text,
+        entry_schema_version=entry_schema_version,
+    )
     needle = topic.casefold()
+
+    def matches_unit(entry_unit: EntryUnit) -> bool:
+        unit = entry_unit.source
+        if unit.kind not in {"h2", "bullet"}:
+            return False
+        if exact_entry_id:
+            if unit.kind != "h2":
+                return False
+            heading = ENTRY_ID_RE.search(entry_unit.display_text.splitlines()[0])
+            return bool(heading and heading.group(0).casefold() == exact_entry_id.casefold())
+        return needle in entry_unit.display_text.casefold() and not (
+            unit.kind == "h2" and len(unit.text.splitlines()) == 1
+        )
+
     matches = tuple(
-        unit
-        for unit in document.units
-        if unit.kind in {"h2", "bullet"}
-        and needle in unit.text.casefold()
-        and not (unit.kind == "h2" and len(unit.text.splitlines()) == 1)
+        entry_unit.source
+        for entry_unit in entry_units
+        if matches_unit(entry_unit)
     )
     blockers = tuple(
-        unit for unit in document.units if unit.kind in {"preamble", "body"} and needle in unit.text.casefold()
+        entry_unit.source
+        for entry_unit in entry_units
+        if (
+            entry_unit.source.kind == "ambiguous-bullet"
+            and (exact_entry_id is not None or needle in entry_unit.display_text.casefold())
+        )
+        or (
+            not exact_entry_id
+            and entry_unit.source.kind in {"preamble", "body"}
+            and needle in entry_unit.display_text.casefold()
+        )
     )
     kept = [unit for unit in document.units if unit not in matches]
+    if matches:
+        removed_dates: set[MarkdownUnit] = set()
+        for index, unit in enumerate(document.units):
+            if not (
+                unit.kind == "h2"
+                and unit.heading
+                and re.fullmatch(r"\d{4}-\d{2}-\d{2}", unit.heading)
+                and len(unit.text.splitlines()) == 1
+            ):
+                continue
+            owned: list[MarkdownUnit] = []
+            following = index + 1
+            while (
+                following < len(document.units)
+                and document.units[following].kind == "bullet"
+            ):
+                owned.append(document.units[following])
+                following += 1
+            if owned and all(item in matches for item in owned):
+                removed_dates.add(unit)
+        kept = [unit for unit in kept if unit not in removed_dates]
     return render_markdown_document(document, kept), matches, blockers
 
 
 def _prepend_entry(text: str, entry: str) -> str:
     document = parse_markdown_units(text)
-    units = [MarkdownUnit("h2", entry.strip(), entry.splitlines()[0][3:].strip()), *document.units]
+    units = list(document.units)
+    insertion = next(
+        (
+            index
+            for index, unit in enumerate(units)
+            if unit.kind in {"h2", "bullet"}
+        ),
+        len(units),
+    )
+    units.insert(
+        insertion,
+        MarkdownUnit("h2", entry.strip(), entry.splitlines()[0][3:].strip()),
+    )
     return render_markdown_document(document, units)
 
 
 def _append_changelog_entry(text: str, message: str) -> str:
-    entry = f"## {today()}\n- {message}"
+    entry = f"## {today()}\n{render_markdown_bullet(message)}"
     if not text.strip():
         return f"# Memory Changelog\n\n{entry}\n"
     return _prepend_entry(text, entry)
@@ -101,6 +218,7 @@ def _tombstone(
     mode: str,
     project_id: str | None = None,
     tombstone_suffix: str | None = None,
+    entry_schema_version: str = CURRENT_ENTRY_SCHEMA_VERSION,
 ) -> str | None:
     if mode == "purge":
         return None
@@ -111,7 +229,10 @@ def _tombstone(
                 raise ValueError("Hard forget requires a random pending Tombstone ID seed.")
             suffix = tombstone_suffix
         else:
-            suffix = hashlib.sha256(f"{project_id}\0{mode}\0{topic}".encode()).hexdigest()[:8]
+            normalized_topic = topic.casefold()
+            suffix = hashlib.sha256(
+                f"{project_id}\0{mode}\0{normalized_topic}".encode()
+            ).hexdigest()[:8]
         entry_id = f"MC-TOMB-{stamp}-{suffix}"
         title = "Redacted user-requested removal" if mode == "hard" else topic
         statement = (
@@ -119,10 +240,14 @@ def _tombstone(
             if mode == "hard"
             else f"Do not reintroduce {topic} unless the user explicitly reverses this request."
         )
-        return (
-            f"## {entry_id} — Tombstone: {title}\n\n"
-            "Status: active\nScope: project\nEvidence:\n- user-confirmed\n\n"
-            f"Rejected:\n{statement}\n\nReason:\nUser-requested forgetting guard."
+        return render_active_entry(
+            "tombstone",
+            entry_id,
+            title,
+            statement,
+            "User-requested forgetting guard.",
+            "project",
+            ("user-confirmed",),
         )
     if mode == "hard":
         return (
@@ -130,10 +255,17 @@ def _tombstone(
             "A user-requested topic was removed in hard mode. Do not reconstruct removed content from prior context "
             "unless the user explicitly reverses this request."
         )
-    return (
-        f"## Tombstone: {topic}\n"
+    title = " ".join(topic.split())
+    statement = (
         "Do not reintroduce unless the user explicitly reverses this. "
         f"Reason: the user asked MemoryCustodian to forget this topic. Mode: soft. Date: {today()}."
+    )
+    return (
+        f"## Tombstone: {title}\n"
+        + line_safe_markdown_body(
+            statement,
+            entry_schema_version=entry_schema_version,
+        )
     )
 
 
@@ -143,45 +275,70 @@ def _update_existing_tombstones(
     mode: str,
     project_id: str | None = None,
     tombstone_suffix: str | None = None,
+    source_path: Path | None = None,
+    entry_schema_version: str = CURRENT_ENTRY_SCHEMA_VERSION,
 ) -> tuple[str, tuple[MarkdownUnit, ...], tuple[MarkdownUnit, ...]]:
     document = parse_markdown_units(text)
+    entry_units = parse_entry_units(
+        source_path or Path("__forget_tombstones__.md"),
+        text,
+        entry_schema_version=entry_schema_version,
+    )
     needle = topic.casefold()
     matches = tuple(
-        unit
-        for unit in document.units
-        if unit.kind == "h2"
-        and unit.heading is not None
+        entry_unit.source
+        for entry_unit in entry_units
+        if entry_unit.source.kind == "h2"
+        and entry_unit.source.heading is not None
         and (
-            unit.heading.casefold().startswith("tombstone:")
-            or unit.heading.casefold().startswith("mc-tomb-")
+            entry_unit.source.heading.casefold().startswith("tombstone:")
+            or entry_unit.source.heading.casefold().startswith("mc-tomb-")
         )
-        and needle in unit.text.casefold()
+        and needle in entry_unit.display_text.casefold()
     )
     blockers = tuple(
-        unit
-        for unit in document.units
-        if needle in unit.text.casefold()
+        entry_unit.source
+        for entry_unit in entry_units
+        if needle in entry_unit.display_text.casefold()
         and (
-            unit.kind in {"preamble", "body"}
+            entry_unit.source.kind in {"preamble", "body"}
             or (
-                unit.kind == "h2"
+                entry_unit.source.kind == "h2"
                 and (
-                    unit.heading is None
-                    or not unit.heading.casefold().startswith(("tombstone:", "mc-tomb-"))
+                    entry_unit.source.heading is None
+                    or not entry_unit.source.heading.casefold().startswith(("tombstone:", "mc-tomb-"))
                 )
             )
         )
     )
     kept = [unit for unit in document.units if unit not in matches]
     if mode == "hard":
-        generic = _tombstone(topic, mode, project_id, tombstone_suffix)
+        generic = _tombstone(
+            topic,
+            mode,
+            project_id,
+            tombstone_suffix,
+            entry_schema_version,
+        )
         has_generic_guard = any(
-            "Redacted user-requested removal" in unit.text
-            and "Do not reconstruct removed content" in unit.text
-            for unit in kept
+            "Redacted user-requested removal" in entry_unit.display_text
+            and "Do not reconstruct removed content" in entry_unit.display_text
+            for entry_unit in entry_units
+            if entry_unit.source in kept
         )
         if generic is not None and not has_generic_guard:
-            kept.insert(0, MarkdownUnit("h2", generic.strip(), generic.splitlines()[0][3:].strip()))
+            insertion = next(
+                (
+                    index
+                    for index, unit in enumerate(kept)
+                    if unit.kind in {"h2", "bullet"}
+                ),
+                len(kept),
+            )
+            kept.insert(
+                insertion,
+                MarkdownUnit("h2", generic.strip(), generic.splitlines()[0][3:].strip()),
+            )
     return render_markdown_document(document, kept), matches, blockers
 
 
@@ -208,7 +365,7 @@ def _public_text(value: str, topic: str, redact: bool) -> str:
 def _subject_reference_blockers(
     memory_dir: Path,
     plans: list[FilePlan],
-    tombstone_updated: str | None,
+    snapshot: MemorySnapshot,
 ) -> list[str]:
     registry_plan = next(
         (plan for plan in plans if plan.path.relative_to(memory_dir).as_posix() == "subjects.md"),
@@ -223,26 +380,50 @@ def _subject_reference_blockers(
     }
     if not removed_ids:
         return []
-    planned_text = {plan.path: plan.updated for plan in plans}
-    if tombstone_updated is not None:
-        planned_text[memory_dir / "do-not-use.md"] = tombstone_updated
     references: dict[str, list[str]] = {subject_id: [] for subject_id in removed_ids}
-    for path in iter_markdown_files(memory_dir, include_archive=True):
-        if path.name == "subjects.md":
+    for item in snapshot.files:
+        if item.relative in {"subjects.md", "reconciliations.md"} or item.path.name.casefold() == "readme.md":
             continue
-        text = planned_text.get(path, read_text(path))
-        for entry in parse_structured_entries(path, text):
+        for entry in item.entries:
             for field in ("Subject", "Provisional-Subject"):
                 subject_id = entry.fields.get(field, "").casefold()
                 if subject_id in references:
                     references[subject_id].append(
-                        f"{path.relative_to(memory_dir).as_posix()}:{entry.entry_id}"
+                        f"{item.relative}:{entry.entry_id}"
                     )
     return [
         f"subjects.md: cannot remove {subject_id.upper()} while referenced by {', '.join(owners)}"
         for subject_id, owners in references.items()
         if owners
     ]
+
+
+def _entry_reference_blockers(
+    memory_dir: Path,
+    entry_id: str | None,
+    snapshot: MemorySnapshot,
+) -> list[str]:
+    if not entry_id:
+        return []
+    relation_fields = (
+        "Supersedes", "Superseded-By", "Promoted-From", "Promoted-To", "Exception-To"
+    )
+    blockers: list[str] = []
+    for entry in snapshot.integrity_entries:
+        if entry.entry_id.casefold() == entry_id.casefold():
+            continue
+        for field in relation_fields:
+            if entry.fields.get(field, "").casefold() == entry_id.casefold():
+                relative = entry.path.relative_to(memory_dir).as_posix()
+                blockers.append(
+                    f"{relative}:{entry.entry_id} {field} references selected Entry {entry_id}"
+                )
+    for record in snapshot.reconciliations:
+        if any(value.casefold() == entry_id.casefold() for value in record.entries):
+            blockers.append(
+                f"reconciliations.md:{record.record_id} Entries references selected Entry {entry_id}"
+            )
+    return sorted(blockers)
 
 
 def _build_forget_mutation_plan(
@@ -253,48 +434,134 @@ def _build_forget_mutation_plan(
     protocol_version: str,
     tombstone_suffix: str | None = None,
     privacy_nonce: str | None = None,
-) -> MutationPlan:
+    entry_schema_version: str = CURRENT_ENTRY_SCHEMA_VERSION,
+) -> ForgetBuild:
     topic = args.topic.strip()
-    targets = _target_files(memory_dir, args.mode)
+    targets = _target_files(memory_dir, args.mode, include_do_not_use=bool(getattr(args, "entry_id", None)))
     plans: list[FilePlan] = []
     for path in targets:
-        original = read_text(path)
-        updated, matches, blockers = _remove_units(original, topic)
+        original = read_managed_text(memory_dir, path)
+        updated, matches, blockers = _remove_units(
+            original,
+            topic,
+            exact_entry_id=getattr(args, "entry_id", None),
+            source_path=path,
+            entry_schema_version=entry_schema_version,
+        )
         plans.append(FilePlan(path, updated, matches, blockers))
     matched_plans = [plan for plan in plans if plan.matches]
 
     tombstone_path = memory_dir / "do-not-use.md"
     tombstone_updated: str | None = None
+    tombstone_matches: tuple[MarkdownUnit, ...] = ()
     tombstone_blockers: tuple[MarkdownUnit, ...] = ()
     if args.mode in {"hard", "purge"}:
-        candidate, _matches, tombstone_blockers = _update_existing_tombstones(
-            read_text(tombstone_path),
+        candidate, tombstone_matches, tombstone_blockers = _update_existing_tombstones(
+            read_managed_text(memory_dir, tombstone_path),
             topic,
             args.mode,
             project_id,
             tombstone_suffix,
+            tombstone_path,
+            entry_schema_version=entry_schema_version,
         )
-        if candidate != ensure_newline(read_text(tombstone_path)):
+        if candidate != ensure_newline(read_managed_text(memory_dir, tombstone_path)):
             tombstone_updated = candidate
-    tombstone = _tombstone(topic, args.mode, project_id, tombstone_suffix)
+    tombstone = _tombstone(
+        topic,
+        args.mode,
+        project_id,
+        tombstone_suffix,
+        entry_schema_version,
+    )
+    extra_blockers: list[str] = []
+    soft_guard_exists = False
     if args.mode == "soft" and tombstone:
-        tombstone_updated = _prepend_entry(read_text(tombstone_path), tombstone)
+        existing_counts = memory_entry_id_counts(memory_dir)
+        rendered = parse_structured_entries(
+            tombstone_path,
+            tombstone,
+            entry_schema_version=entry_schema_version,
+        )
+        tombstone_id = rendered[0].entry_id if len(rendered) == 1 else None
+        expected_guard = rendered[0] if len(rendered) == 1 else None
+        existing_guards = [
+            entry
+            for entry in parse_structured_entries(
+                tombstone_path,
+                read_managed_text(memory_dir, tombstone_path),
+                entry_schema_version=entry_schema_version,
+            )
+            if tombstone_id and entry.entry_id.casefold() == tombstone_id.casefold()
+        ]
+        global_owner_count = (
+            existing_counts.get(tombstone_id.casefold(), 0)
+            if tombstone_id
+            else 0
+        )
+        if tombstone_id and global_owner_count:
+            existing_guard = existing_guards[0] if len(existing_guards) == 1 else None
+            bodies_match = bool(
+                existing_guard is not None
+                and expected_guard is not None
+                and {
+                    name: value.casefold() if name == "Rejected" else value
+                    for name, value in existing_guard.field_bodies.items()
+                }
+                == {
+                    name: value.casefold() if name == "Rejected" else value
+                    for name, value in expected_guard.field_bodies.items()
+                }
+            )
+            if (
+                global_owner_count == 1
+                and existing_guard is not None
+                and expected_guard is not None
+                and existing_guard.title.casefold() == expected_guard.title.casefold()
+                and existing_guard.fields == expected_guard.fields
+                and existing_guard.field_counts == expected_guard.field_counts
+                and bodies_match
+                and existing_guard.evidence == expected_guard.evidence
+            ):
+                soft_guard_exists = True
+            else:
+                extra_blockers.append(
+                    f"Generated Tombstone Entry ID already exists: {tombstone_id}"
+                )
+        else:
+            tombstone_updated = _prepend_entry(
+                read_managed_text(memory_dir, tombstone_path), tombstone
+            )
+    elif args.mode == "hard" and tombstone and tombstone_updated is not None:
+        rendered = parse_structured_entries(
+            tombstone_path,
+            tombstone,
+            entry_schema_version=entry_schema_version,
+        )
+        tombstone_id = rendered[0].entry_id if len(rendered) == 1 else None
+        if tombstone_id and memory_entry_id_counts(memory_dir).get(
+            tombstone_id.casefold(), 0
+        ):
+            extra_blockers.append(
+                f"Generated Tombstone Entry ID already exists: {tombstone_id}"
+            )
 
     changelog_path = memory_dir / "changelog.md"
     changelog_plan = next((plan for plan in plans if plan.path == changelog_path), None)
     changelog_base = (
         changelog_plan.updated
         if changelog_plan
-        else (read_text(changelog_path) if changelog_path.exists() else "")
+        else read_managed_text(memory_dir, changelog_path, required=False)
     )
     changelog_message = (
         f"Forgot topic '{topic}' with mode soft."
         if args.mode == "soft"
         else f"Completed {args.mode} forget operation."
     )
+    soft_noop = args.mode == "soft" and soft_guard_exists and not matched_plans
     changelog_updated = (
         _append_changelog_entry(changelog_base, changelog_message)
-        if changelog_path.exists()
+        if changelog_path.exists() and not soft_noop
         else None
     )
     writes: list[tuple[Path, str]] = [
@@ -306,6 +573,17 @@ def _build_forget_mutation_plan(
         writes.append((tombstone_path, tombstone_updated))
     if changelog_updated is not None:
         writes.append((changelog_path, changelog_updated))
+    planned_text = {plan.path: plan.updated for plan in plans}
+    if tombstone_updated is not None:
+        planned_text[tombstone_path] = tombstone_updated
+    if changelog_updated is not None:
+        planned_text[changelog_path] = changelog_updated
+    planned_snapshot = build_snapshot(
+        memory_dir,
+        project_root,
+        planned_text=planned_text,
+    )
+    planned_conflicts = analyze_snapshot(planned_snapshot)
     blockers = [
         f"{plan.path.relative_to(memory_dir).as_posix()}: "
         f"{unit.kind} contains non-removable matching content"
@@ -316,7 +594,34 @@ def _build_forget_mutation_plan(
         f"do-not-use.md: {unit.kind} contains non-removable matching content"
         for unit in tombstone_blockers
     )
-    blockers.extend(_subject_reference_blockers(memory_dir, plans, tombstone_updated))
+    blockers.extend(
+        _subject_reference_blockers(
+            memory_dir,
+            plans,
+            planned_snapshot,
+        )
+    )
+    blockers.extend(
+        _entry_reference_blockers(
+            memory_dir,
+            getattr(args, "entry_id", None),
+            planned_snapshot,
+        )
+    )
+    blockers.extend(
+        f"{finding.code} "
+        f"{finding.status.value}: {finding.message}"
+        for finding in planned_conflicts.findings
+        if finding.status in {ConflictStatus.INVALID, ConflictStatus.CONFLICT}
+    )
+    blockers.extend(extra_blockers)
+    total_matches = sum(len(plan.matches) for plan in plans)
+    manual_blockers = sum(len(plan.blockers) for plan in plans) + len(tombstone_blockers)
+    broad_reasons: list[str] = []
+    if len("".join(topic.split())) < 4:
+        broad_reasons.append("topic has fewer than four non-whitespace characters")
+    if total_matches + len(tombstone_matches) + manual_blockers > 1:
+        broad_reasons.append("plan matches more than one semantic unit")
     active_matches = any(
         plan.matches and not plan.path.relative_to(memory_dir).as_posix().startswith("archive/")
         for plan in plans
@@ -330,8 +635,9 @@ def _build_forget_mutation_plan(
         active_matches=active_matches or bool(tombstone_updated),
         archive_matches=archive_matches,
         has_mutations=bool(writes),
+        history_check_status=getattr(args, "history_check_status", "not-requested"),
     )
-    return MutationPlan(
+    mutation_plan = MutationPlan(
         "forget",
         {"topic": topic, "mode": args.mode, "allow_broad_match": args.allow_broad_match},
         project_id or "legacy-protocol-0.5",
@@ -347,7 +653,9 @@ def _build_forget_mutation_plan(
         context={"erasure_scope": scope.canonical()},
         project_root=project_root,
         public_arguments={
-            "topic": "[redacted]",
+            ("entry_id" if getattr(args, "entry_id", None) else "topic"): (
+                args.entry_id if getattr(args, "entry_id", None) else "[redacted]"
+            ),
             "mode": args.mode,
             "allow_broad_match": args.allow_broad_match,
         }
@@ -357,14 +665,39 @@ def _build_forget_mutation_plan(
         if privacy_nonce is not None
         else None,
         sensitive=args.mode in {"hard", "purge"},
-        public_redactions=(topic,) if args.mode in {"hard", "purge"} else (),
+        public_redactions=(topic,)
+        if args.mode in {"hard", "purge"} and not getattr(args, "entry_id", None)
+        else (),
+    )
+    return ForgetBuild(
+        mutation_plan,
+        tuple(targets),
+        tuple(plans),
+        tombstone_matches,
+        tombstone_blockers,
+        tuple(broad_reasons),
+        changelog_updated is not None,
     )
 
 
+def _require_locked_plan_is_applicable(build: ForgetBuild, allow_broad_match: bool) -> None:
+    if build.plan.blockers:
+        print_plan(build.plan)
+        raise ValueError(
+            "Forget plan gained blockers while acquiring the mutation lock. No files written."
+        )
+    if build.broad_reasons and not allow_broad_match:
+        print_plan(build.plan)
+        raise ValueError(
+            "Forget plan became broad-risk while acquiring the mutation lock: "
+            + "; ".join(build.broad_reasons)
+            + ". No files written."
+        )
+
+
 def run(args) -> int:
-    topic = args.topic.strip()
-    if not topic:
-        raise ValueError("Forget topic must not be empty.")
+    if bool(args.topic) == bool(getattr(args, "entry_id", None)):
+        raise ValueError("Provide exactly one forget selector: a topic or --id <ENTRY_ID>.")
     project_root = resolve_project_root(args.project_root)
     memory_dir = resolve_memory_dir(project_root, args.memory_dir)
     if not memory_dir.exists():
@@ -373,8 +706,12 @@ def run(args) -> int:
         raise ValueError("manifest.md is missing; forgetting cannot safely resolve active memory")
     if not (memory_dir / "do-not-use.md").exists():
         raise ValueError("do-not-use.md is missing; forgetting cannot safely record removal guards")
-    manifest_text = read_text(memory_dir / "manifest.md")
-    metadata = protocol_metadata(manifest_text)
+    manifest_text = read_managed_text(memory_dir, memory_dir / "manifest.md")
+    metadata = manifest_contract_metadata(
+        manifest_text,
+        allow_missing_section=True,
+    )
+    entry_schema_version = entry_schema_version_for_manifest(manifest_text)
     comparison = compare_versions(
         metadata.get("protocol_version", "0.5"),
         CURRENT_PROTOCOL_VERSION,
@@ -384,7 +721,20 @@ def run(args) -> int:
     if comparison > 0:
         raise ValueError("Project protocol is newer than this CLI supports.")
     protocol_06 = comparison == 0
-    project_id = project_id_from_manifest(manifest_text) if protocol_06 else None
+    project_id = metadata["project_id"] if protocol_06 else None
+    if getattr(args, "entry_id", None):
+        from .index import build_index, find_entry
+        record = find_entry(
+            build_index(project_root, memory_dir, include_archive=args.mode == "purge"),
+            args.entry_id,
+        )
+        args.topic = record.entry_id
+    topic = args.topic.strip()
+    if not topic:
+        raise ValueError("Forget topic must not be empty.")
+    args.history_check_status = _history_check(
+        project_root, memory_dir, topic, getattr(args, "history_check", False)
+    )
     tombstone_suffix: str | None = None
     tombstone_seed_path: Path | None = None
     privacy_seed_path: Path | None = None
@@ -413,46 +763,27 @@ def run(args) -> int:
         else:
             privacy_nonce = uuid.uuid4().hex
 
-    targets = _target_files(memory_dir, args.mode)
-    plans: list[FilePlan] = []
-    for path in targets:
-        original = read_text(path)
-        updated, matches, blockers = _remove_units(original, topic)
-        plans.append(FilePlan(path, updated, matches, blockers))
-
+    build = _build_forget_mutation_plan(
+        args,
+        project_root,
+        memory_dir,
+        project_id,
+        metadata.get("protocol_version", "0.5"),
+        tombstone_suffix,
+        privacy_nonce,
+        entry_schema_version,
+    )
+    mutation_plan = build.plan
+    targets = list(build.targets)
+    plans = list(build.file_plans)
     matched_plans = [plan for plan in plans if plan.matches]
     total_matches = sum(len(plan.matches) for plan in plans)
     blocker_plans = [plan for plan in plans if plan.blockers]
-    tombstone_matches: tuple[MarkdownUnit, ...] = ()
-    tombstone_blockers: tuple[MarkdownUnit, ...] = ()
-    tombstone_updated: str | None = None
-    tombstone_path = memory_dir / "do-not-use.md"
-    if args.mode in {"hard", "purge"}:
-        tombstone_original = read_text(tombstone_path)
-        candidate, tombstone_matches, tombstone_blockers = _update_existing_tombstones(
-            tombstone_original,
-            topic,
-            args.mode,
-            project_id,
-            tombstone_suffix,
-        )
-        if candidate != ensure_newline(tombstone_original):
-            tombstone_updated = candidate
+    tombstone_matches = build.tombstone_matches
+    tombstone_blockers = build.tombstone_blockers
     manual_blockers = sum(len(plan.blockers) for plan in plans) + len(tombstone_blockers)
-    broad_reasons: list[str] = []
-    if len("".join(topic.split())) < 4:
-        broad_reasons.append("topic has fewer than four non-whitespace characters")
-    if total_matches + len(tombstone_matches) + manual_blockers > 1:
-        broad_reasons.append("plan matches more than one semantic unit")
-
-    tombstone = _tombstone(topic, args.mode, project_id, tombstone_suffix)
-    changelog_path = memory_dir / "changelog.md"
-    if args.mode == "soft" and tombstone:
-        tombstone_updated = _prepend_entry(read_text(tombstone_path), tombstone)
-    changelog_message = f"Forgot topic '{topic}' with mode soft." if args.mode == "soft" else f"Completed {args.mode} forget operation."
-    changelog_plan = next((plan for plan in plans if plan.path == changelog_path), None)
-    changelog_base = changelog_plan.updated if changelog_plan else (read_text(changelog_path) if changelog_path.exists() else "")
-    changelog_updated = _append_changelog_entry(changelog_base, changelog_message) if changelog_path.exists() else None
+    broad_reasons = list(build.broad_reasons)
+    changelog_updated = build.changelog_written
 
     print(f"Mode: {args.mode}")
     print(f"Searched files: {len(targets)}")
@@ -491,31 +822,19 @@ def run(args) -> int:
             print(f"- do-not-use.md: {unit.kind} contains matching content")
     if args.mode == "purge":
         print("Warning: Git history, backups, caches, and external copies are outside this command's scope.")
-    writes: list[tuple[Path, str]] = [
-        (plan.path, plan.updated) for plan in matched_plans if plan.path != changelog_path
-    ]
-    if tombstone_updated is not None:
-        writes.append((tombstone_path, tombstone_updated))
-    if changelog_updated is not None:
-        writes.append((changelog_path, changelog_updated))
-    mutation_plan = _build_forget_mutation_plan(
-        args,
-        project_root,
-        memory_dir,
-        project_id,
-        metadata.get("protocol_version", "0.5"),
-        tombstone_suffix,
-        privacy_nonce,
-    )
     scope = ErasureScope(**mutation_plan.context["erasure_scope"])
     public_blockers = mutation_plan.canonical()["blockers"]
     structural_blockers = [
         blocker
         for blocker in public_blockers
-        if "cannot remove MC-SUBJ-" in blocker
+        if (
+            "cannot remove MC-SUBJ-" in blocker
+            or "references selected Entry" in blocker
+            or blocker.startswith("MC-CONFLICT-")
+        )
     ]
     if structural_blockers:
-        print(f"Manual rewrite required: {len(structural_blockers)} Subject relationship blocker(s)")
+        print(f"Manual rewrite required: {len(structural_blockers)} relationship blocker(s)")
         for blocker in structural_blockers:
             print(f"- {blocker}")
     effective_blockers = bool(mutation_plan.blockers)
@@ -535,7 +854,7 @@ def run(args) -> int:
         return 1
 
     if protocol_06 and not args.confirm_plan:
-        raise ValueError("Protocol 0.6 forget apply requires --confirm-plan <PLAN_ID>.")
+        raise ValueError("Protocol 0.7 forget apply requires --confirm-plan <PLAN_ID>.")
     with project_mutation_guard(
         project_root,
         memory_dir / "manifest.md",
@@ -544,7 +863,10 @@ def run(args) -> int:
         break_stale=args.break_stale_lock,
         allow_legacy=True,
     ) as guard:
-        current_metadata = protocol_metadata(guard.manifest_text or "")
+        current_metadata = manifest_contract_metadata(
+            guard.manifest_text or "",
+            allow_missing_section=True,
+        )
         current_comparison = compare_versions(
             current_metadata.get("protocol_version", "0.5"),
             CURRENT_PROTOCOL_VERSION,
@@ -559,7 +881,7 @@ def run(args) -> int:
                 raise ValueError(
                     "Project identity changed before forget apply; preview again."
                 )
-            current_plan = _build_forget_mutation_plan(
+            current_build = _build_forget_mutation_plan(
                 args,
                 project_root,
                 memory_dir,
@@ -567,7 +889,10 @@ def run(args) -> int:
                 current_metadata.get("protocol_version", "0.5"),
                 tombstone_suffix,
                 privacy_nonce,
+                entry_schema_version,
             )
+            current_plan = current_build.plan
+            _require_locked_plan_is_applicable(current_build, args.allow_broad_match)
             if current_plan.plan_id != args.confirm_plan:
                 print_plan(current_plan)
                 raise ValueError(
@@ -576,7 +901,7 @@ def run(args) -> int:
                 )
         elif current_protocol_06:
             raise ValueError(
-                "Project migrated to Protocol 0.6 before compatibility forget apply; "
+                "Project migrated to Protocol 0.7 before compatibility forget apply; "
                 "preview again and confirm the new Plan ID."
             )
         elif current_comparison > 0:
@@ -589,7 +914,7 @@ def run(args) -> int:
                 "Migration available: Protocol 0.5 apply keeps legacy confirmation "
                 "behavior under the bootstrap mutation guard."
             )
-            current_plan = _build_forget_mutation_plan(
+            current_build = _build_forget_mutation_plan(
                 args,
                 project_root,
                 memory_dir,
@@ -597,9 +922,18 @@ def run(args) -> int:
                 current_metadata.get("protocol_version", "0.5"),
                 tombstone_suffix,
                 privacy_nonce,
+                entry_schema_version,
             )
+            current_plan = current_build.plan
+            _require_locked_plan_is_applicable(current_build, args.allow_broad_match)
         completed_paths = apply_mutations(list(current_plan.mutations))
     completed = [path.relative_to(memory_dir).as_posix() for path in completed_paths]
+
+    if not completed:
+        print("No changes applied; the forget guard is already present or no managed unit changed.")
+        discard_pending_seed(tombstone_seed_path)
+        discard_pending_seed(privacy_seed_path)
+        return 0
 
     print(f"Applied forgetting plan. Written files: {len(completed)}")
     for name in completed:

@@ -10,8 +10,8 @@ Current direction:
 - Package the skill as a Codex plugin with repo-local marketplace support and a bundled CLI wrapper.
 - Store managed project memory in `docs/memory/` by default.
 - Provide Codex, Claude Code, Gemini, and generic adapter snippets.
-- Provide a lightweight Python CLI for init, read, add, compact, forget, enable, migrate, check, and status.
+- Provide a lightweight Python CLI for deterministic routing, local overlays, ID operations, conflict/quality checks, and memory mutation.
 - Keep default initialization minimal: six task-memory files plus the non-routed `subjects.md` identity registry.
 - Keep optional preferences, changelog, rules, profiles, areas, and archive disabled until needed.
-- Keep context packs small and manifest-driven; default to `brief.md` only.
+- Keep context packs small and manifest-driven; substantial work uses `brief.md` plus root constraints and explicit scope.
 - Keep memory useful through real project briefs, concise scope-first decisions, and semantic review before decision archival.

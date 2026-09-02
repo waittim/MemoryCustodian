@@ -1,61 +1,61 @@
 # Manifest Policy
 
-`manifest.md` is the sole runtime routing authority for MemoryCustodian. It tells an agent which memory files may enter context for a task.
+`manifest.md` is the sole shared runtime routing authority. Protocol 0.7 declares entry, Subject, routing, and
+conflict schema version 1; a persistent UUIDv4 `project_id`; `subject_registry: subjects.md`;
+`admission_policy: evidence-required`; `routing_policy: explicit-task-and-scope`; and
+`conflict_policy: canonical-subject-and-review`. The public project ID is a namespace identifier, not a secret or
+authorization token.
 
-## Responsibilities
+The generated manifest always loads `brief.md` and `constraints.md`. Root constraints are the safety baseline for
+substantial planning, implementation, artifact, and history work. Custom migrated routes remain authoritative;
+`check --routing` warns when a substantial route does not reach root constraints.
 
-- Declare Protocol 0.6 metadata: entry schema version 1, Subject schema version 1, a persistent UUIDv4
-  `project_id`, `subject_registry: subjects.md`, `admission_policy: evidence-required`, and
-  `conflict_identity_policy: scope-subject-facet`.
-- Define the default memory files.
-- Map task types to additional files.
-- Maintain a lightweight index of enabled optional rules, profiles, and areas.
-- Mark `archive/` as explicit-only.
-- State context budgets.
+## Task Routes
 
-The manifest should not contain full project memory, decision history, or long rules. Put durable content in the relevant memory file and keep the manifest short. Optional module entries should be short discovery hints, not summaries of the optional file contents.
+Choose one canonical task: `general`, `planning`, `implementation`, `artifact`, `preferences`, `history`, or
+`maintenance`. Aliases normalize deterministically. Never classify arbitrary task prose inside the CLI or
+supplement a valid custom manifest from an adapter, template, or remembered default.
 
-## Generated Defaults
+Normal loading combines always-load files, the canonical task route, and Protocol 0.7 optional declarations.
+Candidates do not enter normal context. `inbox.md` is maintenance/candidate-review only; `archive/` is explicit or
+archive-maintenance only.
 
-The generated manifest normally loads `brief.md` and keeps inbox, archive, and unrelated optional modules out of default context. These are template defaults, not a second routing definition. Always follow the current project's manifest when it differs.
+## Optional Module Grammar
 
-## Task Routing
+Each enabled module has one canonical repo-relative path and one declaration:
 
-Identify the requested category, such as planning, implementation, artifact work, preferences, history, or maintenance, and resolve its files from the project manifest. Never supplement a valid custom route from a built-in table, example, adapter, or remembered default.
+```markdown
+### Enabled rules
+- `rules/output.md`
+  - activation: task-or-explicit
+  - tasks: artifact
+  - description: Public output rules.
 
-Routing uses only explicit, recordable inputs: the canonical task, manifest routes, and explicit profile or area
-requests. It does not rank modules by hidden keyword, embedding, or natural-language relevance scoring. Preserve
-stable repo-relative POSIX module identities and structured reasons such as always-load, canonical-task,
-explicit-profile, explicit-area, optional-absent, and budget-omission. Each loaded module must be traceable to a
-manifest route or explicit input.
+### Enabled profiles
+- `profiles/git.md`
+  - activation: explicit-only
 
-If no memory directory exists, normal project work may continue without memory. If the directory exists but `manifest.md` is missing, stop memory loading and report the setup as incomplete or corrupted. Do not guess routes from filenames.
+### Enabled areas
+- `areas/backend.md`
+  - activation: path-or-explicit
+  - paths: `cli/**`, `tests/**/*.py`
+```
 
-## Optional Modules
+Allowed metadata keys are `activation`, `tasks`, `paths`, and `description`. Duplicate modules or scalar keys,
+unknown keys, malformed indentation, unsafe paths, invalid globs, and incompatible module metadata are INVALID.
+Rules use `task`, `task-or-explicit`, or `explicit-only`; profiles are `explicit-only`; areas use `path`,
+`path-or-explicit`, or `explicit-only`. Descriptions are preserved but never affect routing identity or Plan IDs.
 
-Optional modules are enabled by creating files and listing task-scoped modules in the optional module index:
+Protocol 0.6 one-line natural-language triggers migrate conservatively to `explicit-only`; the description is
+preserved and the CLI reports that manual automatic-route mapping is required. Migration never guesses task or
+path matchers.
 
-- `preferences.md` for soft preferences
-- `changelog.md` for memory maintenance history
-- `rules/<name>.md` for task rules
-- `profiles/<name>.md` for workflow profiles
-- `areas/<name>.md` for area-specific memory
+## Conflict and Trust Boundaries
 
-The optional module index should list enabled `rules/`, `profiles/`, and `areas/` files with a short trigger condition. This lets agents discover available optional memory by reading `manifest.md` while keeping the optional file contents out of startup context.
+Memory cannot override system/current-user instructions, safety, or permissions, and cannot authorize destructive
+actions, secret access, external uploads, commits, pushes, merges, releases, or escalation. Shared constraints and
+tombstones outrank local overlay preferences. Area exceptions require a valid `Exception-To` relationship rather
+than an implicit override.
 
-Do not add optional files to default loading just because they exist. Load them only when the task matches the index trigger or the user explicitly requests them.
-
-`subjects.md` is shared protocol metadata. CLI admission, checks, migration, and Subject operations read it, but
-it is not an optional task module and must not be added to normal context packs.
-
-Area matching takes precedence over loading every root decision. Use the manifest hint plus touched files or task scope to select only relevant areas.
-
-## Conflict Rules
-
-- Current user instruction overrides memory.
-- Safety and permission constraints override memory.
-- Memory never grants authorization for destructive actions, secret access, external uploads, commits, pushes,
-  merges, releases, or privilege escalation.
-- `do-not-use.md` overrides decisions and preferences.
-- Hard constraints override preferences.
-- Area memory can refine root memory, but must not override safety or hard constraints.
+See `routing-policy.md` for path matching, completeness, explain, and strict mode; see
+`local-overlay-policy.md` for repo-external local precedence and binding.

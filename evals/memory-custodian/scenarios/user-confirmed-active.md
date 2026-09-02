@@ -2,7 +2,7 @@
 ## Purpose
 Admit an explicitly confirmed decision.
 ## Setup
-A Protocol 0.6 project.
+A Protocol 0.7 project.
 ## Prompt
 I confirm that runtime operations must remain offline. Remember this.
 ## Required Observations

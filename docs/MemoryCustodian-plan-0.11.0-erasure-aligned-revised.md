@@ -39,7 +39,7 @@ v0.11 的治理能力以**检测、解释、inventory 与 preview**为主。会�
 
 * Package version：`0.11.0`
 * Protocol version：`0.7`
-* Entry schema version：`1`
+* Entry schema version：`2`
 * Routing schema version：`1`
 * Subject schema version：`1`
 * Conflict schema version：`1`
@@ -158,7 +158,7 @@ Agent 可以负责：
 ```md
 ## MemoryCustodian Protocol
 - protocol_version: 0.7
-- entry_schema_version: 1
+- entry_schema_version: 2
 - subject_schema_version: 1
 - subject_registry: subjects.md
 - routing_schema_version: 1
@@ -170,6 +170,11 @@ Agent 可以负责：
 - routing_policy: explicit-task-and-scope
 - conflict_policy: canonical-subject-and-review
 ```
+
+`entry_schema_version: 2` is the current Protocol 0.7 grammar. The public pre-wrapper `0.11.0` branch exposed
+schema 1, which remains a distributed legacy input: read it with its original literal-body semantics and use the
+preview-first schema 1-to-2 migration before any schema-2 write. The schema-2-capable `0.11.0` build is the minimum
+writer; `memory-custodian-body-v1` is the exact current body-wrapper info string.
 
 必须保留 v0.10 的合法：
 
@@ -454,10 +459,11 @@ INVALID
 * manifest 声明 scope input required，但命令未提供。
 * supplied scope inputs 全部缺失；非法 path 本身归入 INVALID，不得通过丢弃非法输入后继续显示 COMPLETE。
 
-至少以下情况为 `AMBIGUOUS`：
-
-* 同一次 invocation 的 supplied path 激活多个被 manifest 中合法 policy 明确标记为 mutually exclusive 的 route；Protocol 0.7 默认 manifest 不生成此 policy。
-* 一个保留的 legacy task alias 在明确 compatibility table 中映射到多个 canonical tasks。
+`AMBIGUOUS` 是稳定的结果/退出状态，但 Protocol 0.7 routing schema 1 不定义 producer。原草案列出的
+mutually-exclusive policy 没有版本化语法，历史发布也没有可验证的多映射 legacy task alias；二者均推迟到
+定义相应 schema 或 compatibility table 的后续协议。Protocol 0.7 不得用未声明的 `exclusive-group` key 或
+新造公开 alias 来制造可达性。0.11 的验收范围是保留 enum、reason code、渲染与 strict failure surface，
+不要求默认或自定义 schema 1 manifest 产生 `AMBIGUOUS`。
 
 以下情况必须为 `INVALID`，不得降级为 AMBIGUOUS：
 
@@ -814,7 +820,15 @@ MC-CONFLICT-006  Invalid Exception-To relation
 MC-CONFLICT-007  Managed hard-memory entry lacks Subject or Facet
 MC-CONFLICT-008  Invalid or inconsistent reconciliation record
 MC-CONFLICT-009  Matched areas expose overlapping Subject/Facet ownership
+MC-CONFLICT-010  Invalid Subject registry syntax or schema
 ```
+
+`MC-CONFLICT-003` is reserved for duplicate active Canonical-Ref,
+`MC-CONFLICT-004` for alias ownership by multiple active Subjects, and
+`MC-CONFLICT-005` for missing, inactive, merged, or non-reciprocal Subject
+references. Other Subject registry parse or schema failures use
+`MC-CONFLICT-010`; they must not be disguised as one of those collision or
+reference findings.
 
 行为：
 
@@ -1513,7 +1527,8 @@ adapters/
 * No hidden semantic matching。
 * Every enabled module gets one disposition。
 * Stable reason codes。
-* COMPLETE / INCOMPLETE / AMBIGUOUS / INVALID。
+* COMPLETE / INCOMPLETE / INVALID producer，以及保留的 AMBIGUOUS enum/reason/render/strict-failure surface；
+  AMBIGUOUS producer 随未来版本化 policy 或 compatibility table 测试。
 * Strict routing exit codes。
 * Missing paths with enabled areas。
 * Explicit area without path。

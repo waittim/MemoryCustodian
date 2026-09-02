@@ -5,7 +5,12 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
-from .entries import parse_structured_entries, validate_evidence
+from .entries import (
+    parse_structured_entries,
+    structured_entry_schema_issues,
+    structured_entry_storage_issues,
+    validate_evidence,
+)
 from .locking import (
     create_private_file,
     discard_private_file,
@@ -16,15 +21,18 @@ from .mutations import TextMutation, apply_mutations
 from .plans import (
     MutationPlan,
     digest_path,
+    digest_text,
     pending_plan_directory,
     print_plan,
 )
 from .protocol import (
     CURRENT_PROTOCOL_VERSION,
     compare_versions,
+    entry_schema_version_for_manifest,
+    manifest_contract_metadata,
+    managed_markdown_files,
     prepended_text,
-    project_id_from_manifest,
-    protocol_metadata,
+    read_managed_text,
     resolve_memory_dir,
     resolve_project_root,
 )
@@ -35,9 +43,17 @@ from .subjects import (
     load_subjects,
     normalize_alias,
     normalize_canonical_ref,
+    parse_subject_registry,
     render_subject,
     subject_indexes,
+    subject_registry_issues,
     validate_subject_kind,
+    validate_subject_registry,
+)
+from .structural import (
+    active_structural_operand_issues,
+    candidate_structural_operand_issues,
+    subject_index as structural_subject_index,
 )
 
 
@@ -53,8 +69,9 @@ def _project(args) -> tuple[Path, Path, str]:
     memory_dir = resolve_memory_dir(project_root, args.memory_dir)
     manifest = memory_dir / "manifest.md"
     if not manifest.exists():
-        raise ValueError("manifest.md is missing; Subject operations require Protocol 0.6 metadata.")
-    metadata = protocol_metadata(manifest.read_text(encoding="utf-8"))
+        raise ValueError("manifest.md is missing; Subject operations require Protocol 0.7 metadata.")
+    manifest_text = read_managed_text(memory_dir, manifest)
+    metadata = manifest_contract_metadata(manifest_text)
     comparison = compare_versions(
         metadata.get("protocol_version", "0.5"),
         CURRENT_PROTOCOL_VERSION,
@@ -62,10 +79,15 @@ def _project(args) -> tuple[Path, Path, str]:
     if comparison is None:
         raise ValueError("Project manifest has an invalid protocol version.")
     if comparison != 0:
-        raise ValueError("Subject operations require Protocol 0.6.")
+        raise ValueError("Subject operations require Protocol 0.7.")
     if metadata.get("subject_schema_version") != "1":
         raise ValueError("Subject schema is not initialized; run `memory-custodian migrate`.")
-    return project_root, memory_dir, project_id_from_manifest(manifest.read_text(encoding="utf-8"))
+    registry_issues = validate_subject_registry(memory_dir, project_root)
+    if registry_issues:
+        raise ValueError(
+            "Subject registry is invalid: " + "; ".join(registry_issues[:5])
+        )
+    return project_root, memory_dir, metadata["project_id"]
 
 
 def _find(subjects: list[Subject], subject_id: str) -> Subject:
@@ -91,9 +113,57 @@ def _pending_subject_id(project_id: str, registry: Path, normalized_args: str) -
 
 
 def _replace_subject(text: str, subject: Subject, replacement: str) -> str:
-    if subject.text not in text:
+    """Replace one Subject range while preserving all unrelated source text."""
+
+    lines = text.splitlines(keepends=True)
+    if subject.start_line < 0 or subject.end_line > len(lines):
         raise ValueError(f"Subject changed while building mutation: {subject.subject_id}")
-    return text.replace(subject.text, replacement.strip(), 1).rstrip() + "\n"
+    source_lines = lines[subject.start_line:subject.end_line]
+    source_content = [line.rstrip("\r\n") for line in source_lines]
+    while source_content and source_content[-1] == "":
+        source_content.pop()
+    if "\n".join(source_content) != subject.text:
+        raise ValueError(f"Subject changed while building mutation: {subject.subject_id}")
+    line_ending = next(
+        (
+            "\r\n" if line.endswith("\r\n") else "\n" if line.endswith("\n") else "\r"
+            for line in source_lines
+            if line.endswith(("\r\n", "\n", "\r"))
+        ),
+        next(
+            (
+                "\r\n" if line.endswith("\r\n") else "\n" if line.endswith("\n") else "\r"
+                for line in lines
+                if line.endswith(("\r\n", "\n", "\r"))
+            ),
+            "\n",
+        ),
+    )
+    content_count = len(source_content)
+    content_lines = source_lines[:content_count]
+    separator_lines = source_lines[content_count:]
+    replacement_lines = replacement.rstrip("\r\n").splitlines()
+    replacement_text = line_ending.join(replacement_lines)
+    if content_lines:
+        terminal = content_lines[-1]
+        if terminal.endswith("\r\n"):
+            replacement_text += "\r\n"
+        elif terminal.endswith("\n"):
+            replacement_text += "\n"
+        elif terminal.endswith("\r"):
+            replacement_text += "\r"
+    replacement_text += "".join(separator_lines)
+    return "".join([
+        *lines[:subject.start_line],
+        replacement_text,
+        *lines[subject.end_line:],
+    ])
+
+def _validate_registry_text(project_root: Path, registry: Path, text: str) -> None:
+    subjects, parse_issues = parse_subject_registry(registry, text)
+    issues = subject_registry_issues(subjects, parse_issues, project_root)
+    if issues:
+        raise ValueError("Resulting Subject registry is invalid: " + "; ".join(issues[:5]))
 
 
 def _print_preflight(
@@ -155,7 +225,7 @@ def _apply_preview(
             )
         if (
             compare_versions(
-                protocol_metadata(guard.manifest_text or "").get(
+                manifest_contract_metadata(guard.manifest_text or "").get(
                     "protocol_version",
                     "0.5",
                 ),
@@ -164,7 +234,7 @@ def _apply_preview(
             != 0
         ):
             raise ValueError(
-                "Subject mutation requires Protocol 0.6; project protocol changed "
+                "Subject mutation requires Protocol 0.7; project protocol changed "
                 "before apply."
             )
         current = build()
@@ -197,6 +267,9 @@ def _list(args) -> int:
 
 def _show(args) -> int:
     _project_root, memory_dir, _project_id = _project(args)
+    entry_schema_version = entry_schema_version_for_manifest(
+        read_managed_text(memory_dir, memory_dir / "manifest.md")
+    )
     subject = _find(load_subjects(memory_dir), args.subject_id)
     print(f"Subject ID: {subject.subject_id}")
     print(f"Title: {subject.title}")
@@ -213,10 +286,14 @@ def _show(args) -> int:
         print(f"- {item}")
     print("Referenced by:")
     references = []
-    for path in memory_dir.rglob("*.md"):
-        if path.name == "subjects.md":
+    for path in managed_markdown_files(memory_dir):
+        if path.name == "subjects.md" or path.name.casefold() == "readme.md":
             continue
-        for entry in parse_structured_entries(path, path.read_text(encoding="utf-8")):
+        for entry in parse_structured_entries(
+            path,
+            read_managed_text(memory_dir, path),
+            entry_schema_version=entry_schema_version,
+        ):
             if any(
                 entry.fields.get(field, "").casefold() == subject.subject_id.casefold()
                 for field in ("Subject", "Provisional-Subject")
@@ -231,12 +308,18 @@ def _show(args) -> int:
 
 
 def _add(args) -> int:
+    from .markdown import render_canonical_h2
+
     project_root, memory_dir, project_id = _project(args)
     registry = _registry(memory_dir)
     kind = validate_subject_kind(args.kind)
+    normalized_title = " ".join(args.title.split())
+    if not normalized_title:
+        raise ValueError("Subject title must not be empty.")
+    render_canonical_h2("MC-SUBJ-20000101-00000000", normalized_title)
     canonical_ref = normalize_canonical_ref(args.canonical_ref) if args.canonical_ref else None
     aliases = tuple(dict.fromkeys(
-        alias.strip() for alias in [args.title, *args.alias] if alias.strip()
+        " ".join(alias.split()) for alias in [normalized_title, *args.alias] if alias.split()
     ))
     evidence = validate_evidence(args.evidence, project_root)
     subjects = load_subjects(memory_dir)
@@ -253,12 +336,17 @@ def _add(args) -> int:
         raise ValueError(
             "Exact Subject identity collision; use the existing Subject: " + ", ".join(sorted(collisions))
         )
-    normalized_args = "\0".join([args.title, kind, canonical_ref or "", *aliases, *evidence])
+    normalized_args = "\0".join([normalized_title, kind, canonical_ref or "", *aliases, *evidence])
     subject_id, seed_path = _pending_subject_id(project_id, registry, normalized_args)
 
     def build() -> MutationPlan:
         current_subjects = load_subjects(memory_dir)
         _current_by_id, current_aliases, current_refs = subject_indexes(current_subjects)
+        if any(
+            subject.subject_id.casefold() == subject_id.casefold()
+            for subject in current_subjects
+        ):
+            raise ValueError(f"Pending Subject ID collides with an existing Subject: {subject_id}")
         for alias in aliases:
             owner = current_aliases.get(normalize_alias(alias))
             if owner:
@@ -267,8 +355,9 @@ def _add(args) -> int:
             raise ValueError(
                 f"Exact Canonical-Ref collision with {current_refs[canonical_ref].subject_id}: {canonical_ref}"
             )
-        entry = render_subject(subject_id, args.title, kind, canonical_ref, aliases, evidence)
-        updated = prepended_text(registry.read_text(encoding="utf-8"), entry)
+        entry = render_subject(subject_id, normalized_title, kind, canonical_ref, aliases, evidence)
+        updated = prepended_text(read_managed_text(memory_dir, registry), entry)
+        _validate_registry_text(project_root, registry, updated)
         return MutationPlan(
             "subject add",
             {
@@ -295,11 +384,14 @@ def _add(args) -> int:
 
 
 def _rename(args) -> int:
+    from .markdown import render_canonical_h2
+
     project_root, memory_dir, project_id = _project(args)
     registry = _registry(memory_dir)
     new_title = " ".join(args.title.split())
     if not new_title:
         raise ValueError("Subject title must not be empty.")
+    render_canonical_h2("MC-SUBJ-20000101-00000000", new_title)
 
     def build() -> MutationPlan:
         subjects = load_subjects(memory_dir)
@@ -315,9 +407,14 @@ def _rename(args) -> int:
             subject.canonical_ref,
             subject.aliases,
             subject.evidence,
+            status=subject.status,
+            merged_into=subject.merged_into,
+            merged_from=subject.merged_from,
         )
-        updated = _replace_subject(registry.read_text(encoding="utf-8"), subject, updated_entry)
-        mutations = () if updated == registry.read_text(encoding="utf-8") else (TextMutation(registry, updated),)
+        original = read_managed_text(memory_dir, registry)
+        updated = _replace_subject(original, subject, updated_entry)
+        _validate_registry_text(project_root, registry, updated)
+        mutations = () if updated == original else (TextMutation(registry, updated),)
         return MutationPlan(
             "subject rename",
             {"subject_id": subject.subject_id, "title": new_title},
@@ -358,9 +455,13 @@ def _add_alias(args) -> int:
             subject.canonical_ref,
             aliases,
             subject.evidence,
+            status=subject.status,
+            merged_into=subject.merged_into,
+            merged_from=subject.merged_from,
         )
-        original = registry.read_text(encoding="utf-8")
+        original = read_managed_text(memory_dir, registry)
         updated = _replace_subject(original, subject, updated_entry)
+        _validate_registry_text(project_root, registry, updated)
         mutations = () if updated == original else (TextMutation(registry, updated),)
         return MutationPlan(
             "subject add-alias",
@@ -380,6 +481,126 @@ def _add_alias(args) -> int:
     )
 
 
+def _merge(args) -> int:
+    """Inventory and preview only; Protocol 0.8 supplies the transaction journal."""
+
+    from .conflicts import canonical_entries
+
+    _project_root, memory_dir, project_id = _project(args)
+    subjects = load_subjects(memory_dir)
+    source = _find(subjects, args.subject_id)
+    target = _find(subjects, args.target_subject_id)
+    if source.subject_id.casefold() == target.subject_id.casefold():
+        raise ValueError("Subject merge source and target must be different.")
+    if source.status != "active" or target.status != "active":
+        raise ValueError("Subject merge preview requires active source and target Subjects.")
+    current: list[str] = []
+    historical: list[str] = []
+    resulting: dict[tuple[str, str], list[str]] = {}
+    blockers: list[str] = []
+    entry_dependencies: set[str] = set()
+    structural_subjects = structural_subject_index(subjects)
+    for entry in canonical_entries(memory_dir, include_archive=True):
+        reference = entry.fields.get("Subject") or entry.fields.get("Provisional-Subject")
+        if not reference or reference.casefold() != source.subject_id.casefold():
+            continue
+        relative = entry.path.relative_to(memory_dir).as_posix()
+        item = f"{entry.entry_id} ({relative}; {entry.status})"
+        entry_dependencies.add(
+            f"{relative}:{entry.entry_id}:{digest_text(entry.text)}"
+        )
+        if entry.status in {"active", "candidate"} and not relative.startswith("archive/"):
+            current.append(item)
+            entry_issues = [
+                *structured_entry_schema_issues(entry, relative),
+                *structured_entry_storage_issues(entry, relative),
+            ]
+            structural_issues = (
+                active_structural_operand_issues(entry, structural_subjects)
+                if entry.status == "active"
+                else candidate_structural_operand_issues(entry, structural_subjects)
+            )
+            entry_issues.extend(
+                f"{issue.field}: {issue.message}" for issue in structural_issues
+            )
+            blockers.extend(
+                f"{entry.entry_id}: {issue}" for issue in entry_issues
+            )
+            if entry.status == "active":
+                resulting.setdefault((entry.scope, entry.fields.get("Facet", "")), []).append(entry.entry_id)
+        else:
+            historical.append(item)
+    for entry in canonical_entries(memory_dir):
+        if entry.status == "active" and entry.fields.get("Subject", "").casefold() == target.subject_id.casefold():
+            relative = entry.path.relative_to(memory_dir).as_posix()
+            entry_dependencies.add(
+                f"{relative}:{entry.entry_id}:{digest_text(entry.text)}"
+            )
+            entry_issues = [
+                *structured_entry_schema_issues(entry, relative),
+                *structured_entry_storage_issues(entry, relative),
+                *(
+                    f"{issue.field}: {issue.message}"
+                    for issue in active_structural_operand_issues(
+                        entry, structural_subjects,
+                    )
+                ),
+            ]
+            blockers.extend(
+                f"{entry.entry_id}: {issue}" for issue in entry_issues
+            )
+            resulting.setdefault((entry.scope, entry.fields.get("Facet", "")), []).append(entry.entry_id)
+    blockers.extend(
+        f"Resulting structural identity {scope}+{target.subject_id}+{facet} has owners: {', '.join(ids)}"
+        for (scope, facet), ids in sorted(resulting.items()) if len(ids) > 1
+    )
+    reviews: list[str] = []
+    if source.canonical_ref and target.canonical_ref and source.canonical_ref != target.canonical_ref:
+        reviews.append("Source and target have different Canonical-Ref values; reviewer must choose target identity.")
+    seed = (
+        f"subject-merge\0{project_id}\0{source.subject_id}\0{target.subject_id}\0"
+        + "\0".join(sorted([
+            f"manifest:{digest_path(memory_dir / 'manifest.md')}",
+            f"registry:{digest_path(memory_dir / 'subjects.md')}",
+            f"source:{digest_text(source.text)}",
+            f"target:{digest_text(target.text)}",
+            *(f"entry:{item}" for item in entry_dependencies),
+            *(f"current:{item}" for item in current),
+            *(f"historical:{item}" for item in historical),
+            *(f"review:{item}" for item in reviews),
+            *(f"blocker:{item}" for item in blockers),
+        ]))
+    ).encode("utf-8")
+    print("Subject merge preview:")
+    print(f"Source: {source.subject_id} — {source.title}")
+    print(f"Target: {target.subject_id} — {target.title}")
+    print("Source registry unit:")
+    print(source.text.strip())
+    print("Target registry unit:")
+    print(target.text.strip())
+    print("Current references planned for future mutation:")
+    for item in sorted(current) or ["none"]:
+        print(f"- {item}")
+    print("Historical references retained without mechanical rewrite:")
+    for item in sorted(historical) or ["none"]:
+        print(f"- {item}")
+    print("Alias/Canonical-Ref review:")
+    for item in reviews or ["none"]:
+        print(f"- {item}")
+    print("Required reconciliation/blockers:")
+    if current:
+        print(
+            f"- Future subject-merged reconciliation must cover current references: "
+            f"{', '.join(sorted(item.split(' ', 1)[0] for item in current))}"
+        )
+    for item in blockers or ([] if current else ["none"]):
+        print(f"- {item}")
+    print(f"Plan ID: {hashlib.sha256(seed).hexdigest()[:16]}")
+    print("Future semantics: current active/candidate references mutate; source gains Merged-Into; historical entries retain their original Subject ID.")
+    print("Transactional Subject merge apply requires Protocol 0.8.")
+    return 0
+
+
 def run(args) -> int:
     handlers = {
         "list": _list,
@@ -387,5 +608,6 @@ def run(args) -> int:
         "add": _add,
         "rename": _rename,
         "add-alias": _add_alias,
+        "merge": _merge,
     }
     return handlers[args.subject_command](args)

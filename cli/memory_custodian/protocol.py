@@ -13,17 +13,41 @@ from dataclasses import dataclass
 from typing import Iterable
 
 from . import (
+    __conflict_schema_version__,
     __entry_schema_version__,
     __protocol_version__,
+    __routing_schema_version__,
     __subject_schema_version__,
     __version__,
 )
-from .templates import ALL_TEMPLATE_FILES, CORE_FILES, DEFAULT_MEMORY_DIR
-from .routes import RouteReason, RoutedModule, merge_routed_modules, normalize_module_identity
+from .markdown import headings as markdown_headings
+from .markdown import section_ranges, semantic_unit_ranges, visible_lines
+from .templates import (
+    ALL_TEMPLATE_FILES,
+    CORE_FILES,
+    DEFAULT_MEMORY_DIR,
+    TASK_ROUTE_SECTIONS,
+)
+from .routes import (
+    CANONICAL_TASKS,
+    TASK_ALIASES,
+    RouteReason,
+    RoutedModule,
+    merge_routed_modules,
+    normalize_module_identity,
+    parse_optional_module_index,
+    render_optional_declaration,
+)
 
 DOCS_MEMORY_ROOT = "docs"
 CURRENT_PACKAGE_LABEL = f"memory-custodian {__version__}"
 CURRENT_PROTOCOL_VERSION = __protocol_version__
+LEGACY_ENTRY_SCHEMA_VERSION = "1"
+CURRENT_ENTRY_SCHEMA_VERSION = __entry_schema_version__
+ENTRY_SCHEMA_MIGRATION_MESSAGE = (
+    "Project uses Protocol 0.7 entry schema 1; migration to entry schema 2 is available. "
+    "Run `memory-custodian migrate --apply` after reviewing the preview."
+)
 
 BUDGETS = {
     "brief.md": 500,
@@ -37,14 +61,7 @@ BUDGETS = {
 DECISION_ENTRY_BUDGET = 120
 BUDGET_NEAR_PERCENT = 80
 
-TASK_CATEGORY = {
-    "default": "general", "general": "general",
-    "planning": "planning", "architecture": "planning", "refactoring": "planning",
-    "implementation": "implementation", "execution": "implementation", "debugging": "implementation",
-    "artifact": "artifact", "output": "artifact", "preferences": "preferences",
-    "recap": "history", "history": "history", "status": "history",
-    "maintenance": "maintenance", "compact": "maintenance", "forget": "maintenance",
-}
+TASK_CATEGORY = TASK_ALIASES
 
 CATEGORY_HEADINGS = {
     "planning": {"planning / architecture / refactoring"},
@@ -69,6 +86,7 @@ OPTIONAL_INDEX_HEADING = "## Optional module index"
 PROTOCOL_HEADING = "## MemoryCustodian Protocol"
 PROTOCOL_SECTION_NAME = "memorycustodian protocol"
 PROTOCOL_FIELD_RE = re.compile(r"^- ([A-Za-z_]+):\s*(.+)$")
+PROTOCOL_BULLET_RE = re.compile(r"^- ([^:]+):(.*)$")
 OPTIONAL_INDEX_SECTIONS = {
     "rules": "### Enabled rules",
     "profiles": "### Enabled profiles",
@@ -96,14 +114,7 @@ Load if present:
 - preferences.md
 """
 
-CURRENT_IMPLEMENTATION_SECTION = """### Implementation / execution / debugging
-Load:
-- decisions.md
-- constraints.md
-- do-not-use.md
-Load if present:
-- preferences.md
-"""
+CURRENT_IMPLEMENTATION_SECTION = TASK_ROUTE_SECTIONS["implementation"] + "\n"
 
 DEFAULT_OPTIONAL_TRIGGERS = {
     "rules/output.md": "Load for user-facing artifacts, publishable text, or copied output.",
@@ -134,14 +145,49 @@ def resolve_memory_dir(project_root: Path, memory_dir: str | None = None) -> Pat
     path = Path(memory).expanduser()
     if not path.is_absolute():
         path = project_root / path
-    resolved = path.resolve()
-    docs_root = (project_root / DOCS_MEMORY_ROOT).resolve()
+    # Keep the lexical path for the write boundary.  Resolving it before the
+    # containment check would turn ``project/docs -> /external`` into an
+    # apparently valid memory directory and make every later mutation write
+    # outside the project.  Missing components are allowed for ``init``; any
+    # component that already exists must be a real directory, not a symlink.
+    resolved = Path(os.path.abspath(str(path)))
+    project_root = Path(os.path.abspath(str(project_root.expanduser())))
+    docs_root = project_root / DOCS_MEMORY_ROOT
     try:
         relative = resolved.relative_to(docs_root)
     except ValueError as exc:
         raise ValueError("Memory directory must live under docs/, such as docs/memory.") from exc
     if not relative.parts:
         raise ValueError("Memory directory must be a subdirectory of docs/, such as docs/memory.")
+    cursor = resolved
+    while True:
+        try:
+            info = cursor.lstat()
+        except FileNotFoundError:
+            info = None
+        except NotADirectoryError as exc:
+            raise ValueError(
+                f"Memory directory has a non-directory ancestor: {cursor}"
+            ) from exc
+        if info is not None:
+            if stat.S_ISLNK(info.st_mode):
+                try:
+                    display = cursor.relative_to(project_root).as_posix()
+                except ValueError:
+                    display = str(cursor)
+                raise ValueError(
+                    f"Memory directory must not use a symlinked path component: {display}"
+                )
+            if cursor != resolved and not stat.S_ISDIR(info.st_mode):
+                raise ValueError(
+                    f"Memory directory has a non-directory ancestor: {cursor}"
+                )
+        if cursor == project_root:
+            break
+        parent = cursor.parent
+        if parent == cursor:
+            raise ValueError(f"Memory directory is outside the project root: {resolved}")
+        cursor = parent
     return resolved
 
 
@@ -174,6 +220,51 @@ def compare_versions(left: str, right: str) -> int | None:
     if padded_left > padded_right:
         return 1
     return 0
+
+
+def entry_schema_version_for_manifest(manifest: str) -> str:
+    """Choose Entry decoding semantics from one captured manifest.
+
+    Unknown, malformed, or absent declarations fail closed to the legacy
+    parser.  In particular, schema 1 must never be sent through the schema 2
+    body-fence decoder merely because the installed CLI is newer.
+    """
+
+    try:
+        # Select the grammar from the captured Protocol scalar section only.
+        # Routing and the rest of the manifest contract are validated by their
+        # own gates; an unrelated routing error must not make an otherwise
+        # unique schema-2 declaration fall back to the schema-1 parser.  The
+        # strict lexical parser rejects duplicate and malformed fields.
+        # Custom Protocol metadata remains an allowed extension; only the
+        # protocol and entry-schema scalars select the body grammar.
+        metadata = strict_protocol_metadata(
+            manifest,
+            allow_missing_section=True,
+        )
+    except (TypeError, ValueError):
+        # A malformed or contradictory declaration must never opt a source
+        # into the current wrapper decoder.  The caller's contract gate will
+        # report the actual metadata error; the parser stays fail-closed.
+        return LEGACY_ENTRY_SCHEMA_VERSION
+    # Entry grammar is scoped to the canonical Protocol tuple.  Older, newer,
+    # or non-canonical-but-equivalent protocol spellings are not evidence that
+    # this CLI may decode schema 2.
+    if metadata.get("protocol_version") != CURRENT_PROTOCOL_VERSION:
+        return LEGACY_ENTRY_SCHEMA_VERSION
+    declared = metadata.get("entry_schema_version")
+    if declared in {LEGACY_ENTRY_SCHEMA_VERSION, CURRENT_ENTRY_SCHEMA_VERSION}:
+        return declared
+    return LEGACY_ENTRY_SCHEMA_VERSION
+
+
+def entry_schema_migration_available(metadata: dict[str, str]) -> bool:
+    """Return whether a current Protocol 0.7 manifest needs Entry migration."""
+
+    return (
+        metadata.get("protocol_version") == CURRENT_PROTOCOL_VERSION
+        and metadata.get("entry_schema_version") == LEGACY_ENTRY_SCHEMA_VERSION
+    )
 
 
 def read_text(path: Path) -> str:
@@ -258,28 +349,16 @@ def append_changelog(memory_dir: Path, message: str, create: bool = False) -> No
 
 def changelog_text(existing: str, message: str) -> str:
     entry = f"## {today()}\n- {message}"
-    existing = existing.rstrip()
-    if not existing:
+    if not existing.strip():
         return "# Memory Changelog\n\n" + entry + "\n"
 
-    lines = existing.splitlines()
+    document = parse_markdown_units(existing)
+    units = list(document.units)
     insert_at = 0
-    if lines and lines[0].strip() == "# Memory Changelog":
-        insert_at = len(lines)
-        for index, line in enumerate(lines[1:], start=1):
-            if line.startswith("## "):
-                insert_at = index
-                break
-
-    before = "\n".join(lines[:insert_at]).rstrip()
-    after = "\n".join(lines[insert_at:]).strip()
-    if before and after:
-        return f"{before}\n\n{entry}\n\n{after}\n"
-    elif before:
-        return f"{before}\n\n{entry}\n"
-    elif after:
-        return f"{entry}\n\n{after}\n"
-    return entry + "\n"
+    while insert_at < len(units) and units[insert_at].kind in {"preamble", "body"}:
+        insert_at += 1
+    units.insert(insert_at, MarkdownUnit("h2", entry, today()))
+    return render_markdown_document(document, units)
 
 
 def protocol_metadata(manifest: str) -> dict[str, str]:
@@ -289,6 +368,91 @@ def protocol_metadata(manifest: str) -> dict[str, str]:
         match = PROTOCOL_FIELD_RE.match(line.strip())
         if match:
             metadata[match.group(1)] = match.group(2).strip()
+    return metadata
+
+
+def strict_protocol_metadata(
+    manifest: str,
+    *,
+    allow_missing_section: bool = False,
+) -> dict[str, str]:
+    """Parse protocol scalars without silent malformed or duplicate fields."""
+
+    visible = visible_lines(manifest)
+    section_count = sum(
+        1
+        for heading in markdown_headings(manifest)
+        if heading.level == 2 and heading.title == PROTOCOL_SECTION_NAME
+    )
+    atx_trace_count = sum(
+        1
+        for line in visible
+        if not line.indented_code
+        and line.text.strip().startswith("#")
+        and line.text.strip().lstrip("#").strip().strip("#").strip().casefold()
+        == PROTOCOL_SECTION_NAME
+    )
+    indented_trace_count = sum(
+        1
+        for line in visible
+        if line.indented_code
+        and line.text.strip().startswith("#")
+        and line.text.strip().lstrip("#").strip().strip("#").strip().casefold()
+        == PROTOCOL_SECTION_NAME
+    )
+    visible_by_index = {
+        line.index: line for line in visible if not line.indented_code
+    }
+    setext_trace_count = sum(
+        1
+        for line in visible
+        if line.text.strip().casefold() == PROTOCOL_SECTION_NAME
+        and line.index + 1 in visible_by_index
+        and re.fullmatch(r" {0,3}(?:=+|-+)[ \t]*", visible_by_index[line.index + 1].text)
+    )
+    heading_trace_count = atx_trace_count + setext_trace_count
+    if (
+        section_count == 0
+        and heading_trace_count == 0
+        and indented_trace_count == 0
+        and allow_missing_section
+    ):
+        return {}
+    if (
+        section_count == 0 and (heading_trace_count or indented_trace_count)
+    ) or section_count != 1 or heading_trace_count != 1:
+        raise ValueError(
+            "manifest.md must contain exactly one MemoryCustodian Protocol heading, "
+            "written as an H2 with canonical whitespace"
+        )
+    metadata: dict[str, str] = {}
+    ranges = section_ranges(manifest, 2, PROTOCOL_SECTION_NAME)
+    start, end = ranges[0]
+    for line in visible:
+        if not start <= line.index < end:
+            continue
+        # Four-space/tab-indented lines are Markdown code, not Protocol
+        # metadata.  They must not become a second parser dialect or a fake
+        # scalar; required unindented fields are enforced by the contract
+        # validator below.
+        if line.indented_code:
+            continue
+        stripped = line.text.strip()
+        if not stripped:
+            continue
+        match = PROTOCOL_BULLET_RE.fullmatch(stripped)
+        if not match:
+            raise ValueError(f"Malformed protocol metadata line: {stripped!r}")
+        raw_key, value = match.groups()
+        key = raw_key.strip()
+        if re.fullmatch(r"[A-Za-z_]+", key) is None:
+            raise ValueError(f"Malformed protocol metadata field: {key!r}")
+        if key in metadata:
+            raise ValueError(f"Duplicate protocol metadata field: {key}")
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError(f"Protocol metadata field {key} must not be empty")
+        metadata[key] = normalized
     return metadata
 
 
@@ -311,6 +475,166 @@ def project_id_from_manifest(manifest: str, *, required: bool = True) -> str | N
     return None
 
 
+def protocol_contract_metadata(
+    manifest: str,
+    *,
+    allow_missing_section: bool = False,
+    allow_legacy_entry_schema: bool = False,
+) -> dict[str, str]:
+    """Return strict metadata after validating the declared version contract."""
+
+    metadata = strict_protocol_metadata(
+        manifest,
+        allow_missing_section=allow_missing_section,
+    )
+    if not metadata:
+        if any(
+            heading.level == 2 and heading.title == PROTOCOL_SECTION_NAME
+            for heading in markdown_headings(manifest)
+        ):
+            raise ValueError(
+                "Protocol metadata section requires protocol_version"
+            )
+        return {}
+    version = metadata.get("protocol_version")
+    if not version:
+        raise ValueError("Protocol metadata requires protocol_version")
+    comparison = compare_versions(version, CURRENT_PROTOCOL_VERSION)
+    if comparison is None:
+        raise ValueError(f"Invalid protocol version {version!r} in manifest.md")
+    if comparison > 0:
+        raise ValueError(
+            f"Project protocol {version} is newer than this CLI supports "
+            f"({CURRENT_PROTOCOL_VERSION})"
+        )
+    if comparison < 0:
+        return metadata
+    if version != CURRENT_PROTOCOL_VERSION:
+        raise ValueError(
+            f"Protocol version equivalent to {CURRENT_PROTOCOL_VERSION} must use "
+            f"the canonical value {CURRENT_PROTOCOL_VERSION}; manifest has {version!r}"
+        )
+
+    required = {
+        "entry_schema_version": __entry_schema_version__,
+        "subject_schema_version": __subject_schema_version__,
+        "subject_registry": "subjects.md",
+        "routing_schema_version": __routing_schema_version__,
+        "conflict_schema_version": __conflict_schema_version__,
+        "admission_policy": "evidence-required",
+        "routing_policy": "explicit-task-and-scope",
+        "conflict_policy": "canonical-subject-and-review",
+    }
+    for key, expected in required.items():
+        actual = metadata.get(key)
+        if (
+            key == "entry_schema_version"
+            and allow_legacy_entry_schema
+            and actual == LEGACY_ENTRY_SCHEMA_VERSION
+        ):
+            continue
+        if (
+            key == "entry_schema_version"
+            and actual == LEGACY_ENTRY_SCHEMA_VERSION
+        ):
+            raise ValueError(ENTRY_SCHEMA_MIGRATION_MESSAGE)
+        if actual != expected:
+            raise ValueError(
+                f"Protocol {CURRENT_PROTOCOL_VERSION} requires {key}: {expected}; "
+                f"manifest has {actual or 'missing'}"
+            )
+    for key in ("initialized_with", "last_migrated_with"):
+        if not metadata.get(key):
+            raise ValueError(
+                f"Protocol {CURRENT_PROTOCOL_VERSION} requires {key} metadata"
+            )
+    if not valid_project_id(metadata.get("project_id")):
+        raise ValueError(
+            f"Protocol {CURRENT_PROTOCOL_VERSION} requires a valid UUIDv4 project_id"
+        )
+    return metadata
+
+
+def manifest_contract_metadata(
+    manifest: str,
+    *,
+    allow_missing_section: bool = False,
+    allow_legacy_entry_schema: bool = False,
+) -> dict[str, str]:
+    """Validate Protocol metadata and deterministic manifest routing together."""
+
+    metadata = protocol_contract_metadata(
+        manifest,
+        allow_missing_section=allow_missing_section,
+        allow_legacy_entry_schema=allow_legacy_entry_schema,
+    )
+    route_issues = validate_manifest_routes(manifest)
+    if route_issues:
+        raise ValueError("Invalid manifest routing: " + "; ".join(route_issues))
+    return metadata
+
+
+@dataclass(frozen=True)
+class ManifestContractResult:
+    """The strict contract result for one already-captured manifest.
+
+    ``metadata`` is stored as an immutable tuple so a snapshot can safely
+    carry it across all downstream consumers.  ``error`` is the exact
+    diagnostic produced by the contract validator, rather than a second
+    caller-specific interpretation of the manifest.
+    """
+
+    present: bool
+    metadata: tuple[tuple[str, str], ...] = ()
+    error: str | None = None
+    migration_available: bool = False
+
+    @property
+    def valid(self) -> bool:
+        return self.present and self.error is None and not self.migration_available
+
+    def as_dict(self) -> dict[str, str]:
+        return dict(self.metadata)
+
+
+def inspect_manifest_contract(
+    manifest: str,
+    *,
+    present: bool = True,
+    allow_missing_section: bool = True,
+) -> ManifestContractResult:
+    """Capture strict manifest-contract state without touching the filesystem."""
+
+    if not present:
+        return ManifestContractResult(False, (), "manifest.md is missing.")
+    # Preserve the best-effort scalar view alongside an invalid contract.  It
+    # is still sourced from this captured text, and lets status retain its
+    # useful protocol-version display without reparsing the manifest from
+    # disk.  Contract consumers must continue to gate on ``error``.
+    captured_metadata = protocol_metadata(manifest)
+    try:
+        metadata = manifest_contract_metadata(
+            manifest,
+            allow_missing_section=allow_missing_section,
+            allow_legacy_entry_schema=True,
+        )
+    except ValueError as exc:
+        return ManifestContractResult(
+            True,
+            tuple(sorted(captured_metadata.items())),
+            str(exc),
+            entry_schema_migration_available(captured_metadata),
+        )
+    if entry_schema_migration_available(metadata):
+        return ManifestContractResult(
+            True,
+            tuple(sorted(metadata.items())),
+            ENTRY_SCHEMA_MIGRATION_MESSAGE,
+            True,
+        )
+    return ManifestContractResult(True, tuple(sorted(metadata.items())), None)
+
+
 def _protocol_section_lines(
     initialized_with: str,
     last_migrated_with: str,
@@ -322,11 +646,14 @@ def _protocol_section_lines(
         f"- entry_schema_version: {__entry_schema_version__}",
         f"- subject_schema_version: {__subject_schema_version__}",
         "- subject_registry: subjects.md",
+        f"- routing_schema_version: {__routing_schema_version__}",
+        f"- conflict_schema_version: {__conflict_schema_version__}",
         f"- initialized_with: {initialized_with}",
         f"- last_migrated_with: {last_migrated_with}",
         f"- project_id: {project_id}",
         "- admission_policy: evidence-required",
-        "- conflict_identity_policy: scope-subject-facet",
+        "- routing_policy: explicit-task-and-scope",
+        "- conflict_policy: canonical-subject-and-review",
     ]
 
 
@@ -352,60 +679,66 @@ def manifest_with_protocol_metadata(
     project_id = existing_project_id or project_id or str(uuid.uuid4())
     replacement = _protocol_section_lines(initialized_with, last_migrated_with, project_id)
     lines = manifest.splitlines()
+    ranges = section_ranges(manifest, 2, PROTOCOL_SECTION_NAME)
 
-    for index, line in enumerate(lines):
-        if line.strip() == PROTOCOL_HEADING:
-            end = len(lines)
-            for next_index in range(index + 1, len(lines)):
-                if lines[next_index].startswith("## "):
-                    end = next_index
-                    break
-            desired = {
-                "protocol_version": f"- protocol_version: {CURRENT_PROTOCOL_VERSION}",
-                "entry_schema_version": f"- entry_schema_version: {__entry_schema_version__}",
-                "subject_schema_version": f"- subject_schema_version: {__subject_schema_version__}",
-                "subject_registry": "- subject_registry: subjects.md",
-                "initialized_with": f"- initialized_with: {initialized_with}",
-                "last_migrated_with": f"- last_migrated_with: {last_migrated_with}",
-                "project_id": f"- project_id: {project_id}",
-                "admission_policy": "- admission_policy: evidence-required",
-                "conflict_identity_policy": "- conflict_identity_policy: scope-subject-facet",
-            }
-            body: list[str] = []
-            seen: set[str] = set()
-            for existing_line in lines[index + 1 : end]:
-                match = PROTOCOL_FIELD_RE.match(existing_line.strip())
-                key = match.group(1) if match else None
-                if key in desired:
-                    if key not in seen:
-                        body.append(desired[key])
-                        seen.add(key)
-                    continue
-                body.append(existing_line)
-            missing = [
-                desired[key]
-                for key in (
-                    "protocol_version",
-                    "entry_schema_version",
-                    "subject_schema_version",
-                    "subject_registry",
-                    "initialized_with",
-                    "last_migrated_with",
-                    "project_id",
-                    "admission_policy",
-                    "conflict_identity_policy",
-                )
-                if key not in seen
-            ]
-            updated = lines[: index + 1] + missing + body + lines[end:]
-            text = ensure_newline("\n".join(updated))
-            return text, text != ensure_newline(manifest)
+    if len(ranges) == 1:
+        start, end = ranges[0]
+        index = start - 1
+        desired = {
+            "protocol_version": f"- protocol_version: {CURRENT_PROTOCOL_VERSION}",
+            "entry_schema_version": f"- entry_schema_version: {__entry_schema_version__}",
+            "subject_schema_version": f"- subject_schema_version: {__subject_schema_version__}",
+            "subject_registry": "- subject_registry: subjects.md",
+            "routing_schema_version": f"- routing_schema_version: {__routing_schema_version__}",
+            "conflict_schema_version": f"- conflict_schema_version: {__conflict_schema_version__}",
+            "initialized_with": f"- initialized_with: {initialized_with}",
+            "last_migrated_with": f"- last_migrated_with: {last_migrated_with}",
+            "project_id": f"- project_id: {project_id}",
+            "admission_policy": "- admission_policy: evidence-required",
+            "routing_policy": "- routing_policy: explicit-task-and-scope",
+            "conflict_policy": "- conflict_policy: canonical-subject-and-review",
+        }
+        body: list[str] = []
+        seen: set[str] = set()
+        for existing_line in lines[start:end]:
+            match = PROTOCOL_FIELD_RE.match(existing_line.strip())
+            key = match.group(1) if match else None
+            if key in desired:
+                if key not in seen:
+                    body.append(desired[key])
+                    seen.add(key)
+                continue
+            body.append(existing_line)
+        missing = [
+            desired[key]
+            for key in (
+                "protocol_version",
+                "entry_schema_version",
+                "subject_schema_version",
+                "subject_registry",
+                "routing_schema_version",
+                "conflict_schema_version",
+                "initialized_with",
+                "last_migrated_with",
+                "project_id",
+                "admission_policy",
+                "routing_policy",
+                "conflict_policy",
+            )
+            if key not in seen
+        ]
+        updated = lines[: index + 1] + missing + body + lines[end:]
+        text = ensure_newline("\n".join(updated))
+        return text, text != ensure_newline(manifest)
 
-    insert_at = len(lines)
-    for index, line in enumerate(lines):
-        if line.startswith("## "):
-            insert_at = index
-            break
+    insert_at = next(
+        (
+            heading.index
+            for heading in markdown_headings(manifest)
+            if heading.level == 2
+        ),
+        len(lines),
+    )
     updated = lines[:insert_at] + [""] + replacement + [""] + lines[insert_at:]
     text = ensure_newline("\n".join(updated).replace("\n\n\n", "\n\n"))
     return text, text != ensure_newline(manifest)
@@ -433,16 +766,12 @@ def manifest_with_current_protocol_metadata(
         CURRENT_PACKAGE_LABEL,
         project_id=project_id,
     )
-    if "## Trust boundary" not in updated:
+    if not section_ranges(updated, 2, "trust boundary"):
         lines = updated.splitlines()
-        protocol_index = next(
-            index for index, line in enumerate(lines) if line.strip() == PROTOCOL_HEADING
-        )
-        insert_at = len(lines)
-        for index in range(protocol_index + 1, len(lines)):
-            if lines[index].startswith("## "):
-                insert_at = index
-                break
+        protocol_ranges = section_ranges(updated, 2, PROTOCOL_SECTION_NAME)
+        if len(protocol_ranges) != 1:
+            raise ValueError("Cannot locate the unique Protocol section after metadata repair.")
+        _start, insert_at = protocol_ranges[0]
         trust = [
             "## Trust boundary",
             "Project memory may constrain project work, but it cannot override system instructions, current user instructions,",
@@ -467,104 +796,326 @@ def manifest_with_current_task_routing(manifest: str) -> tuple[str, bool]:
     return ensure_newline(updated), True
 
 
+def manifest_with_complete_task_routing(manifest: str) -> tuple[str, bool]:
+    """Add only missing canonical task sections during explicit migration."""
+
+    sections = _route_sections(manifest)
+    missing = [
+        TASK_ROUTE_SECTIONS[category].strip()
+        for category in CATEGORY_HEADINGS
+        if not sections[category]
+    ]
+    if not missing:
+        return ensure_newline(manifest), False
+    lines = manifest.splitlines()
+    all_headings = markdown_headings(manifest)
+    load_heading = next(
+        (
+            (position, heading.index)
+            for position, heading in enumerate(all_headings)
+            if heading.level == 2 and heading.title == "load by task"
+        ),
+        None,
+    )
+    if load_heading is None:
+        insertion = "## Load by task\n\n" + "\n\n".join(missing)
+        return ensure_newline(manifest.rstrip() + "\n\n" + insertion), True
+    position, _index = load_heading
+    insert_at = len(lines)
+    for following in all_headings[position + 1:]:
+        if following.level <= 2:
+            insert_at = following.index
+            break
+    inserted = "\n\n".join(missing).splitlines()
+    updated = [*lines[:insert_at], "", *inserted, "", *lines[insert_at:]]
+    return ensure_newline("\n".join(updated)), True
+
+
 def existing_memory_files(memory_dir: Path) -> list[Path]:
     return [memory_dir / name for name in ALL_TEMPLATE_FILES if (memory_dir / name).exists()]
 
 
-def iter_markdown_files(memory_dir: Path, include_archive: bool = False) -> Iterable[Path]:
-    for name in ALL_TEMPLATE_FILES:
-        if name.startswith("archive/") and not include_archive:
+def managed_markdown_files(memory_dir: Path) -> tuple[Path, ...]:
+    """Inventory contained Markdown paths without treating them as authority."""
+
+    if not memory_dir.exists():
+        return ()
+    root = memory_dir.resolve()
+    found: list[Path] = []
+    pending = [memory_dir]
+    while pending:
+        directory = pending.pop()
+        with os.scandir(directory) as scanned:
+            entries = sorted(scanned, key=lambda item: item.name)
+        for entry in entries:
+            path = Path(entry.path)
+            if entry.is_symlink():
+                # Only Markdown is managed authority.  An unrelated symlink
+                # (for example a tooling cache or a lock file) must not make
+                # every read/status command fail closed; a Markdown symlink
+                # remains an integrity error because it could redirect a
+                # managed operand.
+                if path.suffix.casefold() == ".md" or entry.name.casefold() in {
+                    "areas", "rules", "profiles", "archive"
+                }:
+                    raise ValueError(
+                        f"Managed memory path must not be a symlink: "
+                        f"{path.relative_to(memory_dir).as_posix()}"
+                    )
+                continue
+            if entry.is_dir(follow_symlinks=False):
+                try:
+                    path.resolve().relative_to(root)
+                except (OSError, RuntimeError, ValueError) as exc:
+                    raise ValueError(
+                        f"Managed memory directory escapes its root: {path}"
+                    ) from exc
+                pending.append(path)
+                continue
+            if not entry.is_file(follow_symlinks=False):
+                if path.suffix.casefold() == ".md":
+                    raise ValueError(
+                        f"Managed memory path must be a regular file: "
+                        f"{path.relative_to(memory_dir).as_posix()}"
+                    )
+                continue
+            if path.suffix.casefold() == ".md":
+                found.append(path)
+    return tuple(sorted(found, key=lambda path: path.relative_to(memory_dir).as_posix()))
+
+
+def read_no_follow_text(
+    path: Path,
+    *,
+    root: Path | None = None,
+    required: bool = True,
+) -> str:
+    """Read a regular file without following a final (or managed ancestor) symlink."""
+
+    # ``Path.resolve`` is useful for containment, but it erases the lexical
+    # symlink components we must reject before opening the file.  Keep a
+    # normalized-but-not-resolved spelling for the no-follow walk and use the
+    # resolved spelling only for the escape check.
+    candidate = path.expanduser()
+    if not candidate.is_absolute():
+        candidate = Path.cwd() / candidate
+    candidate = Path(os.path.abspath(str(candidate)))
+    if root is not None:
+        root = Path(os.path.abspath(str(root.expanduser())))
+        try:
+            root_info = root.lstat()
+        except FileNotFoundError:
+            root_info = None
+        if root_info is not None and (
+            stat.S_ISLNK(root_info.st_mode) or not stat.S_ISDIR(root_info.st_mode)
+        ):
+            raise ValueError(f"File root is not a real directory: {root}")
+        canonical_root = root.resolve()
+        canonical_candidate = candidate.resolve(strict=False)
+        try:
+            canonical_candidate.relative_to(canonical_root)
+        except ValueError as exc:
+            raise ValueError(f"File operand escapes its root: {candidate}") from exc
+        cursor = candidate.parent
+        while True:
+            # macOS commonly exposes /var as a system symlink to /private/var.
+            # Permit aliases that lead to the configured root, but reject any
+            # symlink at or below that root (including an escaping ancestor).
+            try:
+                canonical_cursor = cursor.resolve(strict=False)
+            except (OSError, RuntimeError):
+                canonical_cursor = cursor
+            if canonical_cursor == canonical_root:
+                break
+            try:
+                info = cursor.lstat()
+            except FileNotFoundError:
+                info = None
+            if info is not None and stat.S_ISLNK(info.st_mode):
+                try:
+                    root_is_below = canonical_root.is_relative_to(canonical_cursor)
+                except AttributeError:
+                    root_is_below = str(canonical_root).startswith(str(canonical_cursor) + "/")
+                if not root_is_below:
+                    raise ValueError(f"File operand has an unsafe ancestor: {cursor}")
+            if info is not None and not stat.S_ISDIR(info.st_mode):
+                raise ValueError(f"File operand has a non-directory parent: {cursor}")
+            if cursor == root:
+                break
+            if cursor == cursor.parent:
+                raise ValueError(f"File operand is outside its root: {candidate}")
+            cursor = cursor.parent
+    try:
+        before = candidate.lstat()
+    except FileNotFoundError:
+        if required:
+            raise
+        return ""
+    except NotADirectoryError as exc:
+        raise ValueError(f"File operand has a non-directory parent: {candidate}") from exc
+    if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode):
+        raise ValueError(f"File operand must be a regular non-symlink file: {candidate}")
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(candidate, flags)
+    except OSError as exc:
+        raise ValueError(f"File operand could not be opened safely: {candidate}") from exc
+    try:
+        opened = os.fstat(descriptor)
+        if not stat.S_ISREG(opened.st_mode) or (
+            before.st_dev, before.st_ino
+        ) != (opened.st_dev, opened.st_ino):
+            raise ValueError(f"File operand changed during safe open: {candidate}")
+        # Keep source line endings intact for range-local mutations.  Parsers
+        # use splitlines(), while writers can now preserve CRLF/CR in
+        # untouched portions of a managed document.
+        with os.fdopen(descriptor, "r", encoding="utf-8", newline="") as handle:
+            descriptor = -1
+            return handle.read()
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
+def read_managed_text(
+    memory_dir: Path,
+    path: Path,
+    *,
+    required: bool = True,
+) -> str:
+    """Read one contained regular file without following its final symlink."""
+
+    root = memory_dir.resolve()
+    candidate = path if path.is_absolute() else memory_dir / path
+    try:
+        return read_no_follow_text(candidate, root=root, required=required)
+    except ValueError as exc:
+        try:
+            display = candidate.relative_to(memory_dir).as_posix()
+        except ValueError:
+            display = str(candidate)
+        raise ValueError(
+            str(exc).replace(str(candidate), display)
+        ) from exc
+
+
+def canonical_memory_files_from_inventory(
+    memory_dir: Path,
+    inventory: Iterable[Path],
+    manifest: str,
+    *,
+    include_archive: bool = False,
+) -> tuple[Path, ...]:
+    """Select canonical storage from one inventory and captured manifest.
+
+    This helper is deliberately filesystem-free.  Snapshot construction passes
+    it the paths and manifest text it has already captured, so deriving
+    authority cannot silently perform a second inventory or observe a later
+    manifest revision.
+    """
+
+    declared = optional_index_paths(manifest) if manifest else set()
+    root_storage = {"brief.md", "decisions.md", "constraints.md", "do-not-use.md", "inbox.md"}
+    for task in CANONICAL_TASKS:
+        try:
+            root_storage.update(
+                relative for relative, _required in parse_manifest_task_file_specs(manifest, task)
+                if "/" not in relative
+            )
+        except ValueError:
             continue
-        path = memory_dir / name
-        if path.exists():
-            yield path
-    for folder in ("rules", "profiles", "areas"):
-        directory = memory_dir / folder
-        if directory.exists():
-            for path in sorted(directory.glob("*.md")):
-                if path.name != "README.md":
-                    yield path
-    archive = memory_dir / "archive"
-    if include_archive and archive.exists():
-        yield from sorted(archive.rglob("*.md"))
+    selected: list[Path] = []
+    for path in inventory:
+        relative = path.relative_to(memory_dir).as_posix()
+        if (
+            relative in root_storage or relative in declared
+        ) and path.name.casefold() != "readme.md":
+            selected.append(path)
+        elif include_archive and relative.startswith("archive/") and path.name.casefold() != "readme.md":
+            selected.append(path)
+    return tuple(selected)
+
+
+def canonical_memory_files(
+    memory_dir: Path,
+    *,
+    include_archive: bool = False,
+) -> tuple[Path, ...]:
+    """Select canonical shared storage using the compatibility disk API."""
+
+    inventory = managed_markdown_files(memory_dir)
+    manifest_path = memory_dir / "manifest.md"
+    manifest = read_managed_text(memory_dir, manifest_path, required=False)
+    return canonical_memory_files_from_inventory(
+        memory_dir,
+        inventory,
+        manifest,
+        include_archive=include_archive,
+    )
+
+
+def iter_markdown_files(memory_dir: Path, include_archive: bool = False) -> Iterable[Path]:
+    yield from canonical_memory_files(memory_dir, include_archive=include_archive)
 
 
 def split_top_level_bullet_units(text: str) -> list[tuple[str, str]]:
-    """Split complete column-zero Markdown bullets from surrounding content."""
+    """Split bullets through the same mixed-unit grammar used by all readers."""
 
+    document = parse_markdown_units(text)
     chunks: list[tuple[str, str]] = []
-    kind = "other"
-    lines: list[str] = []
-    fence: str | None = None
+    other: list[str] = [document.title] if document.title else []
 
-    def flush() -> None:
-        nonlocal lines
-        if lines:
-            chunks.append((kind, "\n".join(lines)))
-            lines = []
+    def flush_other() -> None:
+        if other:
+            chunks.append(("other", "\n\n".join(other)))
+            other.clear()
 
-    for line in text.splitlines():
-        fence_marker = line[:3] if line.startswith(("```", "~~~")) else None
-        if fence is not None:
-            lines.append(line)
-            if fence_marker == fence:
-                fence = None
-            continue
-        if fence_marker is not None:
-            if kind == "bullet":
-                flush()
-                kind = "other"
-            lines.append(line)
-            fence = fence_marker
-            continue
-
-        top_level_bullet = line.startswith(("- ", "* ", "+ "))
-        column_zero_content = bool(line) and not line[0].isspace()
-        if top_level_bullet:
-            flush()
-            kind = "bullet"
-            lines = [line]
-        elif kind == "bullet" and column_zero_content:
-            flush()
-            kind = "other"
-            lines = [line]
+    for unit in document.units:
+        if unit.kind == "bullet":
+            flush_other()
+            chunks.append(("bullet", unit.text))
         else:
-            lines.append(line)
-    flush()
+            other.append(unit.text)
+    flush_other()
     return chunks
 
 
 def count_inbox_items(text: str) -> int:
-    structured = len(re.findall(r"(?m)^Status:\s*candidate\s*$", text, re.I))
-    without_structured = re.sub(
-        r"(?ms)^## MC-INBOX-[^\n]*\n.*?(?=^## |\Z)",
-        "",
-        text,
+    units = parse_markdown_units(text).units
+    structured = sum(
+        1
+        for unit in units
+        if unit.kind == "h2"
+        and unit.heading is not None
+        and re.search(r"\bMC-INBOX-\d{8}-[0-9a-f]{8}\b", unit.heading, re.I)
+        and any(
+            re.fullmatch(r"Status:\s*candidate\s*", line.text, re.I)
+            for line in visible_lines(unit.text)
+            if not line.indented_code
+        )
     )
-    legacy = sum(
-        1 for kind, _unit in split_top_level_bullet_units(without_structured)
-        if kind == "bullet"
-    )
+    legacy = sum(1 for unit in units if unit.kind == "bullet")
     return structured + legacy
 
 
 def count_h2_entries(text: str) -> int:
-    return sum(1 for line in text.splitlines() if line.startswith("## "))
+    return sum(1 for unit in parse_markdown_units(text).units if unit.kind == "h2")
 
 
 def decision_entry_sizes(text: str) -> list[tuple[str, int]]:
     """Return titles and token sizes for H2 sections that contain a Decision field."""
 
-    lines = text.rstrip().splitlines()
-    starts = [index for index, line in enumerate(lines) if line.startswith("## ")]
     entries: list[tuple[str, int]] = []
-    for position, start in enumerate(starts):
-        end = starts[position + 1] if position + 1 < len(starts) else len(lines)
-        section = lines[start:end]
-        if not any(line.strip() == "Decision:" for line in section[1:]):
+    for unit in parse_markdown_units(text).units:
+        if unit.kind != "h2" or unit.heading is None:
             continue
-        title = section[0][3:].strip()
-        entries.append((title, estimate_tokens("\n".join(section))))
+        if not any(
+            re.fullmatch(r"Decision:[ \t]*", line.text)
+            for line in visible_lines(unit.text)
+            if not line.indented_code
+        ):
+            continue
+        entries.append((unit.heading, estimate_tokens(unit.text)))
     return entries
 
 
@@ -595,6 +1146,8 @@ class MarkdownUnit:
     kind: str
     text: str
     heading: str | None = None
+    start_line: int = -1
+    end_line: int = -1
 
 
 @dataclass(frozen=True)
@@ -604,37 +1157,32 @@ class MarkdownDocument:
 
 
 def parse_markdown_units(text: str) -> MarkdownDocument:
-    """Parse the narrow Markdown structures managed by MemoryCustodian."""
+    """Parse ordered H2 and legacy-bullet units without merging mixed formats."""
 
-    lines = text.rstrip().splitlines()
+    # Do not call rstrip(): trailing spaces are meaningful source content and
+    # range-local writers must be able to preserve them.  splitlines removes
+    # line terminators while retaining line text and the semantic parser still
+    # trims only separator newlines at unit boundaries below.
+    lines = text.splitlines()
     title = lines[0] if lines and lines[0].startswith("# ") else ""
     start = 1 if title else 0
-    h2_starts = [index for index in range(start, len(lines)) if lines[index].startswith("## ")]
+    ranges = semantic_unit_ranges("\n".join(lines), start=start)
     units: list[MarkdownUnit] = []
-    if h2_starts:
-        preamble = "\n".join(lines[start:h2_starts[0]]).strip()
-        if preamble:
-            units.append(MarkdownUnit("preamble", preamble))
-        for position, unit_start in enumerate(h2_starts):
-            unit_end = h2_starts[position + 1] if position + 1 < len(h2_starts) else len(lines)
-            unit_text = "\n".join(lines[unit_start:unit_end]).strip()
-            units.append(MarkdownUnit("h2", unit_text, lines[unit_start][3:].strip()))
+    if ranges:
+        preamble = "\n".join(lines[start:ranges[0].start]).strip("\n")
+        if preamble.strip():
+            units.append(MarkdownUnit("preamble", preamble, None, start, ranges[0].start))
+        for unit_range in ranges:
+            unit_text = "\n".join(lines[unit_range.start:unit_range.end]).strip("\n")
+            units.append(MarkdownUnit(
+                unit_range.kind, unit_text, unit_range.heading,
+                unit_range.start, unit_range.end,
+            ))
         return MarkdownDocument(title, tuple(units))
 
-    bullet_starts = [index for index in range(start, len(lines)) if lines[index].startswith(('- ', '* ', '+ '))]
-    if bullet_starts:
-        preamble = "\n".join(lines[start:bullet_starts[0]]).strip()
-        if preamble:
-            units.append(MarkdownUnit("preamble", preamble))
-        for position, unit_start in enumerate(bullet_starts):
-            unit_end = bullet_starts[position + 1] if position + 1 < len(bullet_starts) else len(lines)
-            unit_text = "\n".join(lines[unit_start:unit_end]).strip()
-            units.append(MarkdownUnit("bullet", unit_text))
-        return MarkdownDocument(title, tuple(units))
-
-    body = "\n".join(lines[start:]).strip()
-    if body:
-        units.append(MarkdownUnit("body", body))
+    body = "\n".join(lines[start:]).strip("\n")
+    if body.strip():
+        units.append(MarkdownUnit("body", body, None, start, len(lines)))
     return MarkdownDocument(title, tuple(units))
 
 
@@ -671,6 +1219,8 @@ def is_safe_memory_name(name: str) -> bool:
 
 
 def optional_index_paths(manifest: str) -> set[str]:
+    # Keep legacy discovery tolerant; strict Protocol 0.7 validation happens in
+    # parse_optional_module_index/validate_manifest_routes.
     lines = _section_lines(manifest, "##", lambda heading: heading == "optional module index")
     return set(OPTIONAL_INDEX_PATH_RE.findall("\n".join(lines)))
 
@@ -683,12 +1233,61 @@ def manifest_with_optional_index(manifest: str) -> tuple[str, bool]:
     return updated, changed
 
 
+def manifest_with_protocol_07_optional_routes(manifest: str) -> tuple[str, bool, int]:
+    """Convert legacy optional declarations to safe explicit-only metadata."""
+
+    declarations = parse_optional_module_index(manifest, legacy_compatible=True)
+    ranges = section_ranges(manifest, 2, "optional module index")
+    if not ranges:
+        updated, changed = manifest_with_optional_index(manifest)
+        return updated, changed, 0
+    lines = manifest.splitlines()
+    body_start, end = ranges[0]
+    start = body_start - 1
+    legacy_count = 0
+    for index in range(body_start, end):
+        if not re.fullmatch(r"- `[^`]+`(?:\s*:\s*.*)?", lines[index]):
+            continue
+        following = next(
+            (lines[candidate] for candidate in range(index + 1, end) if lines[candidate].strip()),
+            "",
+        )
+        if not following.startswith("  - "):
+            legacy_count += 1
+    first_subsection = next(
+        (
+            heading.index
+            for heading in markdown_headings(manifest)
+            if heading.level == 3 and body_start <= heading.index < end
+        ),
+        end,
+    )
+    preamble = lines[body_start:first_subsection]
+    rendered = [OPTIONAL_INDEX_HEADING, *preamble]
+    while rendered and not rendered[-1].strip():
+        rendered.pop()
+    for folder, heading in OPTIONAL_INDEX_SECTIONS.items():
+        rendered.extend(["", heading])
+        matches = [item for item in declarations if item.module_type == folder]
+        if matches:
+            for item in matches:
+                rendered.extend(render_optional_declaration(item).splitlines())
+        else:
+            rendered.append("- None enabled.")
+    updated = ensure_newline("\n".join([*lines[:start], *rendered, *lines[end:]]))
+    return updated, updated != ensure_newline(manifest), legacy_count
+
+
 def is_indexable_optional_path(relative_path: str) -> bool:
     parts = relative_path.split("/", 1)
     if len(parts) != 2:
         return False
     folder, name = parts
-    return folder in OPTIONAL_INDEX_SECTIONS and name != "README.md" and name.endswith(".md")
+    return (
+        folder in OPTIONAL_INDEX_SECTIONS
+        and name.casefold() != "readme.md"
+        and name.casefold().endswith(".md")
+    )
 
 
 def default_optional_trigger(relative_path: str) -> str:
@@ -703,33 +1302,54 @@ def default_optional_trigger(relative_path: str) -> str:
 
 
 def _insert_optional_index(manifest: str) -> tuple[str, bool]:
-    if OPTIONAL_INDEX_HEADING in manifest:
+    if section_ranges(manifest, 2, "optional module index"):
         return manifest, False
     insertion = "\n" + OPTIONAL_INDEX_TEMPLATE.strip() + "\n"
-    for marker in ("## Optional profiles", "## Area-specific memory", "## Explicit only", "## Context budget"):
-        index = manifest.find(marker)
-        if index != -1:
-            prefix = manifest[:index].rstrip()
-            suffix = manifest[index:].lstrip()
-            return prefix + "\n\n" + insertion.strip() + "\n\n" + suffix, True
-    return manifest.rstrip() + "\n\n" + insertion.strip() + "\n", True
+    marker_titles = {
+        "optional profiles",
+        "area-specific memory",
+        "explicit only",
+        "context budget",
+    }
+    lines = manifest.splitlines()
+    index = next(
+        (
+            heading.index
+            for heading in markdown_headings(manifest)
+            if heading.level == 2 and heading.title in marker_titles
+        ),
+        len(lines),
+    )
+    updated = [*lines[:index], "", *insertion.strip().splitlines(), "", *lines[index:]]
+    return ensure_newline("\n".join(updated)), True
 
 
 def _ensure_optional_index_subsection(manifest: str, heading: str) -> tuple[str, bool]:
-    if heading in manifest:
+    ranges = section_ranges(manifest, 2, "optional module index")
+    if len(ranges) != 1:
         return manifest, False
-    index = manifest.find(OPTIONAL_INDEX_HEADING)
-    if index == -1:
+    start, end = ranges[0]
+    normalized = heading.lstrip("#").strip().casefold()
+    if any(
+        item.level == 3 and item.title == normalized and start <= item.index < end
+        for item in markdown_headings(manifest)
+    ):
         return manifest, False
-    next_major = manifest.find("\n## ", index + len(OPTIONAL_INDEX_HEADING))
-    insert_at = len(manifest) if next_major == -1 else next_major
-    prefix = manifest[:insert_at].rstrip()
-    suffix = manifest[insert_at:].lstrip()
-    inserted = f"{heading}\n- None enabled.\n"
-    return prefix + "\n\n" + inserted + ("\n" + suffix if suffix else ""), True
+    lines = manifest.splitlines()
+    inserted = [heading, "- None enabled."]
+    updated = [*lines[:end], "", *inserted, "", *lines[end:]]
+    return ensure_newline("\n".join(updated)), True
 
 
-def manifest_with_optional_module_index(manifest: str, relative_path: str) -> tuple[str, bool]:
+def manifest_with_optional_module_index(
+    manifest: str,
+    relative_path: str,
+    *,
+    activation: str | None = None,
+    tasks: tuple[str, ...] = (),
+    paths: tuple[str, ...] = (),
+    description: str | None = None,
+) -> tuple[str, bool]:
     if not is_indexable_optional_path(relative_path):
         return manifest, False
     manifest, changed = _insert_optional_index(manifest)
@@ -742,44 +1362,71 @@ def manifest_with_optional_module_index(manifest: str, relative_path: str) -> tu
         return manifest, changed
 
     lines = manifest.splitlines()
-    try:
-        heading_index = next(index for index, line in enumerate(lines) if line.strip() == heading)
-    except StopIteration:
+    parent_ranges = section_ranges(manifest, 2, "optional module index")
+    if len(parent_ranges) != 1:
         return manifest, changed
-
-    end = len(lines)
-    for index in range(heading_index + 1, len(lines)):
-        stripped = lines[index].strip()
-        if stripped.startswith("### ") or stripped.startswith("## "):
-            end = index
+    parent_start, parent_end = parent_ranges[0]
+    normalized = heading.lstrip("#").strip().casefold()
+    matches = [
+        (position, item)
+        for position, item in enumerate(markdown_headings(manifest))
+        if item.level == 3
+        and item.title == normalized
+        and parent_start <= item.index < parent_end
+    ]
+    if len(matches) != 1:
+        return manifest, changed
+    position, matched_heading = matches[0]
+    heading_index = matched_heading.index
+    body_start = heading_index + 1
+    end = parent_end
+    all_headings = markdown_headings(manifest)
+    for following in all_headings[position + 1:]:
+        if following.level <= 3:
+            end = min(following.index, parent_end)
             break
 
-    entry = f"- `{relative_path}`: {default_optional_trigger(relative_path)}"
-    subsection = [line for line in lines[heading_index + 1 : end] if line.strip() != "- None enabled."]
+    from .routes import ModuleDeclaration
+
+    if activation is None:
+        activation = "explicit-only"
+    entry = render_optional_declaration(
+        ModuleDeclaration(
+            relative_path,
+            folder,
+            activation,
+            tasks,
+            paths,
+            description if description is not None else default_optional_trigger(relative_path),
+        )
+    )
+    subsection = [line for line in lines[body_start:end] if line.strip() != "- None enabled."]
     lines = lines[: heading_index + 1] + [entry] + subsection + lines[end:]
     return ensure_newline("\n".join(lines)), True
 
 
-def _normalize_heading(text: str) -> str:
-    return text.strip().strip("#").strip().casefold()
-
-
 def _section_lines(manifest: str, heading_level: str, matcher) -> list[str]:
-    lines = manifest.splitlines()
-    captured: list[str] = []
-    in_section = False
-    for line in lines:
-        stripped = line.strip()
-        if stripped.startswith(heading_level + " "):
-            if in_section:
-                break
-            in_section = matcher(_normalize_heading(stripped))
+    level = len(heading_level)
+    line_count = len(manifest.splitlines())
+    all_headings = markdown_headings(manifest)
+    for position, heading in enumerate(all_headings):
+        if heading.level != level or not matcher(heading.title):
             continue
-        if in_section and stripped.startswith("#" * len(heading_level) + " "):
-            break
-        if in_section:
-            captured.append(line)
-    return captured
+        end = line_count
+        for following in all_headings[position + 1:]:
+            if following.level <= level:
+                end = following.index
+                break
+        return _visible_body_lines(manifest, heading.index + 1, end)
+    return []
+
+
+def _visible_body_lines(manifest: str, start: int, end: int) -> list[str]:
+    return [
+        line.text
+        for line in visible_lines(manifest)
+        if start <= line.index < end and not line.indented_code
+    ]
 
 
 def _parse_bullets(lines: list[str], default_required: bool) -> list[tuple[str, bool]]:
@@ -817,18 +1464,40 @@ def _dedupe_specs(specs: list[tuple[str, bool]]) -> list[tuple[str, bool]]:
 def _route_sections(manifest: str) -> dict[str, list[tuple[str, list[str]]]]:
     sections = {category: [] for category in CATEGORY_HEADINGS}
     lines = manifest.splitlines()
-    for index, line in enumerate(lines):
-        if not line.strip().startswith("### "):
+    all_headings = markdown_headings(manifest)
+    parents = [
+        (position, heading)
+        for position, heading in enumerate(all_headings)
+        if heading.level == 2 and heading.title == "load by task"
+    ]
+    if len(parents) != 1:
+        return sections
+    parent_position, parent = parents[0]
+    parent_end = len(lines)
+    for following in all_headings[parent_position + 1:]:
+        if following.level <= 2:
+            parent_end = following.index
+            break
+    for position, heading in enumerate(all_headings):
+        if heading.level != 3 or not parent.index < heading.index < parent_end:
             continue
-        heading = _normalize_heading(line)
         end = len(lines)
-        for next_index in range(index + 1, len(lines)):
-            if lines[next_index].strip().startswith(("### ", "## ")):
-                end = next_index
+        for following in all_headings[position + 1:]:
+            if following.level <= 3:
+                end = following.index
                 break
         for category, aliases in CATEGORY_HEADINGS.items():
-            if heading in aliases:
-                sections[category].append((heading, lines[index + 1:end]))
+            if heading.title in aliases:
+                sections[category].append(
+                    (
+                        heading.title,
+                        _visible_body_lines(
+                            manifest,
+                            heading.index + 1,
+                            min(end, parent_end),
+                        ),
+                    )
+                )
     return sections
 
 
@@ -846,14 +1515,64 @@ def validate_manifest_routes(manifest: str) -> list[str]:
     issues: list[str] = []
     always_matches = []
     lines = manifest.splitlines()
-    for index, line in enumerate(lines):
-        if line.strip().startswith("## ") and _normalize_heading(line) == "always load":
-            end = next((i for i in range(index + 1, len(lines)) if lines[i].strip().startswith("## ")), len(lines))
-            always_matches.append(lines[index + 1:end])
+    all_headings = markdown_headings(manifest)
+    for position, heading in enumerate(all_headings):
+        if heading.level == 2 and heading.title == "always load":
+            end = len(lines)
+            for following in all_headings[position + 1:]:
+                if following.level <= 2:
+                    end = following.index
+                    break
+            always_matches.append(
+                _visible_body_lines(manifest, heading.index + 1, end)
+            )
     if len(always_matches) != 1:
         issues.append(f"general route: expected exactly one 'Always load' section, found {len(always_matches)}")
+    load_by_task_count = sum(
+        1
+        for heading in all_headings
+        if heading.level == 2 and heading.title == "load by task"
+    )
+    if load_by_task_count != 1:
+        issues.append(
+            "task routes: expected exactly one 'Load by task' section, "
+            f"found {load_by_task_count}"
+        )
+    else:
+        parent_position, parent = next(
+            (position, heading)
+            for position, heading in enumerate(all_headings)
+            if heading.level == 2 and heading.title == "load by task"
+        )
+        parent_end = len(lines)
+        for following in all_headings[parent_position + 1:]:
+            if following.level <= 2:
+                parent_end = following.index
+                break
+        canonical_titles = set().union(*CATEGORY_HEADINGS.values())
+        unknown = sorted({
+            heading.title
+            for heading in all_headings
+            if heading.level == 3
+            and parent.index < heading.index < parent_end
+            and heading.title not in canonical_titles
+        })
+        if unknown:
+            issues.append(
+                "task routes: unknown H3 route heading(s): " + ", ".join(unknown)
+            )
     sections = _route_sections(manifest)
     for category, matches in sections.items():
+        global_count = sum(
+            1
+            for heading in all_headings
+            if heading.level == 3 and heading.title in CATEGORY_HEADINGS[category]
+        )
+        if global_count != len(matches):
+            issues.append(
+                f"{category} route: canonical heading appears outside the unique "
+                "'Load by task' section"
+            )
         if len(matches) != 1:
             candidates = ", ".join(repr(heading) for heading, _lines in matches) or "none"
             issues.append(f"{category} route: expected one canonical heading; candidates: {candidates}")
@@ -873,6 +1592,11 @@ def validate_manifest_routes(manifest: str) -> list[str]:
             duplicates = sorted({name for name in names if names.count(name) > 1})
             if duplicates:
                 issues.append(f"{category} route: duplicate paths: {', '.join(duplicates)}")
+    protocol = protocol_metadata(manifest).get("protocol_version", "")
+    try:
+        parse_optional_module_index(manifest, legacy_compatible=protocol != "0.7")
+    except ValueError as exc:
+        issues.append(f"optional module index: {exc}")
     return issues
 
 
@@ -881,13 +1605,8 @@ def parse_manifest_task_modules(manifest: str, task: str) -> list[RoutedModule]:
     if category is None:
         raise ValueError(f"Unsupported task route: {task}")
     issues = validate_manifest_routes(manifest)
-    category_issues = [
-        issue for issue in issues
-        if issue.startswith(("general route: expected", f"{category} route: expected"))
-        or issue.startswith(("general route: unsafe", f"{category} route: unsafe"))
-    ]
-    if category_issues:
-        raise ValueError("Invalid manifest routing: " + "; ".join(category_issues))
+    if issues:
+        raise ValueError("Invalid manifest routing: " + "; ".join(issues))
     always_lines = _section_lines(manifest, "##", lambda heading: heading == "always load")
     specs = [
         RoutedModule(name, required, (RouteReason.ALWAYS_LOAD,))
@@ -919,7 +1638,7 @@ def manifest_task_file_specs(memory_dir: Path, task: str) -> list[tuple[str, boo
         raise ValueError(
             "manifest.md is missing; restore it, apply an applicable migration, or carefully reinitialize the project"
         )
-    return parse_manifest_task_file_specs(manifest.read_text(encoding="utf-8"), task)
+    return parse_manifest_task_file_specs(read_managed_text(memory_dir, manifest), task)
 
 
 def manifest_task_modules(memory_dir: Path, task: str) -> list[RoutedModule]:
@@ -928,7 +1647,7 @@ def manifest_task_modules(memory_dir: Path, task: str) -> list[RoutedModule]:
         raise ValueError(
             "manifest.md is missing; restore it, apply an applicable migration, or carefully reinitialize the project"
         )
-    return parse_manifest_task_modules(manifest.read_text(encoding="utf-8"), task)
+    return parse_manifest_task_modules(read_managed_text(memory_dir, manifest), task)
 
 
 def resolve_manifest_memory_path(memory_dir: Path, name: str) -> Path:

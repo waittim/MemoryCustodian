@@ -44,7 +44,7 @@ from the same `ErasureScope` result and state these boundaries explicitly.
 
 ## Preview and broad-match safety
 
-`forget` is dry-run by default. Protocol 0.6 previews print a Plan ID; apply requires both `--apply` and the
+`forget` is dry-run by default. Protocol 0.7 previews print a Plan ID; apply requires both `--apply` and the
 matching `--confirm-plan`. Any intervening target-file change invalidates the plan. Applying a topic with fewer
 than four non-whitespace characters, or a plan matching multiple semantic units, also requires `--allow-broad-match`.
 
@@ -78,3 +78,16 @@ If forgotten content may contain secrets, credentials, personal data, contract p
 vendor limits, ask whether the user wants a hard forget or purge. Do not repeat the sensitive value in the
 tombstone. Prevention is stronger than cleanup: store a minimal abstract constraint plus an Evidence reference
 instead of copying unnecessary sensitive source text into repository memory.
+
+Use `forget --id` when a canonical Entry ID is known; it selects only the unit whose heading owns that ID. A live
+relation that references the selected entry is a blocker requiring explicit governance review, not permission to
+delete the referencing unit. Canonical reconciliation records are also protected references. A generic hard-mode
+`MC-TOMB` deliberately omits topic identity and is treated as an erasure guard rather than a Subject/Facet owner,
+so it cannot invalidate later conflict checks. Topic and ID selectors share the same ErasureScope contract.
+Optional `--history-check` inspects reachable history in the current local Git repository without changing commits,
+refs, the index, remotes, or other clones. `unavailable` is not a PASS. `no-reachable-copy-detected` means only that
+this bounded inspection found none; it does not prove the absence of dangling objects, other refs, remotes, forks,
+backups, caches, or distributed copies.
+
+`local reset` is a Protocol 0.7 preview for the current machine/current project overlay. Transactional apply waits
+for Protocol 0.8 and never implies deletion from other machines or backups.

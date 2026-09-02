@@ -11,12 +11,15 @@ from . import check as check_cmd
 from . import compact as compact_cmd
 from . import enable as enable_cmd
 from . import forget as forget_cmd
+from . import governance as governance_cmd
 from . import init as init_cmd
 from . import migrate as migrate_cmd
+from . import local as local_cmd
+from . import index as index_cmd
 from . import read as read_cmd
 from . import status as status_cmd
 from . import subject as subject_cmd
-from .protocol import TASK_CATEGORY
+from .routes import TASK_INPUTS
 from .mutations import PartialMutationError
 from .templates import DEFAULT_MEMORY_DIR
 
@@ -60,9 +63,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     read_parser = sub.add_parser("read", help="Render a small context pack for a task.")
     _add_common(read_parser)
-    read_parser.add_argument("--task", choices=sorted(TASK_CATEGORY.keys()), default="default", help="Task type routed by the project manifest.")
+    read_parser.add_argument("--task", choices=TASK_INPUTS, default="default", help="Task type routed by the project manifest.")
     read_parser.add_argument("--profile", action="append", default=[], help="Optional workflow profile to include if present, such as git.")
     read_parser.add_argument("--area", action="append", default=[], help="Optional area memory to include if present, such as frontend.")
+    read_parser.add_argument("--rule", action="append", default=[], help="Explicit enabled rule to include, such as output.")
+    read_parser.add_argument("--path", action="append", default=[], help="Touched or planned project-relative path; repeatable.")
+    read_parser.add_argument("--explain", action="store_true", help="Explain every enabled module disposition with stable reason codes.")
+    read_parser.add_argument("--strict-routing", action="store_true", help="Reject incomplete, ambiguous, invalid, or conflicted substantial context.")
+    read_parser.add_argument("--no-local", action="store_true", help="Exclude the repo-external local overlay.")
     read_parser.add_argument("--names-only", action="store_true", help="Only list files, without printing their contents.")
     read_parser.set_defaults(func=read_cmd.run)
 
@@ -114,12 +122,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     forget_parser = sub.add_parser("forget", help="Forget a memory topic and add a tombstone.")
     _add_common(forget_parser)
-    forget_parser.add_argument("topic", help="Topic or phrase to forget.")
+    forget_parser.add_argument("topic", nargs="?", help="Topic or phrase to forget.")
+    forget_parser.add_argument("--id", dest="entry_id", help="Forget one canonical Entry ID exactly.")
     forget_parser.add_argument("--mode", choices=("soft", "hard", "purge"), default="soft", help="Forgetting mode.")
     forget_parser.add_argument("--apply", action="store_true", help="Apply the previewed forgetting plan. Default is dry run.")
     forget_parser.add_argument("--confirm-plan", help="Plan ID printed by the matching preview.")
     forget_parser.add_argument("--lock-timeout", type=float, default=10.0)
     forget_parser.add_argument("--break-stale-lock", action="store_true")
+    forget_parser.add_argument("--history-check", action="store_true", help="Inspect reachable local Git history without modifying it.")
     forget_parser.add_argument(
         "--allow-broad-match", action="store_true", help="Allow applying a short-topic or multi-unit match plan."
     )
@@ -128,6 +138,7 @@ def build_parser() -> argparse.ArgumentParser:
     enable_parser = sub.add_parser("enable", help="Enable an optional memory module.")
     _add_common(enable_parser)
     enable_parser.add_argument("feature", help="Feature to enable, such as preferences, changelog, rules/output, profile/git, or area/frontend.")
+    enable_parser.add_argument("--path", action="append", default=[], help="Area path glob; repeatable. Areas without one are explicit-only.")
     enable_parser.add_argument("--force", action="store_true", help=argparse.SUPPRESS)
     enable_parser.add_argument("--lock-timeout", type=float, default=10.0)
     enable_parser.add_argument("--break-stale-lock", action="store_true")
@@ -137,7 +148,30 @@ def build_parser() -> argparse.ArgumentParser:
     _add_common(check_parser)
     check_parser.add_argument("--privacy", action="store_true", help="Show detailed privacy-pattern scan totals.")
     check_parser.add_argument("--security", action="store_true", help="Show detailed credential-pattern scan totals.")
+    check_parser.add_argument("--routing", action="store_true", help="Validate deterministic manifest routing.")
+    check_parser.add_argument("--reachability", action="store_true", help="Find active memory unreachable from normal routes.")
+    check_parser.add_argument("--freshness", action="store_true", help="Check Evidence and relation freshness without rewriting memory.")
+    check_parser.add_argument("--conflicts", action="store_true", help="Detect current structural conflicts.")
+    check_parser.add_argument("--merge-base", help="Git ref for read-only two-sided conflict and reconciliation review.")
     check_parser.set_defaults(func=check_cmd.run)
+
+    local_parser = sub.add_parser("local", help="Manage the repo-external local overlay.")
+    local_sub = local_parser.add_subparsers(dest="local_command", required=True)
+    for name in ("status", "enable", "link", "reset"):
+        parser_for_command = local_sub.add_parser(name)
+        _add_common(parser_for_command)
+        if name in {"enable", "link"}:
+            parser_for_command.add_argument("--lock-timeout", type=float, default=10.0)
+            parser_for_command.add_argument("--break-stale-lock", action="store_true")
+        parser_for_command.set_defaults(func=local_cmd.run, lock_timeout=10.0, break_stale_lock=False)
+    local_add = local_sub.add_parser("add")
+    _add_common(local_add)
+    local_add.add_argument("message")
+    local_add.add_argument("--type", choices=("preference",), default="preference")
+    local_add.add_argument("--evidence", action="append", required=True)
+    local_add.add_argument("--lock-timeout", type=float, default=10.0)
+    local_add.add_argument("--break-stale-lock", action="store_true")
+    local_add.set_defaults(func=local_cmd.run)
 
     migrate_parser = sub.add_parser("migrate", help="Migrate memory files to the current protocol.")
     _add_common(migrate_parser)
@@ -191,6 +225,61 @@ def build_parser() -> argparse.ArgumentParser:
     subject_alias.add_argument("--lock-timeout", type=float, default=10.0)
     subject_alias.add_argument("--break-stale-lock", action="store_true")
     subject_alias.set_defaults(func=subject_cmd.run)
+
+    subject_merge = subject_sub.add_parser("merge", help="Preview a transactional Subject merge for Protocol 0.8.")
+    _add_common(subject_merge)
+    subject_merge.add_argument("subject_id")
+    subject_merge.add_argument("--into", required=True, dest="target_subject_id")
+    subject_merge.set_defaults(func=subject_cmd.run)
+
+    list_parser = sub.add_parser("list", help="List canonical memory entries by stable ID.")
+    _add_common(list_parser)
+    list_parser.add_argument("--status")
+    list_parser.add_argument("--scope")
+    list_parser.add_argument("--include-archive", action="store_true")
+    list_parser.add_argument("--local", action="store_true")
+    list_parser.set_defaults(func=index_cmd.run_list)
+
+    show_parser = sub.add_parser("show", help="Show one canonical memory entry.")
+    _add_common(show_parser)
+    show_parser.add_argument("entry_id")
+    show_parser.add_argument("--include-archive", action="store_true")
+    show_parser.add_argument("--local", action="store_true")
+    show_parser.set_defaults(func=index_cmd.run_show)
+
+    promote_parser = sub.add_parser("promote", help="Preview candidate promotion (apply requires Protocol 0.8).")
+    _add_common(promote_parser)
+    promote_parser.add_argument("entry_id")
+    promote_parser.add_argument("--type", required=True, choices=("decision", "constraint", "preference", "tombstone", "do-not-use"))
+    promote_parser.add_argument("--evidence", action="append", required=True)
+    promote_parser.add_argument("--apply", action="store_true")
+    promote_parser.set_defaults(func=index_cmd.run_promote)
+
+    exception_parser = sub.add_parser(
+        "exception", help="Preview Exception-To relation governance (apply requires Protocol 0.8)."
+    )
+    exception_sub = exception_parser.add_subparsers(dest="exception_command", required=True)
+    exception_add = exception_sub.add_parser("add", help="Preview an area-to-project Exception-To relation.")
+    _add_common(exception_add)
+    exception_add.add_argument("entry_id", help="Active area-scoped Entry ID.")
+    exception_add.add_argument("--to", required=True, dest="target_entry_id", help="Active project-scoped Entry ID.")
+    exception_add.set_defaults(func=governance_cmd.run)
+    exception_remove = exception_sub.add_parser("remove", help="Preview removal of an Exception-To relation.")
+    _add_common(exception_remove)
+    exception_remove.add_argument("entry_id", help="Active area-scoped Entry ID.")
+    exception_remove.set_defaults(func=governance_cmd.run)
+
+    reconcile_parser = sub.add_parser(
+        "reconcile", help="Preview a canonical reconciliation record (apply requires Protocol 0.8)."
+    )
+    reconcile_sub = reconcile_parser.add_subparsers(dest="reconcile_command", required=True)
+    reconcile_preview = reconcile_sub.add_parser("preview", help="Validate and render a reconciliation record preview.")
+    _add_common(reconcile_preview)
+    reconcile_preview.add_argument("--entry", action="append", required=True, help="Entry ID to acknowledge; repeat at least twice.")
+    reconcile_preview.add_argument("--resolution", required=True, choices=sorted(governance_cmd.RESOLUTIONS))
+    reconcile_preview.add_argument("--title", required=True)
+    reconcile_preview.add_argument("--evidence", action="append", required=True)
+    reconcile_preview.set_defaults(func=governance_cmd.run)
 
     return parser
 

@@ -2,7 +2,23 @@
 
 Entries are newest first.
 
-## MC-DEC-20260729-ef44900b — Use one mutation guard and separate private execution plans from public
+## MC-DEC-20260827-8f4c2a91 — Protocol 0.7 body fencing
+
+Status: active
+Scope: project
+Subject: MC-SUBJ-20260729-7e5c3a91
+Facet: compatibility
+Evidence:
+- repo:cli/memory_custodian/entries.py
+- test:tests/test_protocol_07_release_gaps.py
+
+Decision:
+Use `memory-custodian-body-v1`; treat legacy entities literally. Search decoded text; mutate raw source.
+
+Reason:
+Preserves parse/write semantics.
+
+## MC-DEC-20260801-07000007 — Protocol 0.7 governance
 
 Status: active
 Scope: project
@@ -10,100 +26,96 @@ Subject: MC-SUBJ-20260729-7e5c3a91
 Facet: architecture
 Evidence:
 - user-confirmed
-Supersedes: MC-DEC-20260728-5ea0e265
+- repo:cli/memory_custodian/local_overlay.py
+- test:tests/test_local_snapshot.py
+Supersedes: MC-DEC-20260729-ef44900b
 
 Decision:
-Use one mutation guard and separate private execution plans from public previews.
+Use explicit routing and review. Strict reads consume one overlay snapshot; local writes refresh IDs under lock. Defer further governance to 0.8.
 
 Reason:
-A single bootstrap-to-project lock handoff prevents identity races across every writer; private state permissions and redacted public plans preserve concurrency and erasure boundaries.
+Avoids mixed-time reads/stale IDs.
 
-## MC-DEC-20260728-5ea0e265 — Adopt Protocol 0.6 evidence admission and mutation safety.
-
-Status: superseded
-Superseded-By: MC-DEC-20260729-ef44900b
-Scope: project
-Subject: MC-SUBJ-20260729-7e5c3a91
-Facet: architecture
-Evidence:
-- user-confirmed
-
-Decision:
-Use Protocol 0.6 evidence admission, stable Subject/Facet conflict identity, explicit erasure boundaries,
-repo-external preview seeds, lock-time plan rebuilds, and deterministic budget states.
-
-Reason:
-This keeps provenance, ownership, forgetting scope, and stale-write rejection deterministic and reviewable.
-
-## MC-DEC-20260721-3578b077 — Target Python 3.10+ minimum version
+## MC-DEC-20260721-3578b077 — Support Python 3.10–3.14
 
 Status: active
 Scope: project
+Subject: MC-SUBJ-20260801-10000001
+Facet: version-policy
 Evidence:
 - legacy-unverified
 
 Decision:
-Support Python 3.10+ and test every supported minor from Python 3.10 through 3.14.
+Support and test Python 3.10 through 3.14.
 Reason:
-The stdlib-only implementation does not require newer-minor features, and full minor-version coverage keeps the
-declared open-ended support range honest while retaining a maintained baseline.
+No newer Python feature is required.
 
-## MC-DEC-20260712-53d9eded — Prioritize useful and reachable memory over chronological accumulation.
+## MC-DEC-20260712-53d9eded — Prefer reachable memory
 
 Status: active
 Scope: project
+Subject: MC-SUBJ-20260801-20000002
+Facet: behavior
 Evidence:
 - legacy-unverified
 
 Decision:
-Prioritize useful and reachable memory over chronological accumulation; keep each decision concise and scope-specific.
+Prefer concise, reachable, scope-specific memory over chronology.
 Reason:
-Production use showed that a generic brief, root-only subsystem decisions, and age-only archival can pass structural checks while failing to provide relevant context.
+Reachability determines utility.
 
-## MC-DEC-20260708-ab7efbab — Support Gemini through thin context and Agent Skills
+## MC-DEC-20260708-ab7efbab — Gemini thin-context support
 
 Status: active
 Scope: project
+Subject: MC-SUBJ-20260801-30000003
+Facet: compatibility
 Evidence:
 - legacy-unverified
 
 Decision:
-Support Gemini with thin `GEMINI.md` bootstrap snippets, `--with-gemini`, and `./install.sh gemini` linking the skill into Gemini's skills directory.
+Support Gemini through thin `GEMINI.md`, `--with-gemini`, and `./install.sh gemini` skill linking.
 Reason:
-Gemini context files are loaded into prompt context, so project memory must remain manifest-driven while skill installation provides full protocol behavior.
+Avoid eager durable-memory imports.
 
-## MC-DEC-20260705-00552a27 — Add target compaction for active memory budgets
+## MC-DEC-20260705-00552a27 — Targeted active-memory compaction
 
 Status: active
 Scope: project
+Subject: MC-SUBJ-20260801-40000004
+Facet: behavior
 Evidence:
 - legacy-unverified
 
 Decision:
-Add `compact --target <file>` for over-budget active files. It dry-runs by default, dedupes simple bullet files, archives old complete H2 entries for decisions/changelog, and has `status`/`check` suggest the command.
+Provide preview-first `compact --target <file>` with bullet dedupe, reviewed H2 archival, and `status`/`check` guidance.
 Reason:
-Agents need an offline, reviewable path from budget failure to safe maintenance. Semantic rewrites still require review.
+Keep maintenance offline and reviewable.
 
-## MC-DEC-20260704-ddfc2d0c — Treat Claude as a plugin-root distribution target
+## MC-DEC-20260704-ddfc2d0c — Claude plugin-root distribution
 
 Status: active
 Scope: project
+Subject: MC-SUBJ-20260801-50000005
+Facet: compatibility
 Evidence:
 - legacy-unverified
 
 Decision:
-Support Claude Code through `.claude-plugin/`, `skills/`, `bin/`, local `--plugin-dir` testing, and `./install.sh claude`.
+Support Claude Code through `.claude-plugin/`, shared skills/bin, `--plugin-dir` tests, and `./install.sh claude`.
 Reason:
-Claude support needs a verifiable plugin-root install surface.
+Provide a verifiable install surface.
 
-## MC-DEC-20260704-342e05b7 — Add deterministic skill evals first
+## MC-DEC-20260704-342e05b7 — Offline skill evals first
 
 Status: active
 Scope: project
+Subject: MC-SUBJ-20260801-60000006
+Facet: behavior
 Evidence:
 - legacy-unverified
 
 Decision:
-Maintain offline skill eval scenarios and a checker before live agent eval infrastructure.
+Maintain offline skill scenarios and a checker before live-agent evals.
 Reason:
-Guard the behavior contract without services, non-stdlib dependencies, or heavyweight harnesses.
+Avoid a heavyweight harness.

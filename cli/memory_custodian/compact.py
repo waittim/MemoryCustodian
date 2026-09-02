@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 from pathlib import Path, PurePosixPath
+import re
+
+from .markdown import MarkdownUnitRange, semantic_unit_ranges
 
 from .protocol import (
     DECISION_ENTRY_BUDGET,
@@ -12,6 +15,7 @@ from .protocol import (
     estimate_tokens,
     long_decision_entries,
     parse_markdown_units,
+    read_managed_text,
     resolve_memory_dir,
     resolve_project_root,
     split_top_level_bullet_units,
@@ -25,8 +29,8 @@ from .entries import parse_structured_entries
 from .protocol import (
     CURRENT_PROTOCOL_VERSION,
     compare_versions,
-    project_id_from_manifest,
-    protocol_metadata,
+    entry_schema_version_for_manifest,
+    manifest_contract_metadata,
 )
 
 ARCHIVABLE_H2_TARGETS = {"decisions.md", "changelog.md"}
@@ -43,8 +47,11 @@ def _compact_plan(
     memory_dir: Path,
     mutations: list[TextMutation],
 ) -> MutationPlan:
-    manifest = (memory_dir / "manifest.md").read_text(encoding="utf-8")
-    metadata = protocol_metadata(manifest)
+    manifest = read_managed_text(memory_dir, memory_dir / "manifest.md")
+    metadata = manifest_contract_metadata(
+        manifest,
+        allow_missing_section=True,
+    )
     comparison = compare_versions(
         metadata.get("protocol_version", "0.5"),
         CURRENT_PROTOCOL_VERSION,
@@ -54,7 +61,7 @@ def _compact_plan(
     if comparison > 0:
         raise ValueError("Project protocol is newer than this CLI supports.")
     protocol_06 = comparison == 0
-    project_id = project_id_from_manifest(manifest) if protocol_06 else "legacy-protocol-0.5"
+    project_id = metadata["project_id"] if protocol_06 else "legacy-protocol-0.5"
     return MutationPlan(
         "compact",
         {"target": args.target or "inbox.md", "archive_oldest": args.archive_oldest},
@@ -80,7 +87,7 @@ def _execute_plan(
         print("Dry run only. Re-run with --apply" + (" --confirm-plan <PLAN_ID>." if protocol_06 else "."))
         return False
     if protocol_06 and not args.confirm_plan:
-        raise ValueError("Protocol 0.6 compact apply requires --confirm-plan <PLAN_ID>.")
+        raise ValueError("Protocol 0.7 compact apply requires --confirm-plan <PLAN_ID>.")
     with project_mutation_guard(
         project_root,
         memory_dir / "manifest.md",
@@ -117,7 +124,7 @@ def _execute_plan(
                 )
         elif current_comparison == 0:
             raise ValueError(
-                "Project migrated to Protocol 0.6 before compatibility compact apply; "
+                "Project migrated to Protocol 0.7 before compatibility compact apply; "
                 "preview again and confirm the new Plan ID."
             )
         elif current_comparison > 0:
@@ -139,7 +146,7 @@ def _execute_plan(
 
 
 def _dedupe_mutations(memory_dir: Path, target: str, path: Path) -> list[TextMutation]:
-    original = path.read_text(encoding="utf-8")
+    original = read_managed_text(memory_dir, path)
     deduped, removed = _dedupe_bullets(original)
     if not removed:
         return []
@@ -150,7 +157,7 @@ def _dedupe_mutations(memory_dir: Path, target: str, path: Path) -> list[TextMut
             TextMutation(
                 changelog,
                 changelog_text(
-                    changelog.read_text(encoding="utf-8"),
+                    read_managed_text(memory_dir, changelog),
                     f"Compacted {target}: removed {removed} duplicate bullet(s).",
                 ),
             )
@@ -160,8 +167,8 @@ def _dedupe_mutations(memory_dir: Path, target: str, path: Path) -> list[TextMut
 
 def _planned_archive_mutations(memory_dir: Path, target: str, budget: int) -> list[TextMutation]:
     path = memory_dir.joinpath(*PurePosixPath(target).parts)
-    original = path.read_text(encoding="utf-8")
-    plan = _plan_h2_archive(original, budget)
+    original = read_managed_text(memory_dir, path)
+    plan = _plan_h2_archive(original, budget, target)
     if plan is None:
         return []
     mutations = _archive_mutations(memory_dir, target, plan["archived"])
@@ -172,7 +179,7 @@ def _planned_archive_mutations(memory_dir: Path, target: str, budget: int) -> li
             TextMutation(
                 changelog,
                 changelog_text(
-                    changelog.read_text(encoding="utf-8"),
+                    read_managed_text(memory_dir, changelog),
                     f"Compacted {target}: archived {len(plan['archived'])} old entries.",
                 ),
             )
@@ -182,15 +189,9 @@ def _planned_archive_mutations(memory_dir: Path, target: str, budget: int) -> li
 
 def _inbox_cleanup_mutations(memory_dir: Path) -> list[TextMutation]:
     inbox = memory_dir / "inbox.md"
-    original = inbox.read_text(encoding="utf-8")
-    structured_candidates = [
-        entry for entry in parse_structured_entries(inbox, original)
-        if entry.status == "candidate"
-    ]
-    if structured_candidates:
-        return []
+    original = read_managed_text(memory_dir, inbox)
     tombstone_path = memory_dir / "do-not-use.md"
-    tombstones = tombstone_path.read_text(encoding="utf-8") if tombstone_path.exists() else ""
+    tombstones = read_managed_text(memory_dir, tombstone_path, required=False)
     cleaned, _candidates, duplicates, tombstone_matches = _clean_inbox(original, tombstones)
     if cleaned == original:
         return []
@@ -204,7 +205,7 @@ def _inbox_cleanup_mutations(memory_dir: Path) -> list[TextMutation]:
         mutations.append(
             TextMutation(
                 changelog,
-                changelog_text(changelog.read_text(encoding="utf-8"), message),
+                changelog_text(read_managed_text(memory_dir, changelog), message),
             )
         )
     return mutations
@@ -225,7 +226,7 @@ def _bullet_label(text: str) -> str:
 
 
 def _render_chunks(chunks: list[tuple[str, str]]) -> str:
-    return "\n".join(text for _kind, text in chunks).rstrip() + "\n"
+    return "\n\n".join(text for _kind, text in chunks).rstrip() + "\n"
 
 
 def _clean_inbox(text: str, tombstones: str) -> tuple[str, list[str], int, int]:
@@ -272,6 +273,8 @@ def _clean_inbox(text: str, tombstones: str) -> tuple[str, list[str], int, int]:
             continue
         candidates.append(unit_text)
         kept_chunks.append((kind, unit_text))
+    if duplicates == 0 and tombstone_matches == 0:
+        return text, candidates, 0, 0
     return _render_chunks(kept_chunks), candidates, duplicates, tombstone_matches
 
 
@@ -313,18 +316,35 @@ def _dedupe_bullets(text: str) -> tuple[str, int]:
     return _render_chunks(kept), removed
 
 
-def _split_h2_sections(text: str) -> tuple[list[str], list[list[str]]]:
-    lines = text.rstrip().splitlines()
-    starts = [index for index, line in enumerate(lines) if line.startswith("## ")]
-    if not starts:
-        return lines, []
+def _archivable_h2_ranges(
+    ranges: tuple[MarkdownUnitRange, ...],
+    target: str,
+) -> list[MarkdownUnitRange]:
+    """Attach changelog bullets to date H2s without swallowing legacy units elsewhere."""
 
-    preamble = lines[: starts[0]]
-    sections: list[list[str]] = []
-    for index, start in enumerate(starts):
-        end = starts[index + 1] if index + 1 < len(starts) else len(lines)
-        sections.append(lines[start:end])
-    return preamble, sections
+    grouped = []
+    for position, unit_range in enumerate(ranges):
+        if unit_range.kind != "h2":
+            continue
+        end = unit_range.end
+        if (
+            target == "changelog.md"
+            and unit_range.heading
+            and re.fullmatch(r"\d{4}-\d{2}-\d{2}", unit_range.heading)
+        ):
+            following = position + 1
+            while following < len(ranges) and ranges[following].kind == "bullet":
+                end = ranges[following].end
+                following += 1
+        grouped.append(
+            MarkdownUnitRange(
+                unit_range.start,
+                end,
+                unit_range.kind,
+                unit_range.heading,
+            )
+        )
+    return grouped
 
 
 def _join_h2_sections(preamble: list[str], sections: list[list[str]]) -> str:
@@ -336,21 +356,33 @@ def _join_h2_sections(preamble: list[str], sections: list[list[str]]) -> str:
     return "\n\n".join(part for part in parts if part).rstrip() + "\n"
 
 
-def _plan_h2_archive(text: str, budget: int):
-    preamble, sections = _split_h2_sections(text)
-    if len(sections) < 2:
+def _plan_h2_archive(text: str, budget: int, target: str = "decisions.md"):
+    lines = text.rstrip().splitlines()
+    ranges = semantic_unit_ranges(
+        "\n".join(lines),
+        start=1 if lines and lines[0].startswith("# ") else 0,
+    )
+    h2_ranges = _archivable_h2_ranges(ranges, target)
+    if len(h2_ranges) < 2:
         return None
 
-    for keep_count in range(len(sections) - 1, 0, -1):
-        kept = sections[:keep_count]
-        archived = sections[keep_count:]
-        compacted = _join_h2_sections(preamble, kept)
+    for keep_count in range(len(h2_ranges) - 1, 0, -1):
+        kept_ranges = h2_ranges[:keep_count]
+        archived_ranges = h2_ranges[keep_count:]
+        removed_lines = {
+            index
+            for unit_range in archived_ranges
+            for index in range(unit_range.start, unit_range.end)
+        }
+        compacted = "\n".join(
+            line for index, line in enumerate(lines) if index not in removed_lines
+        ).rstrip() + "\n"
         projected = estimate_tokens(compacted)
         if projected <= budget:
             return {
                 "compacted": compacted,
-                "archived": archived,
-                "kept": kept,
+                "archived": [lines[item.start:item.end] for item in archived_ranges],
+                "kept": [lines[item.start:item.end] for item in kept_ranges],
                 "projected": projected,
             }
     return None
@@ -401,22 +433,105 @@ def _render_archive_document(
     existing: str,
     archived_sections: list[list[str]],
 ) -> str:
-    _preamble, existing_sections = _split_h2_sections(existing)
+    standard_preamble = _archive_preamble(target)
+    existing_body = existing
+    if existing_body.startswith(standard_preamble):
+        existing_body = existing_body[len(standard_preamble):].lstrip("\n")
+    else:
+        existing_lines_with_header = existing_body.splitlines()
+        if (
+            existing_lines_with_header
+            and existing_lines_with_header[0].strip()
+            == f"# Archived Memory: {target}"
+        ):
+            existing_body = "\n".join(existing_lines_with_header[1:]).lstrip("\n")
+    existing_ranges = semantic_unit_ranges(existing_body)
+    grouped_ranges = _archivable_h2_ranges(existing_ranges, target)
+    existing_lines = existing_body.rstrip().splitlines()
+    existing_sections = [
+        existing_lines[unit_range.start:unit_range.end]
+        for unit_range in grouped_ranges
+    ]
     retained = [
         section
         for section in existing_sections
         if not _is_legacy_archive_wrapper(section, target)
     ]
-    sections = [*archived_sections, *retained]
-    if target == "changelog.md":
-        sections = _merge_changelog_sections(sections)
-    preamble = [
+    if target != "changelog.md":
+        wrapper_ranges = [
+            unit_range
+            for unit_range, section in zip(grouped_ranges, existing_sections)
+            if _is_legacy_archive_wrapper(section, target)
+        ]
+        removed = {
+            index
+            for unit_range in wrapper_ranges
+            for index in range(unit_range.start, unit_range.end)
+        }
+        base_lines = [
+            line for index, line in enumerate(existing_lines) if index not in removed
+        ]
+        retained_ranges = [
+            unit_range
+            for unit_range, section in zip(grouped_ranges, existing_sections)
+            if not _is_legacy_archive_wrapper(section, target)
+        ]
+        first_h2 = retained_ranges[0].start if retained_ranges else len(existing_lines)
+        insertion = sum(1 for index in range(first_h2) if index not in removed)
+        new_lines = _join_h2_sections([], archived_sections).rstrip().splitlines()
+        if new_lines:
+            before = base_lines[:insertion]
+            after = base_lines[insertion:]
+            if before and before[-1].strip():
+                before.append("")
+            if after and new_lines[-1].strip():
+                new_lines.append("")
+            body = "\n".join([*before, *new_lines, *after]).strip()
+        else:
+            body = "\n".join(base_lines).strip()
+        rendered = _archive_preamble(target).rstrip()
+        if body:
+            rendered += "\n\n" + body
+        return rendered.rstrip() + "\n"
+
+    # Changelog prose is intentionally not a semantic unit.  Attach each gap
+    # between date sections to the section immediately before it, then merge
+    # duplicate dates.  This keeps prose in its source neighbourhood instead
+    # of collecting every non-H2 line at the end of the archive.
+    if grouped_ranges:
+        preamble = existing_lines[:grouped_ranges[0].start]
+        retained_with_gaps: list[list[str]] = []
+        for position, unit_range in enumerate(grouped_ranges):
+            section = existing_lines[unit_range.start:unit_range.end]
+            next_start = (
+                grouped_ranges[position + 1].start
+                if position + 1 < len(grouped_ranges)
+                else len(existing_lines)
+            )
+            gap = existing_lines[unit_range.end:next_start]
+            if _is_legacy_archive_wrapper(section, target):
+                continue
+            if any(line.strip() for line in gap):
+                section = [*section, "", *gap]
+            retained_with_gaps.append(section)
+    else:
+        preamble = existing_lines
+        retained_with_gaps = []
+    sections = _merge_changelog_sections([*archived_sections, *retained_with_gaps])
+    return _join_h2_sections(
+        _archive_preamble(target).rstrip().splitlines()[0:4] + preamble,
+        sections,
+    )
+
+
+def _archive_preamble(target: str) -> str:
+    lines = [
         f"# Archived Memory: {target}",
         "",
         "Complete historical entries moved from active memory after reviewed compaction.",
         "This file is explicit-only and is not part of normal task context.",
     ]
-    return _join_h2_sections(preamble, sections)
+    return "\n".join(lines).rstrip() + "\n"
 
 
 def _archive_mutations(memory_dir: Path, target: str, archived_sections: list[list[str]]) -> list[TextMutation]:
@@ -426,7 +541,7 @@ def _archive_mutations(memory_dir: Path, target: str, archived_sections: list[li
         mutations.append(TextMutation(readme, render_template("archive/README.md", today())))
 
     archive_path = _archive_target_path(memory_dir, target)
-    existing = archive_path.read_text(encoding="utf-8") if archive_path.exists() else ""
+    existing = read_managed_text(memory_dir, archive_path, required=False)
     archive_text = _render_archive_document(target, existing, archived_sections)
     mutations.append(TextMutation(archive_path, archive_text))
     return mutations
@@ -448,7 +563,7 @@ def _run_target_compaction(args, project_root: Path, memory_dir: Path) -> int:
         raise FileNotFoundError(f"Target not found: {path}")
 
     budget = budget_for(target)
-    original = path.read_text(encoding="utf-8")
+    original = read_managed_text(memory_dir, path)
     tokens = estimate_tokens(original)
     long_entries = long_decision_entries(original)
 
@@ -507,7 +622,7 @@ def _run_target_compaction(args, project_root: Path, memory_dir: Path) -> int:
         return 0
 
     if target in ARCHIVABLE_H2_TARGETS:
-        plan = _plan_h2_archive(working, budget)
+        plan = _plan_h2_archive(working, budget, target)
         if plan is not None:
             archive_path = _archive_target_path(memory_dir, target).relative_to(memory_dir).as_posix()
             print("Action: archive oldest complete H2 entries")
@@ -577,6 +692,10 @@ def run(args) -> int:
         raise FileNotFoundError(f"Memory directory not found: {memory_dir}")
     if not (memory_dir / "manifest.md").exists():
         raise ValueError("manifest.md is missing; the MemoryCustodian setup is incomplete or corrupted")
+    manifest_contract_metadata(
+        read_managed_text(memory_dir, memory_dir / "manifest.md"),
+        allow_missing_section=True,
+    )
     if args.target:
         return _run_target_compaction(args, project_root, memory_dir)
 
@@ -584,28 +703,39 @@ def run(args) -> int:
     if not inbox.exists():
         raise FileNotFoundError(f"Inbox not found: {inbox}")
 
-    original = inbox.read_text(encoding="utf-8")
+    original = read_managed_text(memory_dir, inbox)
+    entry_schema_version = entry_schema_version_for_manifest(
+        read_managed_text(memory_dir, memory_dir / "manifest.md")
+    )
     tombstone_path = memory_dir / "do-not-use.md"
-    tombstones = tombstone_path.read_text(encoding="utf-8") if tombstone_path.exists() else ""
+    tombstones = read_managed_text(memory_dir, tombstone_path, required=False)
     structured_candidates = [
-        entry for entry in parse_structured_entries(inbox, original)
+        entry for entry in parse_structured_entries(
+            inbox,
+            original,
+            entry_schema_version=entry_schema_version,
+        )
         if entry.status == "candidate"
     ]
-    if structured_candidates:
-        items = [entry.text for entry in structured_candidates]
-        cleaned, candidates, duplicates, tombstone_matches = original, items, 0, 0
-    else:
-        items = [unit_text for kind, unit_text in split_top_level_bullet_units(original) if kind == "bullet"]
-        cleaned, candidates, duplicates, tombstone_matches = _clean_inbox(original, tombstones)
+    legacy_items = [
+        unit_text
+        for kind, unit_text in split_top_level_bullet_units(original)
+        if kind == "bullet"
+    ]
+    cleaned, legacy_candidates, duplicates, tombstone_matches = _clean_inbox(original, tombstones)
+    review_items = [
+        *(("structured", entry.text, entry) for entry in structured_candidates),
+        *(("legacy", item, None) for item in legacy_candidates),
+    ]
+    items = [entry.text for entry in structured_candidates] + legacy_items
 
     print("# Compaction Plan")
     print(f"Inbox items: {len(items)}")
     print(f"Exact duplicates removable: {duplicates}")
     print(f"Exact tombstone matches removable: {tombstone_matches}")
-    print(f"Candidates requiring Agent review: {len(candidates)}")
-    for index, item in enumerate(candidates, start=1):
-        if structured_candidates:
-            entry = structured_candidates[index - 1]
+    print(f"Candidates requiring Agent review: {len(review_items)}")
+    for index, (kind, item, entry) in enumerate(review_items, start=1):
+        if kind == "structured" and entry is not None:
             print(f"- [{index}] {entry.entry_id} — {entry.title}")
             continue
         lines = item.splitlines()
@@ -628,7 +758,7 @@ def run(args) -> int:
     )
     if not applied:
         return 0
-    if candidates:
+    if review_items:
         print("Applied deterministic inbox cleanup; candidates remain for Agent review.")
     else:
         print("Applied deterministic inbox cleanup; no candidates remain.")

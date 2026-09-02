@@ -2,6 +2,136 @@
 
 ## Unreleased
 
+## v0.11.0 - 2026-08-29
+
+### Protocol 0.7 Entry schema 1 to 2 compatibility boundary
+
+- The public `0.11.0` branch distributed Protocol 0.7 with Entry schema 1 before the body wrapper landed, so schema 1
+  is a supported legacy input despite having no formal release tag. Its parser treats a manually present
+  `memory-custodian-body-v1` fence as literal body text.
+- Protocol 0.7 Entry schema 2 is the current and only new-write format. CLI `0.11.0` or newer reports migration
+availability for schema 1, reads it with legacy semantics, and preview/applies a schema 1-to-2 migration that
+preserves literal wrapper text before schema-2 decoding is enabled. Strict reads, checks, conflicts, and writers do
+not treat schema 1 as current or silently reinterpret its bodies. The minimum supported writer is the schema-2-capable
+  `0.11.0` build; the pre-wrapper public `0.11.0` branch remains schema-1-only and must be upgraded before migration,
+  because it cannot safely decode schema-2 wrapper output.
+- `local_overlay_schema_version: 1` remains an independent local topology/binding schema; local Entry bodies use the
+  shared manifest's Entry schema. Bound local files migrate in the same preview/apply plan; an unbound, multi-root, or
+  REVIEW overlay blocks the shared schema flip until it is explicitly bound or repaired.
+
+### Deterministic routing for explicit task and scope
+
+- Added Protocol 0.7 routing/conflict schema metadata, canonical task normalization, a normative optional-module
+  grammar, case-sensitive cross-platform path globs, and a root-constraints safety baseline.
+- Added `read --path/--rule/--explain/--strict-routing`, complete enabled-module dispositions, stable reason codes,
+  entry-level budget omissions, and `COMPLETE/INCOMPLETE/AMBIGUOUS/INVALID` diagnostics.
+- Invalid routing now remains inside the shared result/disposition model, ordinary non-strict `INCOMPLETE` reads use
+  the documented successful inspection exit, and explain exposes inbox/archive policy exclusions.
+- Reserved `AMBIGUOUS` for a future versioned policy; routing schema 1 accepts only the four planned optional-module
+  keys and rejects the unversioned `exclusive-group` extension as unknown metadata.
+- Added routing, reachability, and Evidence/relation freshness checks. They report bounded structural facts and never
+  claim automatic semantic retrieval or factual correctness.
+
+### Local overlay and stable ID operations
+
+- Added private repo-external local preferences with explicit project-root binding, shared/local precedence,
+  `--no-local`, and preview-only local reset. Local state is not a secret store and cannot override shared hard memory.
+- Added canonical entry `list`, `show`, and `forget --id`; preview-only candidate promotion and Subject merge
+  inventory remain deferred to the Protocol 0.8 transaction journal.
+- Made `forget --id` heading-exact and relation-safe: referencing entries block removal instead of being deleted as
+  incidental substring matches, including references in reconciliation records. Generic hard-erasure guards are
+  excluded from structural ownership so a successful hard forget cannot invalidate subsequent strict reads.
+  Promotion previews now report ID/structural-owner blockers and area-scoped targets.
+- Unified topic/ID/purge/local-reset erasure wording and added optional bounded Git history exposure inspection.
+  MemoryCustodian does not rewrite Git history or revoke clones, forks, backups, caches, or distributed copies.
+
+### Structural conflict and reconciliation review
+
+- Added deterministic current-worktree conflict codes for duplicate structural owners, canonical Subject collisions,
+  invalid exception relations, missing Subject/Facet coverage, and reconciliation-record validation.
+- Reconciliation validation now uses a strict canonical parser, and merge-aware review consumes valid resolution
+  records only after applying the same full relation validation to each Git revision; invalid branch records and
+  unchanged merge-base acknowledgements cannot suppress new review findings.
+- Added stable, blocker-aware `exception add`, `exception remove`, and `reconcile preview` workflows while retaining
+  the Protocol 0.8 boundary for transactional apply. Relationship resolutions are exact two-Entry acknowledgements;
+  `distinct` cannot waive duplicate structural owners; merge review consumes validated exact pairs only.
+- Conflict analysis, reconciliation validation, and governance previews share active structural-operand validation
+  for scope, unique active Subject resolution, and canonical Facet.
+- Supersession records validate the active replacement and retained structural identity. Subject-merge records allow
+  superseded historical source references but require a structurally valid active target with matching Scope and
+  Facet; promoted provisional identity remains outside the Protocol 0.7 contract.
+- Governance previews require exact Protocol/schema compatibility, and their Plan IDs bind manifest, Entry,
+  Subject-registry, reconciliation, content, and path dependencies used by the rendered result. Duplicate protocol
+  H2 sections, scalar fields, empty values, and malformed scalar bullets are invalid rather than silently skipped or
+  accepted with last-value-wins behavior. Strict reads, routing checks, and governance previews consume the same
+  metadata validation. Wrong-level, missing-whitespace, or extra malformed Protocol heading traces cannot fall back
+  to legacy mode. The current version must use the canonical `0.7` spelling; equivalent noncanonical spellings and
+  unsupported future versions fail the shared gate.
+  The shared mutation guard rejects ambiguous, malformed, or newer metadata before ordinary writers change files;
+  explicit migration/repair flows may read incomplete inputs but must produce a fully valid candidate before preview
+  or apply. A present section requires a valid version, and Protocol 0.7 requires all schema, registry, identity, and
+  policy fields. Ambiguous sections require manual repair. Exception removal does not predict a resulting review
+  while blockers remain. All public preview, local-overlay, status, and focused diagnostic entrypoints perform this
+  preflight before operand lookup, Plan ID rendering, or seed creation; failed migration syntax checks leave no
+  pending local identity state.
+- Combined metadata and route validation for every current-project preflight and recovery candidate. Markdown-aware
+  section scans ignore fenced examples and HTML comments without accepting Setext, attached-hash, or indented-code
+  lookalikes as the Protocol H2. Canonical task routes require one `Load by task` parent and the Optional module index
+  is unique. Bound local data is never selected through an ambiguous manifest identity. Promotion and Subject-merge
+  previews validate structural operands and bind rendered text dependencies; local reset distinguishes disabled,
+  unbound, bound, and multi-root review states, hashes private bytes without following symlinks, and binds the local
+  content it would eventually remove. Migration reads all operands before creating preview seeds and derives missing
+  task routes from the initialization template's single authority.
+- Tightened the finite manifest lexer for code spans, standalone HTML comments, and backtick/tilde fences; ambiguous
+  or unclosed constructs fail closed. Optional/task subsection topology is canonical and contradictory sentinels are
+  invalid. Migration reads only contained normalized declarations. Local overlay access rejects a symlinked
+  project-id ancestor, and reset inventory binds directories, reports traversal failures, and reads files through
+  no-follow descriptors.
+- Extended that boundary to the `local/` directory itself and enforced exact POSIX `0700`/`0600` modes before local
+  status, reads, or reset approval. Local manifest scalars and binding identity are unique and matching. Migration
+  normalizes symlink-loop failures without creating preview state and preserves human-readable Optional-index prose.
+- Made multi-root `REVIEW` diagnostic-only for writes and explicit local indexing. Required local scaffold components
+  and declared modules must exist; local scalars require canonical placement; bindings reject duplicate JSON keys;
+  and enable/link validate existing state before reporting success or changing root bindings.
+- Restored moved-project recovery by replacing one nonexistent stale binding on explicit link while retaining REVIEW
+  for concurrently live roots. REVIEW modules remain eligible for security/privacy diagnostics, formal local Entries
+  reuse schema/Evidence validation, binding roots must be normalized absolute paths, and orphan bindings become
+  blocker-aware REVIEW/reset state instead of DISABLED.
+- Completed relation integrity checks: supersession preserves Scope as well as Subject/Facet; promotion validates
+  reciprocal links, lifecycle, Candidate-Type, Scope, and provisional identity in both ordinary and freshness checks.
+  Local Entries are active-only with no governance relations, and shared/local Entry ID collisions fail closed across
+  status, read, check, indexing, enable/link, and local writes.
+- Promotion preview now validates the rendered active target, uses `MC-AREA` for area decisions, previews required
+  Optional-index changes, and binds target existence/content. Supersession planning rejects invalid source operands;
+  relation audit requires unique targets and acyclic chains ending at an active replacement. Freshness also promotes
+  invalid exceptions and active merged-Subject references to errors.
+- Made Entry/body and Subject/alias rendering line-safe with parse round-trip checks, preventing raw Markdown from
+  creating protocol fields, Entries, or merge state. Ambiguous column-zero Entry body lines use the explicit,
+  versioned `memory-custodian-body-v1` Markdown fence; legacy `&#8283;` content remains literal. Promotion now validates Scope/containment before target access,
+  checks archive IDs, anchors Status transition, and reports cycles in real edge order.
+- Closed the remaining write-boundary cases: rendered typed bodies and Subject titles must be non-empty, legacy
+  multiline bullets remain one unit, and migration applies the shared schema/storage checks to every prospective
+  Entry while treating ambiguous legacy units as blockers before apply.
+- Soft forget now renders guards and changelog bullets through line-safe serializers, treats a case-equivalent
+  deterministic guard as an idempotent no-op, and blocks conflicting IDs. Preview and apply consume one authoritative
+  build result; the lock-held rebuild rechecks blockers and broad-match risk for both Protocol 0.7 and compatibility
+  writes before any mutation.
+- Unified mixed H2/legacy-bullet walking across forget, compaction, indexing, and budget packing, without detaching
+  Evidence or other protocol lists from their owner. New guards retain newest-first ordering ahead of legacy bullets.
+- Random Subject, hard-forget Tombstone, and migration Entry IDs are checked against existing and same-plan owners on
+  every build. Soft guard identity now follows case-insensitive matching, duplicate owners block idempotence, zero-write
+  apply reports a no-op, and candidate Promotion-Requirement is unique and non-empty.
+- Added matched-context conflict gates and optional read-only merge-base review for cross-branch structural collisions
+  and concurrent hard-memory changes requiring human reconciliation.
+- Subject names, timestamps, Evidence counts, file order, and prose similarity never choose a winner. This release
+  does not provide complete natural-language contradiction detection or automatic conflict resolution.
+
+### Conservative migration and agent workflow
+
+- Added preview-first Protocol 0.6 to 0.7 migration that preserves IDs, Evidence, custom task routes, descriptions,
+  and optional modules; legacy prose triggers become safe `explicit-only` declarations without guessed matchers.
+- Updated templates, adapters, Skill references, examples, evals, and dogfood memory for strict scope-aware startup.
+
 ## v0.10.0 - 2026-07-28
 
 ### Subject identity, routing, and erasure alignment

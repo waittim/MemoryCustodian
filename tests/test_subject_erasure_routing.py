@@ -21,7 +21,7 @@ from memory_custodian.locking import bootstrap_lock_id, lock_path
 from memory_custodian.main import main
 from memory_custodian.protocol import parse_manifest_task_modules
 from memory_custodian.read import _optional_requested
-from memory_custodian.routes import RouteReason, merge_routed_modules
+from memory_custodian.routes import RouteReason, RoutedModule, merge_routed_modules
 from memory_custodian.scanning import scan_text
 from memory_custodian import enable as enable_module
 from memory_custodian import init as init_module
@@ -82,7 +82,7 @@ class SubjectRegistryTests(unittest.TestCase):
             manifest = (memory / "manifest.md").read_text(encoding="utf-8")
             self.assertIn("- subject_schema_version: 1", manifest)
             self.assertIn("- subject_registry: subjects.md", manifest)
-            self.assertIn("- conflict_identity_policy: scope-subject-facet", manifest)
+            self.assertIn("- conflict_policy: canonical-subject-and-review", manifest)
             output = StringIO()
             with redirect_stdout(output):
                 self.assertEqual(
@@ -290,13 +290,12 @@ class ErasureAndRoutingTests(unittest.TestCase):
         manifest = """# Memory Manifest
 
 ## Always load
-- ./brief.md
+- brief.md
 
 ## Load by task
 
 ### Planning / architecture / refactoring
 Load:
-- brief.md
 - decisions.md
 
 ### Implementation / execution / debugging
@@ -305,21 +304,25 @@ Load:
 
 ### User-facing artifact / output
 Load:
-- brief.md
+- do-not-use.md
 
 ### Preferences
 Load:
-- brief.md
+- preferences.md
 
 ### Change history / recap
 Load:
-- brief.md
+- changelog.md
 
 ### Memory maintenance
 Load:
-- brief.md
+- inbox.md
 """
         modules = parse_manifest_task_modules(manifest, "planning")
+        modules = merge_routed_modules([
+            *modules,
+            RoutedModule("brief.md", True, (RouteReason.CANONICAL_TASK,)),
+        ])
         self.assertEqual(modules[0].module_id, "brief.md")
         self.assertEqual(
             modules[0].reasons,

@@ -6,8 +6,8 @@ This repository contains NightNotes, a small offline CLI for storing local sessi
 
 Before substantial work in this repository:
 
-1. Read `docs/memory/manifest.md`.
-2. Read `docs/memory/brief.md`.
-3. Load additional memory files only when the manifest says they are relevant.
-4. Do not load `docs/memory/archive/` unless explicitly requested or performing memory maintenance.
-5. After meaningful decisions or repeated corrections, update the appropriate memory file or propose an update.
+1. Read `docs/memory/manifest.md` and `docs/memory/brief.md`.
+2. Choose a canonical task and supply touched/planned paths or an explicit area.
+3. Use strict routing before substantial work and stop on incomplete/invalid routing or unresolved conflicts.
+4. Do not infer optional routes or load archive/inbox outside explicit maintenance.
+5. After meaningful decisions or repeated corrections, update evidence-backed memory or propose an update.

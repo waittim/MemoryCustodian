@@ -29,7 +29,27 @@
     "duplicate-structural-owner",
     "no-semantic-alias-proof",
     "managed-erasure-boundary",
-    "sensitive-memory-minimization"
+    "sensitive-memory-minimization",
+    "touched-paths-before-implementation",
+    "no-prose-area-inference",
+    "global-constraint-baseline",
+    "incomplete-routing",
+    "strict-routing-blocks",
+    "explain-skipped-reasons",
+    "explicit-profile-explain",
+    "candidate-context-exclusion",
+    "local-preference-shared-boundary",
+    "local-constraint-precedence",
+    "unreachable-hard-constraint",
+    "no-semantic-relevance-claim",
+    "subject-id-reuse",
+    "exact-conflict-blocks",
+    "concurrent-reconciliation-review",
+    "no-timestamp-winner",
+    "subject-merge-preview",
+    "history-erasure-boundary",
+    "bounded-history-evidence",
+    "local-reset-boundary"
   ],
   "required_sections": [
     "## Purpose",
@@ -43,7 +63,7 @@
     {
       "id": "evidence-admission",
       "terms": [
-        "Protocol 0.6 active entries require a stable Entry ID",
+        "Protocol 0.7 active entries require a stable Entry ID",
         "Agent inference, code observations, possible decisions",
         "remain candidates"
       ]
@@ -62,7 +82,7 @@
         "do not start substantial planning, implementation, debugging, or review until startup loading is complete",
         "Read `manifest.md` if present.",
         "Read `brief.md` before substantial work.",
-        "Load only files allowed by the manifest"
+        "Route with the manifest-declared task, path, and explicit-module inputs"
       ]
     },
     {
@@ -123,7 +143,7 @@
       "terms": [
         "Do not perform",
         "hidden semantic relevance scoring",
-        "Every loaded module must be traceable"
+        "Routing is deterministic for the supplied canonical task, touched paths, and explicit rule/profile/area inputs"
       ]
     },
     {

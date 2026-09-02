@@ -8,7 +8,7 @@ It stores memory as plain Markdown in your repo and routes a bounded context pac
 
 **Durable memory. Minimal context.**
 
-[![Version](https://img.shields.io/badge/version-0.10.0-blue.svg)](https://github.com/waittim/MemoryCustodian/releases/latest)
+[![Version](https://img.shields.io/badge/version-0.11.0-blue.svg)](https://github.com/waittim/MemoryCustodian/releases/latest)
 [![CI](https://github.com/waittim/MemoryCustodian/actions/workflows/ci.yml/badge.svg)](https://github.com/waittim/MemoryCustodian/actions/workflows/ci.yml)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
@@ -106,8 +106,8 @@ MemoryCustodian turns project memory into a small, explicit workflow:
 3. **Optional memory stays opt-in.** `rules/`, `profiles/`, `areas/`, and `archive/` remain out of the default context until they are explicitly relevant.
 4. **Updates are scoped.** Cross-cutting decisions stay at root; subsystem knowledge lives in matched `areas/` files and loads only for relevant work.
 5. **Maintenance is guarded.** The CLI checks budgets and structure deterministically, while semantic review preserves active invariants before decision history is archived.
-6. **Active memory is evidence-backed.** Protocol 0.6 gives formal entries stable IDs and requires user confirmation or a project source; unconfirmed agent observations stay candidates in `inbox.md`.
-7. **Concurrent mutation is explicit.** Every writer uses one bootstrap-to-project guard outside the repository; Protocol 0.5 compatibility writes remain format-compatible but are serialized, and preview-first Protocol 0.6 commands reject stale Plan IDs.
+6. **Active memory is evidence-backed.** Protocol 0.7 gives formal entries stable IDs and requires user confirmation or a project source; unconfirmed agent observations stay candidates in `inbox.md`.
+7. **Concurrent mutation is explicit.** Every writer uses one bootstrap-to-project guard outside the repository; legacy compatibility writes remain format-compatible but are serialized, and preview-first Protocol 0.7 commands reject stale Plan IDs.
 8. **Conflict identity is structural.** Managed decisions, constraints, and rejected approaches reference a stable Subject ID and controlled Facet; display names and aliases are not conflict keys.
 
 The result is project memory that is inspectable, diffable, portable across agents, and small enough to use in normal coding loops.
@@ -243,15 +243,37 @@ The examples below use the `memory-custodian` console script. From a source chec
 Inspect a context pack:
 
 ```bash
-memory-custodian read --task planning
-memory-custodian read --task implementation
-memory-custodian read --task artifact
+memory-custodian read --task implementation \
+  --path cli/memory_custodian/read.py --explain
+memory-custodian read --task implementation --strict-routing \
+  --path cli/memory_custodian/read.py
+memory-custodian read --task artifact --rule output --profile docs
+memory-custodian read --task implementation --no-local
 ```
 
-Routing is deterministic for the supplied canonical task and explicit `--profile`/`--area` inputs. The manifest is
-the only shared runtime route source; the CLI does not score arbitrary task text with keywords, embeddings, semantic
-similarity, or an LLM. The agent still chooses the canonical task category, and v0.10 does not provide a complete
-explanation for every excluded module; that trace is reserved for v0.11.
+The manifest routes a bounded context pack from explicit task and scope inputs. For the same manifest, canonical
+task, paths, and explicit modules, routing is deterministic and inspectable. The CLI does not score task prose with
+keywords, embeddings, semantic similarity, or an LLM, and path matching does not prove semantic relevance.
+
+Canonical tasks are `general`, `planning`, `implementation`, `artifact`, `preferences`, `history`, and
+`maintenance`. Generated manifests load `brief.md` plus root `constraints.md` as the project-wide safety baseline.
+Rules activate through declared canonical tasks or explicit `--rule`; profiles are explicit-only; areas activate
+through declared POSIX path globs or explicit `--area`. Enable a matched area with:
+
+```bash
+memory-custodian enable area/backend --path 'cli/**' --path 'tests/**/*.py'
+```
+
+`read --explain` assigns every enabled module one disposition and a stable reason code, while separately listing
+whole entries omitted by budgets. If a substantial task has path-routed areas but supplies neither paths nor an
+explicit area, routing is `INCOMPLETE`. Ordinary inspection may show the safety baseline; `--strict-routing` rejects
+the pack for substantial work. Ordinary `INCOMPLETE` inspection exits successfully with a structured warning;
+strict `INCOMPLETE` exits nonzero. `AMBIGUOUS` and `INVALID` fail rather than falling back to natural-language
+guessing, and invalid inputs are rendered through the same disposition/reason model instead of bypassing it with
+an unstructured parser error. Explain also makes the normal-context exclusion of inbox candidates and archives
+explicit. Protocol 0.7 routing schema 1 defines no exclusivity metadata. `AMBIGUOUS` remains a reserved result for a
+future versioned policy or documented compatibility mapping; `exclusive-group` and every other unknown
+optional-module key are `INVALID` in Protocol 0.7.
 
 Record durable memory when a decision, constraint, preference, or rejected approach should survive the current chat:
 
@@ -286,7 +308,7 @@ Enable optional memory only when it becomes useful:
 memory-custodian enable preferences
 memory-custodian enable rules/output
 memory-custodian enable profile/git
-memory-custodian enable area/frontend
+memory-custodian enable area/frontend --path 'frontend/**'
 ```
 
 Enabling an optional module never overwrites an existing module file.
@@ -298,29 +320,58 @@ memory-custodian status
 memory-custodian check
 memory-custodian check --privacy
 memory-custodian check --security
+memory-custodian check --routing
+memory-custodian check --reachability
+memory-custodian check --freshness
+memory-custodian check --conflicts
+memory-custodian check --conflicts --merge-base origin/main
 memory-custodian compact
 memory-custodian migrate
+memory-custodian list --status active
+memory-custodian show MC-CON-...
+memory-custodian forget --id MC-DNU-...
+memory-custodian exception add MC-CON-20260801-a1b2c3d4 --to MC-CON-20260801-e5f6a7b8
+memory-custodian exception remove MC-CON-20260801-a1b2c3d4
+memory-custodian reconcile preview --entry MC-CON-... --entry MC-CON-... --resolution distinct --title "Distinct invariants" --evidence user-confirmed
 ```
 
-Protocol 0.6 formal entries use stable IDs such as `MC-DEC-20260728-a1b2c3d4`. Active writes require Evidence;
+Protocol 0.7 uses Entry schema version 2 and Subject schema version 1. Formal entries use stable IDs such as
+`MC-DEC-20260728-a1b2c3d4`; active writes require Evidence;
 `agent-observed` and `conversation-unconfirmed` can create only candidates, which normal task context never loads.
 Managed active decisions, constraints, and rejected approaches also reference a stable `MC-SUBJ` identity and a
 controlled Facet. `subjects.md` is shared protocol metadata, not normal task context. Exact normalized alias and
 Canonical-Ref collisions are rejected, as is a second active owner for the same Scope+Subject+Facet. Renaming a
-Subject preserves its ID. v0.10 does not infer that different names are semantically equivalent and does not
+Subject preserves its ID. v0.11 does not infer that different names are semantically equivalent and does not
 automatically resolve Subjects created independently on different branches.
-Protocol 0.6 permits the full canonical Facet vocabulary for every managed entry type; the explicit compatibility
-matrix is an extension boundary, not a claim that v0.10 imposes narrower type-specific exclusions.
+The full canonical Facet vocabulary remains available for every managed entry type; the explicit compatibility
+matrix is an extension boundary, not a claim that v0.11 imposes narrower type-specific exclusions.
 Legacy 0.5 prose and bullets remain readable after conservative migration and are reported as legacy coverage rather
 than silently rewritten. Migration assigns a random UUIDv4 once, persists it outside the repository between preview
 and apply, and also upgrades clearly structured decisions in enabled `areas/*.md` files.
 
+Entry schema versions are scoped by the `protocol_version` tuple. Protocol 0.7/schema 1 was publicly available on
+the `0.11.0` branch and is therefore a distributed legacy format, even without a formal release tag. CLI `0.11.0`
+or newer reads schema 1 with its original literal-body semantics, reports migration availability, and migrates to the
+current Protocol 0.7/schema 2 grammar. Schema 2 uses the explicit `memory-custodian-body-v1` wrapper for ambiguous
+body lines; strict reads/checks/conflicts/writers must not treat schema 1 as current or silently decode its manual
+wrapper. The minimum supported writer is the schema-2-capable `0.11.0` build (the pre-wrapper public `0.11.0`
+branch remains schema-1-only); that legacy CLI must be upgraded before migration and cannot safely decode schema-2
+wrapper output. Newer builds must expose the same schema-2 grammar. The independent local overlay
+topology remains `local_overlay_schema_version: 1`, while local Entry body decoding follows the shared manifest's Entry
+schema. Bound local files are included in the same schema-1-to-2 preview/apply; an unbound, multi-root, or REVIEW local
+overlay blocks the shared flip until it is explicitly bound or repaired.
+
 `forget`, `compact`, `migrate`, and destructive replacement are preview-first. The preview prints repo-relative
 target files, operations, warnings, blockers, and a Plan ID. Ordinary plans include base/output digests; hard and
 purge plans keep raw arguments, paths, blockers, and digests in the private execution representation and redact
-matching sensitive topic text from public output. Protocol 0.6 apply requires
+matching sensitive topic text from public output. Protocol 0.7 apply requires
 `--confirm-plan <PLAN_ID>` and rechecks the plan under the project mutation lock; an intervening edit refuses all
 writes. Short topics and plans matching multiple semantic units additionally require `forget --allow-broad-match`.
+The locked rebuild is the authoritative forget result for both current and compatibility protocols: newly introduced
+blockers or broad-match risk stop apply before any write. Soft-forget guards use the shared Entry serializer, are
+idempotent when the single existing guard has the same case-insensitive topic identity, and block on duplicate or
+conflicting ID owners anywhere in shared storage. A zero-write repeat reports a no-op rather than removal. Topic-bearing
+changelog records remain one Markdown unit even when the literal topic spans lines.
 
 Private locks and preview seeds live outside the repository in directories restricted to the current user. State
 directories are forced to mode `0700` and regular files to `0600` on POSIX; symlink or non-regular state targets are
@@ -335,7 +386,133 @@ Hard forget removes matching active managed memory and replaces matching topic-b
 redacted guard. Purge additionally searches managed `archive/` content and removes matching guards. Every preview
 states the selected managed scope and explicitly reports that Git history, clones, forks, backups, and caches are not
 modified or revoked. Forgetting controls what future agents receive through MemoryCustodian; it is not repository-wide
-erasure.
+erasure. A generic hard-erasure `MC-TOMB` is a content-minimized governance guard, not a Subject/Facet structural
+owner. `forget --id` selects only the canonical unit whose heading owns that ID; live entries and reconciliation
+records that reference the selected entry become blockers and are never removed as incidental substring matches. `--history-check`
+optionally inspects reachable history in the current local Git repository without
+changing it. `unavailable` is not a PASS, and `no-reachable-copy-detected` is limited evidence—not proof that no
+copy exists in other refs, remotes, clones, forks, backups, caches, or dangling objects.
+
+## Shared and Local Memory
+
+Personal output preferences and machine workflows can live outside the repository under the private state root.
+Use `memory-custodian local enable`, then explicitly bind the normalized repository root with `local link`. A copied
+repository sharing the public `project_id` is `UNBOUND` and cannot read an existing overlay. `--no-local` renders a
+reproducible shared-only pack.
+
+Shared constraints and tombstones outrank shared decisions/rules, which outrank local preferences/profiles. Local
+memory cannot redefine shared routes, override hard memory, grant authority, or serve as a secret store. Protocol
+0.7 `local reset` is preview-only and describes only the current machine/current project overlay; transactional
+apply requires Protocol 0.8 and never claims to affect other machines or backups.
+
+## Structural Conflicts and Reconciliation
+
+`check --conflicts` detects exact `Scope + Subject ID + Facet` duplicate owners, Canonical-Ref and alias collisions,
+invalid Subjects, broken `Exception-To`, and inconsistent reconciliation records. A project/area overlap without an
+explicit exception is REVIEW; a deterministic duplicate owner is CONFLICT. `read` shows the matched-context status,
+and strict substantial reads refuse unresolved conflicts.
+
+Subject registry syntax or schema failures use the dedicated `MC-CONFLICT-010 INVALID` finding. The stable
+collision/reference findings remain distinct: `MC-CONFLICT-003` is duplicate Canonical-Ref, `MC-CONFLICT-004` is
+alias ownership by multiple active Subjects, and `MC-CONFLICT-005` is a missing, inactive, merged, or
+non-reciprocal Subject reference.
+
+Reconciliation records use a strict canonical parser: malformed headings, duplicate fields or blocks, unknown
+fields, unsorted/duplicate Entry IDs, invalid Evidence, duplicate record IDs, and inconsistent relations are
+`MC-CONFLICT-008 INVALID` rather than silently ignored. Relationship resolutions (`superseded`, `exception`, and
+`subject-merged`) acknowledge exactly two Entry IDs. A multi-entry `distinct` record acknowledges only pairwise
+different active `Scope + Subject + Facet` identities; it cannot waive an exact structural-owner conflict.
+Conflict analysis, reconciliation validation, and governance previews share the same active structural-operand
+checks for scope, uniquely resolved active Subject, and canonical Facet.
+`superseded` additionally requires a structurally valid active replacement with the same identity as the historical
+entry. `subject-merged` permits a superseded historical source to retain its merged Subject, but requires a
+structurally valid active target with matching Scope and Facet. Promoted provisional identity is not part of the
+Protocol 0.7 reconciliation contract.
+
+`exception add` and `exception remove` provide stable, blocker-aware `Exception-To` previews. `reconcile preview`
+renders a canonical record, complete entry inventory, relation-consistency blockers, and stable Plan ID. These are
+read-only Protocol 0.7 workflows: cross-file apply still requires the Protocol 0.8 transaction journal. They reject
+older/newer protocols, duplicate Protocol H2 sections, empty or malformed protocol scalars, duplicate protocol
+fields, and missing or mismatched Entry, Subject, routing, or conflict schema metadata. Exception removal only
+predicts the resulting overlap review after the current relation passes all blockers. Their Plan IDs
+bind the manifest plus every Entry, registry, and reconciliation dependency used to render the preview, so the
+identifier changes whenever its observable decision state changes.
+The same strict Protocol metadata parser gates `read --strict-routing`, `check --routing`, and governance previews;
+one manifest cannot be valid in routing while invalid in governance.
+Legacy fallback applies only when no heading-level `MemoryCustodian Protocol` marker exists. Wrong heading levels,
+missing heading whitespace, extra malformed heading traces, duplicate sections, and malformed metadata are INVALID.
+The canonical current version is exactly `protocol_version: 0.7`; numerically equivalent spellings such as `0.7.0`
+and unsupported future versions are INVALID across routing, checks, governance, and writers. The shared mutation guard applies
+the same compatibility-aware preflight before ordinary writers acquire the project lock or change files; only
+explicit migrate/init-repair recovery paths may bypass incomplete-input contract checks. A present section always
+requires a valid `protocol_version`; Protocol 0.7 additionally requires its schema, registry, project identity, and
+policy metadata. Recovery candidates must satisfy the complete strict contract before preview or apply, so ambiguous
+sections require manual repair. Single-line HTML comments and unknown well-formed metadata remain preservable.
+Subject, supersede, forget, compact, promotion, replacement, local-overlay, status, and focused diagnostic entrypoints
+run the same contract preflight before reading business operands, creating local seeds, or printing a Plan ID.
+Malformed migration input is rejected before pending project or Entry identity is persisted.
+The current-project preflight combines strict Protocol metadata with deterministic route validation. Unsafe or
+malformed routes therefore block ordinary writers, focused diagnostics, and recovery candidates. Protocol heading
+recognition uses a deliberately finite lexical contract: standalone HTML comments and valid closed fences are inert;
+code spans cannot start comment state; backtick-fence info cannot contain backticks; ambiguous or unclosed constructs
+fail closed. Setext, attached-hash, and indented-code lookalikes cannot act as the canonical H2. Canonical task H3
+routes must live under exactly one `Load by task` H2. The Optional module index is unique, its three canonical H3
+subsections cannot repeat, declarations cannot precede them, and `- None enabled.` cannot coexist with declarations.
+Repo-external overlay reads require the same validated project identity.
+Promotion previews render and validate the prospective active Entry, including Candidate-Type, area `MC-AREA`
+identity/storage, promotion relations, and any Optional-index mutation. Their Plan IDs bind the target file's
+existence and content as well as the candidate and manifest. Subject-merge previews validate their structural
+operands and bind the exact Entry/Subject text they render. Local reset reports no plan for a disabled overlay,
+blocks unbound or multi-root state, and binds local file
+and root-binding digests when a plan is meaningful.
+Its private-state inventory records directories and traversal failures, validates the project-id and `local/`
+directories as real owner-only `0700` paths, and hashes owner-only `0600` regular files through no-follow descriptors,
+so symlinks, permissive modes, corrupt metadata, and corrupt UTF-8 state produce blocker-aware plans without loading
+local content. Local manifest scalars are canonical and unique, bindings reject duplicate JSON keys and must carry
+the matching project identity, and the required manifest/preferences/profiles scaffold cannot be omitted. Multi-root
+`REVIEW` overlays remain diagnostic-only: writes, context loading, and explicit `list/show --local` indexing require
+`BOUND`, while security/privacy diagnostics still scan safely validated REVIEW modules. Binding roots must be unique,
+absolute normalized paths; explicit link replaces one stale nonexistent root after a project move but preserves REVIEW
+when multiple real roots coexist. Orphan bindings are corrupt REVIEW state included in reset inventory. Formal local
+Entries use the shared schema/Evidence contract plus local-only storage and Scope rules.
+Migration derives operands only from normalized declarations, checks containment inside the memory directory, and
+snapshots all text operands before persisting preview seeds.
+
+Entry bodies are serialized so column-zero field-like lines and `##` headings remain body text rather than becoming
+protocol fields or additional Entries. In the current schema-2 grammar, plain bodies preserve source whitespace while
+ambiguous column-zero lines use the explicit standard-Markdown `memory-custodian-body-v1` fenced form; the schema-2
+parser removes that versioned wrapper. A schema-1 parser does not decode that marker: it treats the complete manual
+wrapper as literal body text until migration. Both schemas treat legacy `&#8283;` text as ordinary content. Active,
+candidate, local, and migrated Entry output requires a
+non-empty typed body and is parse-checked before writing. Protocol 0.5 bullet compatibility writes indent every
+continuation line so one CLI input remains one semantic unit. Subject titles and aliases are canonical non-empty single lines and rendered Subjects must round-trip as active,
+non-merged records, so raw CLI text cannot apply deferred governance relations.
+Mixed compatibility files use one ordered semantic-unit grammar: H2 Entries and top-level legacy bullets remain
+separate, while protocol list fields such as Evidence remain inside their owner. Forget, compaction, indexing, and
+budget packing consume those same boundaries. New structured units are inserted before the first existing semantic
+unit, after file-level explanatory prose. Candidate Promotion-Requirement bodies are unique and non-empty.
+Subject, hard-forget Tombstone, and migration-generated IDs are rechecked against current and same-plan owners every
+time their plan is built, including the build performed under the mutation lock.
+
+Supersession admission validates the touched source Entry before planning and preserves the complete
+`Scope + Subject + Facet` identity. The shared relation audit requires unique targets and an acyclic successor graph
+terminating at an active replacement. Promotion audit validates both directions, source/target lifecycle,
+Candidate-Type, Scope, and provisional Subject/Facet through the same relation checker used by freshness. Freshness
+also reports invalid Exception-To and active references to merged Subjects. Protocol 0.7 local Entries are active-only and cannot declare Exception-To,
+supersession, promotion, or other governance relations. Entry IDs remain unique across shared and local storage.
+Promotion validates Scope and target containment before target filesystem access, checks generated IDs against
+archive as well as active storage, and performs an anchored lifecycle transition. Cycle diagnostics retain actual
+successor edge order.
+
+When Git is available, `check --conflicts --merge-base <ref>` compares semantic units changed on both sides. It
+distinguishes deterministic collisions from concurrent hard-memory changes requiring semantic reconciliation.
+Short files and timestamps improve reviewability but do not resolve contradictions or establish precedence.
+Merge review revalidates reconciliation syntax, referenced Entry IDs, and resolution relations independently in
+each Git revision. Invalid target-branch records cannot suppress REVIEW, and acknowledgements inherited unchanged
+from the merge base do not waive later concurrent changes. Explicit supersede, exception, `distinct`
+reconciliation, and Subject merge inventory are auditable. Protocol 0.7
+does not apply Subject merges, reconciliation acknowledgements, Exception-To mutations, or multi-file promotions;
+those transactions require the Protocol 0.8 journal.
 Decision archival additionally requires semantic review and explicit confirmation with `compact --target decisions.md --apply --archive-oldest`.
 Plain `check` reports redacted privacy/security finding counts; use `check --privacy` or `check --security` to show
 redacted file and line locations.
@@ -388,7 +565,7 @@ MemoryCustodian tracks three related versions:
 - Project memory version: the protocol metadata recorded in each initialized project
 
 `memory-custodian check` reports old or missing protocol metadata. Preview `memory-custodian migrate`, then apply
-Protocol 0.6 migration with `memory-custodian migrate --apply --confirm-plan <PLAN_ID>` without requiring network
+the Protocol 0.6-to-0.7 migration with `memory-custodian migrate --apply --confirm-plan <PLAN_ID>` without requiring network
 access. Migration preserves custom routes, budgets, optional modules, archive content, and legacy freeform units.
 
 See [RELEASE-NOTES.md](RELEASE-NOTES.md) for recent changes.

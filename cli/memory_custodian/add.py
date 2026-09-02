@@ -6,15 +6,22 @@ from pathlib import Path
 import hashlib
 
 from .entries import (
+    LEGACY_ENTRY_SCHEMA_VERSION,
     generate_entry_id,
+    line_safe_markdown_body,
     memory_entry_ids,
     parse_structured_entries,
     render_active_entry,
     render_candidate_entry,
+    render_markdown_bullet,
+    structured_entry_schema_issues,
+    structured_entry_storage_issues,
+    structured_relation_issues,
     supersede_entry,
     validate_evidence,
     validate_scope,
 )
+from .local_overlay import LocalStatus, inspect_overlay
 from .locking import (
     create_private_file,
     discard_private_file,
@@ -24,20 +31,22 @@ from .locking import (
 from .mutations import TextMutation, apply_mutations
 from .plans import MutationPlan, digest_path, pending_plan_directory, print_plan
 from .protocol import (
+    CURRENT_ENTRY_SCHEMA_VERSION,
     CURRENT_PROTOCOL_VERSION,
     DECISION_ENTRY_BUDGET,
-    appended_text,
     budget_for,
     budget_state,
     changelog_text,
     compare_versions,
+    entry_schema_version_for_manifest,
     estimate_tokens,
     is_indexable_optional_path,
     is_safe_memory_name,
     manifest_with_optional_module_index,
+    manifest_contract_metadata,
+    managed_markdown_files,
     prepended_text,
-    project_id_from_manifest,
-    protocol_metadata,
+    read_managed_text,
     resolve_memory_dir,
     resolve_project_root,
     today,
@@ -72,19 +81,32 @@ def _title(message: str) -> str:
 
 
 def _legacy_entry(kind: str, message: str, reason: str | None) -> str:
+    safe_message = line_safe_markdown_body(
+        message,
+        entry_schema_version=LEGACY_ENTRY_SCHEMA_VERSION,
+    )
+    safe_reason = (
+        line_safe_markdown_body(
+            reason,
+            entry_schema_version=LEGACY_ENTRY_SCHEMA_VERSION,
+        )
+        if reason else None
+    )
     if kind == "decision":
-        body = f"## {today()} - {_title(message)}\nDecision:\n{message}"
-        return body + (f"\nReason:\n{reason}" if reason else "")
+        body = f"## {today()} - {_title(message)}\nDecision:\n{safe_message}"
+        return body + (f"\nReason:\n{safe_reason}" if safe_reason else "")
     if kind in {"constraint", "preference", "rule", "profile", "area"}:
-        return f"- {message}"
+        return render_markdown_bullet(message)
     if kind in {"tombstone", "do-not-use"}:
-        return f"## Tombstone: {_title(message)}\n{message}" + (f"\nReason:\n{reason}" if reason else "")
-    return f"## {today()}\n- {message}"
+        return f"## Tombstone: {_title(message)}\n{safe_message}" + (f"\nReason:\n{safe_reason}" if safe_reason else "")
+    return f"## {today()}\n- {safe_message}"
 
 
-def _initial_target_text(path: Path, kind: str, name: str | None, area: str | None = None) -> str:
+def _initial_target_text(
+    memory_dir: Path, path: Path, kind: str, name: str | None, area: str | None = None
+) -> str:
     if path.exists():
-        return path.read_text(encoding="utf-8")
+        return read_managed_text(memory_dir, path)
     if area:
         return render_area_template(area, today())
     if kind == "rule" and name:
@@ -113,16 +135,18 @@ def _target(args) -> tuple[str, str]:
             raise ValueError(f"--name is required when --type is {kind}")
         if not is_safe_memory_name(args.name):
             raise ValueError(f"Invalid {kind} name: {args.name}")
+        if args.name.casefold() == "readme":
+            raise ValueError("README.md is reserved documentation, not a managed module")
         folder = "rules" if kind == "rule" else f"{kind}s"
         return f"{folder}/{args.name}.md", f"area:{args.name}" if kind == "area" else "project"
     return TARGETS[kind], "project"
 
 
-def _report_budget(path: Path, target: str) -> None:
+def _report_budget(memory_dir: Path, path: Path, target: str) -> None:
     budget = budget_for(target)
     if budget is None:
         return
-    tokens = estimate_tokens(path.read_text(encoding="utf-8"))
+    tokens = estimate_tokens(read_managed_text(memory_dir, path))
     state = budget_state(tokens, budget)
     print(f"Budget: {target} {tokens}/{budget} tokens")
     print(f"State: {state}")
@@ -149,13 +173,25 @@ def _report_budget(path: Path, target: str) -> None:
             print("Next: consolidate or relocate scoped decisions before considering age-based archival.")
 
 
-def _find_entry(memory_dir: Path, entry_id: str):
+def _find_entry(
+    memory_dir: Path,
+    entry_id: str,
+    *,
+    entry_schema_version: str = CURRENT_ENTRY_SCHEMA_VERSION,
+):
     matches = []
-    for path in memory_dir.rglob("*.md"):
-        if path.relative_to(memory_dir).as_posix().startswith("archive/"):
+    for path in managed_markdown_files(memory_dir):
+        if (
+            path.relative_to(memory_dir).as_posix().startswith("archive/")
+            or path.name.casefold() == "readme.md"
+        ):
             continue
         matches.extend(
-            entry for entry in parse_structured_entries(path, path.read_text(encoding="utf-8"))
+            entry for entry in parse_structured_entries(
+                path,
+                read_managed_text(memory_dir, path),
+                entry_schema_version=entry_schema_version,
+            )
             if entry.entry_id.casefold() == entry_id.casefold()
         )
     if not matches:
@@ -167,22 +203,59 @@ def _find_entry(memory_dir: Path, entry_id: str):
 
 def _validate_subject_and_conflict(
     args,
+    project_root: Path,
     memory_dir: Path,
     *,
     kind: str,
     scope: str,
     candidate: bool,
+    entry_schema_version: str = CURRENT_ENTRY_SCHEMA_VERSION,
 ) -> tuple[str | None, str | None]:
     subject_id = args.subject.strip() if args.subject else None
     facet = args.facet.strip().casefold() if args.facet else None
     required = subject_required(kind, candidate=candidate, area=args.area)
     if required and (not subject_id or not facet):
         raise ValueError(
-            f"Protocol 0.6 active {kind} memory requires both --subject MC-SUBJ-... and --facet."
+            f"Protocol 0.7 active {kind} memory requires both --subject MC-SUBJ-... and --facet."
         )
     if bool(subject_id) != bool(facet):
         raise ValueError("--subject and --facet must be supplied together.")
+    old = None
+    if args.supersedes:
+        old = _find_entry(
+            memory_dir,
+            args.supersedes,
+            entry_schema_version=entry_schema_version,
+        )
+        old_relative = old.path.relative_to(memory_dir).as_posix()
+        operand_issues = [
+            *structured_entry_schema_issues(old, old_relative),
+            *structured_entry_storage_issues(old, old_relative),
+        ]
+        try:
+            validate_evidence(old.evidence, project_root, allow_internal=True)
+        except ValueError as exc:
+            operand_issues.append(str(exc))
+        if operand_issues:
+            raise ValueError(
+                f"Superseded Entry {old.entry_id} is structurally invalid: "
+                + "; ".join(sorted(set(operand_issues)))
+            )
+        if old.status != "active":
+            replacement = old.fields.get("Superseded-By")
+            raise ValueError(
+                f"Entry {old.entry_id} is already {old.status}"
+                + (f" and was replaced by {replacement}" if replacement else "")
+            )
+        if old.scope.casefold() != scope.casefold():
+            raise ValueError("--supersedes must retain the old entry's Scope.")
     if not subject_id:
+        if old is not None and (
+            old.fields.get("Subject", "") or old.fields.get("Facet", "")
+        ):
+            raise ValueError(
+                "--supersedes must retain the old entry's Subject and Facet identity."
+            )
         return None, None
     if not SUBJECT_ID_RE.fullmatch(subject_id):
         raise ValueError(f"Invalid Subject ID: {subject_id}")
@@ -195,11 +268,15 @@ def _validate_subject_and_conflict(
         return subject.subject_id, normalized_facet
 
     owner = None
-    for path in sorted(memory_dir.rglob("*.md")):
+    for path in managed_markdown_files(memory_dir):
         relative = path.relative_to(memory_dir).as_posix()
         if relative.startswith("archive/") or relative in {"subjects.md", "inbox.md"}:
             continue
-        for entry in parse_structured_entries(path, path.read_text(encoding="utf-8")):
+        for entry in parse_structured_entries(
+            path,
+            read_managed_text(memory_dir, path),
+            entry_schema_version=entry_schema_version,
+        ):
             if (
                 entry.status == "active"
                 and entry.scope.casefold() == scope.casefold()
@@ -217,24 +294,24 @@ def _validate_subject_and_conflict(
             "Use --supersedes, adjust Scope, or review the Subject."
         )
     if args.supersedes:
-        old = _find_entry(memory_dir, args.supersedes)
+        assert old is not None
         old_subject = old.fields.get("Subject")
         old_facet = old.fields.get("Facet")
-        if old.status != "active":
-            replacement = old.fields.get("Superseded-By")
-            raise ValueError(
-                f"Entry {old.entry_id} is already {old.status}"
-                + (f" and was replaced by {replacement}" if replacement else "")
-            )
-        if old_subject and old_subject.casefold() != subject.subject_id.casefold():
+        if (old_subject or "").casefold() != subject.subject_id.casefold():
             raise ValueError("--supersedes must retain the old entry's Subject identity.")
-        if old_facet and old_facet.casefold() != normalized_facet:
+        if (old_facet or "").casefold() != normalized_facet:
             raise ValueError("--supersedes must retain the old entry's Facet.")
     return subject.subject_id, normalized_facet
 
 
 def _build_mutations(
-    args, project_root: Path, memory_dir: Path, protocol_06: bool, *, fixed_id: str | None = None
+    args,
+    project_root: Path,
+    memory_dir: Path,
+    protocol_06: bool,
+    *,
+    fixed_id: str | None = None,
+    entry_schema_version: str = CURRENT_ENTRY_SCHEMA_VERSION,
 ) -> tuple[list[TextMutation], str, str]:
     kind = args.type
     target, scope = _target(args)
@@ -254,12 +331,35 @@ def _build_mutations(
             allow_missing=args.allow_missing_evidence,
         )
         ids = memory_entry_ids(memory_dir)
+        metadata = manifest_contract_metadata(
+            read_managed_text(memory_dir, memory_dir / "manifest.md")
+        )
+        overlay = inspect_overlay(
+            project_root,
+            metadata["project_id"],
+            shared_ids=ids,
+            entry_schema_version=entry_schema_version,
+        )
+        if overlay.status == LocalStatus.REVIEW:
+            detail = "; ".join(overlay.warnings) or "local overlay requires review"
+            raise ValueError(
+                "Cannot allocate a shared Entry ID while local overlay integrity is unresolved: "
+                + detail
+            )
+        if overlay.status == LocalStatus.BOUND:
+            # ``inspect_overlay`` captured each module with the manifest's
+            # Entry grammar.  Reserve IDs from that same parsed view instead
+            # of reopening private files with a schema-agnostic heading scan.
+            for captured in overlay.captured_modules:
+                ids.update(entry.entry_id for entry in captured.entries)
         subject_id, facet = _validate_subject_and_conflict(
             args,
+            project_root,
             memory_dir,
             kind=kind,
             scope=scope,
             candidate=candidate,
+            entry_schema_version=entry_schema_version,
         )
         id_kind = (
             "inbox"
@@ -296,24 +396,43 @@ def _build_mutations(
         )
 
     target_path = memory_dir / target
-    original = _initial_target_text(target_path, kind, args.name, args.area)
+    original = _initial_target_text(memory_dir, target_path, kind, args.name, args.area)
     updated = prepended_text(
         original, entry, remove_lines=("No unprocessed memory candidates.",) if candidate else ()
     )
     mutations = [TextMutation(target_path, updated)]
     if args.supersedes:
-        old = _find_entry(memory_dir, args.supersedes)
+        old = _find_entry(
+            memory_dir,
+            args.supersedes,
+            entry_schema_version=entry_schema_version,
+        )
         if old.path == target_path:
-            mutations[0] = TextMutation(target_path, supersede_entry(updated, old.entry_id, new_id))
+            mutations[0] = TextMutation(
+                target_path,
+                supersede_entry(
+                    updated,
+                    old.entry_id,
+                    new_id,
+                    relative_path=target,
+                    entry_schema_version=entry_schema_version,
+                ),
+            )
         else:
             mutations.append(
-                TextMutation(old.path, supersede_entry(old.path.read_text(encoding="utf-8"), old.entry_id, new_id))
+                TextMutation(old.path, supersede_entry(
+                    read_managed_text(memory_dir, old.path),
+                    old.entry_id,
+                    new_id,
+                    relative_path=old.path.relative_to(memory_dir).as_posix(),
+                    entry_schema_version=entry_schema_version,
+                ))
             )
 
     manifest_path = memory_dir / "manifest.md"
     if is_indexable_optional_path(target):
         manifest_updated, indexed = manifest_with_optional_module_index(
-            manifest_path.read_text(encoding="utf-8"), target
+            read_managed_text(memory_dir, manifest_path), target
         )
         if indexed:
             mutations.append(TextMutation(manifest_path, manifest_updated))
@@ -322,9 +441,29 @@ def _build_mutations(
         mutations.append(
             TextMutation(
                 changelog,
-                changelog_text(changelog.read_text(encoding="utf-8"), f"Added {kind} memory to {target}."),
+                changelog_text(read_managed_text(memory_dir, changelog), f"Added {kind} memory to {target}."),
             )
         )
+    if args.supersedes:
+        resulting: list = []
+        for mutation in mutations:
+            if mutation.path.suffix.casefold() != ".md":
+                continue
+            resulting.extend(
+                entry
+                for entry in parse_structured_entries(
+                    mutation.path,
+                    mutation.text,
+                    entry_schema_version=entry_schema_version,
+                )
+                if entry.entry_id.casefold() in {
+                    args.supersedes.casefold(), new_id.casefold()
+                }
+            )
+        relation_issues = structured_relation_issues(resulting)
+        if len(resulting) != 2 or relation_issues:
+            detail = "; ".join(relation_issues) or "resulting pair did not resolve exactly once"
+            raise ValueError(f"Supersession result is invalid: {detail}")
     return mutations, target, new_id
 
 
@@ -340,8 +479,11 @@ def _supersede_fingerprint(args, project_id: str, memory_dir: Path) -> str:
         args.facet or "",
         *args.evidence,
     ]
-    for path in sorted(memory_dir.rglob("*.md")):
-        if not path.relative_to(memory_dir).as_posix().startswith("archive/"):
+    for path in managed_markdown_files(memory_dir):
+        if (
+            not path.relative_to(memory_dir).as_posix().startswith("archive/")
+            and path.name.casefold() != "readme.md"
+        ):
             values.extend([str(path.relative_to(memory_dir)), digest_path(path)])
     return hashlib.sha256("\0".join(values).encode("utf-8")).hexdigest()[:24]
 
@@ -358,7 +500,13 @@ def run(args) -> int:
     manifest_path = memory_dir / "manifest.md"
     if not manifest_path.exists():
         raise ValueError("manifest.md is missing; the MemoryCustodian setup is incomplete or corrupted")
-    metadata = protocol_metadata(manifest_path.read_text(encoding="utf-8"))
+    metadata = manifest_contract_metadata(
+        read_managed_text(memory_dir, manifest_path),
+        allow_missing_section=True,
+    )
+    entry_schema_version = entry_schema_version_for_manifest(
+        read_managed_text(memory_dir, manifest_path)
+    )
     comparison = compare_versions(metadata.get("protocol_version", "0.5"), CURRENT_PROTOCOL_VERSION)
     if comparison is None:
         raise ValueError("Project manifest has an invalid protocol version.")
@@ -366,7 +514,7 @@ def run(args) -> int:
     if comparison > 0:
         raise ValueError("Project protocol is newer than this CLI supports.")
     if not protocol_06:
-        print("Migration available: Protocol 0.5 compatibility write; migrate to 0.6 for evidence admission and locking.")
+        print("Migration available: legacy compatibility write; migrate to 0.7 for current governance.")
         with project_mutation_guard(
             project_root,
             manifest_path,
@@ -375,7 +523,10 @@ def run(args) -> int:
             break_stale=args.break_stale_lock,
             allow_legacy=True,
         ) as guard:
-            current_metadata = protocol_metadata(guard.manifest_text or "")
+            current_metadata = manifest_contract_metadata(
+                guard.manifest_text or "",
+                allow_missing_section=True,
+            )
             current_comparison = compare_versions(
                 current_metadata.get("protocol_version", "0.5"),
                 CURRENT_PROTOCOL_VERSION,
@@ -386,8 +537,8 @@ def run(args) -> int:
                 )
             if current_comparison == 0:
                 raise ValueError(
-                    "Project migrated to Protocol 0.6 before the compatibility write; "
-                    "re-run add with Protocol 0.6 Evidence."
+                    "Project migrated to Protocol 0.7 before the compatibility write; "
+                    "re-run add with Protocol 0.7 Evidence."
                 )
             if current_comparison > 0:
                 raise ValueError(
@@ -400,6 +551,7 @@ def run(args) -> int:
                     project_root,
                     memory_dir,
                     False,
+                    entry_schema_version=entry_schema_version,
                 )
             except DecisionBudgetError as exc:
                 print(f"Decision entry budget: over/{DECISION_ENTRY_BUDGET} tokens")
@@ -407,14 +559,18 @@ def run(args) -> int:
                 return 1
             apply_mutations(mutations)
     else:
-        project_id = project_id_from_manifest(manifest_path.read_text(encoding="utf-8"))
-        assert project_id is not None
+        project_id = metadata["project_id"]
         if args.supersedes:
             fingerprint = _supersede_fingerprint(args, project_id, memory_dir)
             seed_path = _seed_path(fingerprint)
             fixed_id = read_private_file(seed_path).strip() if seed_path.exists() else None
             mutations, target, new_id = _build_mutations(
-                args, project_root, memory_dir, True, fixed_id=fixed_id or None
+                args,
+                project_root,
+                memory_dir,
+                True,
+                fixed_id=fixed_id or None,
+                entry_schema_version=entry_schema_version,
             )
             if not fixed_id:
                 create_private_file(seed_path, new_id + "\n")
@@ -437,7 +593,7 @@ def run(args) -> int:
                 print("Dry run only. Re-run with --apply --confirm-plan <PLAN_ID>.")
                 return 0
             if not args.confirm_plan:
-                raise ValueError("Protocol 0.6 supersede apply requires --confirm-plan <PLAN_ID>.")
+                raise ValueError("Protocol 0.7 supersede apply requires --confirm-plan <PLAN_ID>.")
             with project_mutation_guard(
                 project_root,
                 manifest_path,
@@ -449,7 +605,12 @@ def run(args) -> int:
                         "Project identity changed before supersede apply; preview again."
                     )
                 current_mutations, target, new_id = _build_mutations(
-                    args, project_root, memory_dir, True, fixed_id=new_id
+                    args,
+                    project_root,
+                    memory_dir,
+                    True,
+                    fixed_id=new_id,
+                    entry_schema_version=entry_schema_version,
                 )
                 current_plan = MutationPlan(
                     "add --supersedes",
@@ -476,7 +637,7 @@ def run(args) -> int:
             print("Written files:")
             for mutation in current_mutations:
                 print(f"- {mutation.path}")
-            _report_budget(memory_dir / target, target)
+            _report_budget(memory_dir, memory_dir / target, target)
             return 0
         with project_mutation_guard(
             project_root,
@@ -488,7 +649,13 @@ def run(args) -> int:
                 raise ValueError("Project identity changed before add; re-run the command.")
             # Every source file is re-read and the mutation plan is rebuilt under the lock.
             try:
-                mutations, target, new_id = _build_mutations(args, project_root, memory_dir, True)
+                mutations, target, new_id = _build_mutations(
+                    args,
+                    project_root,
+                    memory_dir,
+                    True,
+                    entry_schema_version=entry_schema_version,
+                )
             except DecisionBudgetError as exc:
                 print(f"Decision entry budget: over/{DECISION_ENTRY_BUDGET} tokens")
                 print(f"Not added: {exc}")
@@ -496,8 +663,8 @@ def run(args) -> int:
             apply_mutations(mutations)
     print(f"Added {'candidate' if args.candidate or args.type == 'inbox' else args.type} memory {new_id} to {memory_dir / target}")
     if args.type == "decision" and args.allow_long and estimate_tokens(
-        (memory_dir / target).read_text(encoding="utf-8")
+        read_managed_text(memory_dir, memory_dir / target)
     ) > DECISION_ENTRY_BUDGET:
         print("Warning: adding an explicitly allowed long decision entry.")
-    _report_budget(memory_dir / target, target)
+    _report_budget(memory_dir, memory_dir / target, target)
     return 0

@@ -1,4 +1,4 @@
-"""Protocol 0.6 entry identity, evidence, parsing, and rendering."""
+"""Protocol 0.7 entry identity, evidence, parsing, and rendering."""
 
 from __future__ import annotations
 
@@ -8,7 +8,8 @@ from pathlib import Path, PurePosixPath
 import re
 import uuid
 
-ENTRY_SCHEMA_VERSION = "1"
+ENTRY_SCHEMA_VERSION = "2"
+LEGACY_ENTRY_SCHEMA_VERSION = "1"
 TYPE_CODES = {
     "decision": "DEC",
     "constraint": "CON",
@@ -22,13 +23,25 @@ TYPE_CODES = {
     "candidate": "INBOX",
 }
 ENTRY_ID_RE = re.compile(r"\bMC-(DEC|CON|DNU|PREF|AREA|INBOX|TOMB)-(\d{8})-([0-9a-f]{8})\b", re.I)
+ENTRY_HEADING_ID_RE = re.compile(
+    r"MC-(?:DEC|CON|DNU|PREF|AREA|INBOX|TOMB)-\d{8}-[0-9a-f]{8}", re.I
+)
 ACTIVE_EVIDENCE_RE = re.compile(
     r"^(?:user-confirmed|(?:repo|doc|test):[^@\s]+(?:@[A-Za-z0-9._-]+)?|issue:#\d+|pr:#\d+)$"
 )
 CANDIDATE_ONLY_EVIDENCE = {"agent-observed", "conversation-unconfirmed"}
 INTERNAL_EVIDENCE = {"legacy-unverified"}
-VALID_SCOPES_RE = re.compile(r"^(?:project|area:[A-Za-z0-9][A-Za-z0-9._-]*)$")
+VALID_SCOPES_RE = re.compile(r"^(?:project|area:[A-Za-z0-9][A-Za-z0-9._-]*|local-user|local-machine)$")
 FIELD_RE = re.compile(r"^([A-Za-z][A-Za-z-]*):(?:\s*(.*))?$")
+# Body protection uses a normal Markdown fenced block only when a body contains
+# a column-zero line that the Entry grammar would otherwise treat as structure.
+# The info string is deliberately versioned and visible: a literal ``&#8283;``
+# in a pre-existing or manually edited Entry is ordinary body text and is
+# never decoded by the parser.
+BODY_FENCE_INFO = "memory-custodian-body-v1"
+BODY_FENCE_RE = re.compile(
+    rf"^ {{0,3}}(`{{3,}}|~{{3,}}){re.escape(BODY_FENCE_INFO)}[ \t]*$"
+)
 
 
 @dataclass(frozen=True)
@@ -43,6 +56,56 @@ class StructuredEntry:
     fields: dict[str, str]
     field_counts: dict[str, int] = field(default_factory=dict)
     field_bodies: dict[str, str] = field(default_factory=dict)
+    display_text: str | None = None
+
+
+@dataclass(frozen=True)
+class EntryUnit:
+    """Pair one Markdown source unit with its parsed Entry, when formal.
+
+    ``source`` is the immutable Markdown unit used for range-local mutations.
+    ``display_text`` is the semantic representation used by selectors and
+    search consumers.  Keeping these two views together prevents a consumer
+    from accidentally searching the serialization envelope while retaining
+    the exact source text for a later mutation.
+    """
+
+    source: "MarkdownUnit"
+    structured: StructuredEntry | None = None
+
+    @property
+    def source_text(self) -> str:
+        """Return the raw source text preserved for mutation/rendering."""
+
+        return self.source.text
+
+    @property
+    def display_text(self) -> str:
+        """Return semantic text, hiding only the formal body envelope."""
+
+        if self.structured is not None:
+            return (
+                self.structured.display_text
+                if self.structured.display_text is not None
+                else self.structured.text
+            )
+        return self.source_text
+
+
+class EntryUnitIssue(str):
+    """An entry-unit diagnostic with safety metadata for conflict consumers."""
+
+    conflict_relevant: bool
+
+    def __new__(
+        cls,
+        message: str,
+        *,
+        conflict_relevant: bool = True,
+    ) -> "EntryUnitIssue":
+        instance = super().__new__(cls, message)
+        instance.conflict_relevant = conflict_relevant
+        return instance
 
 
 TYPED_BODY_FIELDS = {
@@ -60,6 +123,32 @@ LIFECYCLE_FIELDS = {
     "Promoted-From",
     "Promoted-To",
 }
+ENTRY_FIELDS = frozenset({
+    "Status",
+    "Scope",
+    "Subject",
+    "Facet",
+    "Evidence",
+    "Supersedes",
+    "Superseded-By",
+    "Promoted-From",
+    "Promoted-To",
+    "Exception-To",
+    "Candidate-Type",
+    "Provisional-Subject",
+    "Provisional-Facet",
+    "Promotion-Requirement",
+    "Reason",
+    *TYPED_BODY_FIELDS,
+})
+ENTRY_SCALAR_FIELDS = ENTRY_FIELDS - {
+    "Evidence",
+    "Reason",
+    "Promotion-Requirement",
+    *TYPED_BODY_FIELDS,
+}
+STRUCTURAL_ENTRY_CODES = frozenset({"DEC", "CON", "DNU", "AREA"})
+VALID_ENTRY_STATUSES = frozenset({"active", "candidate", "superseded", "promoted"})
 
 
 def generate_entry_id(kind: str, existing_ids: set[str] | None = None, *, day: date | None = None) -> str:
@@ -77,23 +166,71 @@ def entry_ids(text: str) -> list[str]:
 
 
 def heading_entry_ids(text: str) -> list[str]:
+    from .markdown import canonical_h2_parts
+    from .protocol import parse_markdown_units
+
     found: list[str] = []
-    for line in text.splitlines():
-        if line.startswith("## "):
-            match = ENTRY_ID_RE.search(line)
-            if match:
-                found.append(match.group(0))
+    for unit in parse_markdown_units(text).units:
+        if unit.kind != "h2" or unit.heading is None:
+            continue
+        parsed = canonical_h2_parts(unit.text.splitlines()[0], ENTRY_HEADING_ID_RE)
+        if parsed:
+            found.append(parsed[0])
     return found
+
+
+def entry_unit_issues(text: str, relative_path: str) -> list[str]:
+    """Return canonical-heading and ambiguous formal-unit findings."""
+
+    from .markdown import canonical_h2_parts
+    from .protocol import parse_markdown_units
+
+    issues: list[str] = []
+    for unit in parse_markdown_units(text).units:
+        if unit.kind == "h2" and unit.heading and ENTRY_ID_RE.search(unit.heading):
+            if canonical_h2_parts(unit.text.splitlines()[0], ENTRY_HEADING_ID_RE) is None:
+                issues.append(
+                    f"{relative_path}: malformed Entry heading {unit.text.splitlines()[0]!r}; "
+                    "expected `## <ENTRY_ID> — <title>`"
+                )
+        elif unit.kind == "ambiguous-bullet":
+            issues.append(EntryUnitIssue(
+                f"{relative_path}: ambiguous column-zero bullet follows a formal Entry; "
+                "indent body bullets or move legacy memory under an explicit heading",
+                conflict_relevant=False,
+            ))
+    return issues
 
 
 def memory_entry_ids(memory_dir: Path) -> set[str]:
+    from .protocol import canonical_memory_files, read_managed_text
+
     found: set[str] = set()
     if not memory_dir.exists():
         return found
-    for path in memory_dir.rglob("*.md"):
-        for value in heading_entry_ids(path.read_text(encoding="utf-8")):
+    # README files are documentation, even when they happen to contain an
+    # Entry-looking example.  Inventory only manifest-authorized canonical
+    # storage (including archive for ID uniqueness); this also keeps examples
+    # from reserving IDs or becoming relation operands.
+    for path in canonical_memory_files(memory_dir, include_archive=True):
+        for value in heading_entry_ids(read_managed_text(memory_dir, path)):
             found.add(value)
     return found
+
+
+def memory_entry_id_counts(memory_dir: Path) -> dict[str, int]:
+    """Count canonical heading IDs across all shared managed-memory storage."""
+
+    from .protocol import canonical_memory_files, read_managed_text
+
+    counts: dict[str, int] = {}
+    if not memory_dir.exists():
+        return counts
+    for path in canonical_memory_files(memory_dir, include_archive=True):
+        for value in heading_entry_ids(read_managed_text(memory_dir, path)):
+            key = value.casefold()
+            counts[key] = counts.get(key, 0) + 1
+    return counts
 
 
 def _safe_source_path(value: str) -> tuple[str, str | None]:
@@ -120,7 +257,7 @@ def validate_evidence(
 ) -> tuple[str, ...]:
     project_root = project_root.resolve()
     if not evidence:
-        raise ValueError("Protocol 0.6 active memory requires at least one --evidence value.")
+        raise ValueError("Protocol 0.7 active memory requires at least one --evidence value.")
     validated: list[str] = []
     for raw in evidence:
         value = raw.strip()
@@ -167,6 +304,222 @@ def validate_scope(scope: str) -> str:
     return scope
 
 
+def _body_requires_fence(value: str) -> bool:
+    """Return whether plain body lines would become Entry structure.
+
+    Use the shared Markdown lexer for visibility and H2 boundaries. Four-space
+    indented code and fenced content are opaque to the Entry field scanner;
+    only visible lines in the same structural grammar can accidentally start a
+    field, H2, or top-level list unit.
+    """
+
+    from .markdown import headings, visible_lines
+
+    visible = visible_lines(value)
+    h2_indexes = {
+        heading.index for heading in headings(value) if heading.level == 2
+    }
+    return any(
+        line.index in h2_indexes
+        or (
+            not line.indented_code
+            and (
+                FIELD_RE.match(line.text)
+                or line.text.startswith(("- ", "* ", "+ "))
+            )
+        )
+        for line in visible
+    )
+
+
+def _body_fence(value: str) -> str:
+    """Choose a visible Markdown fence that cannot close inside ``value``."""
+
+    longest = {"`": 0, "~": 0}
+    for line in value.splitlines():
+        for character in longest:
+            for match in re.finditer(re.escape(character) + r"+", line):
+                longest[character] = max(longest[character], len(match.group(0)))
+    # Backticks are the conventional Markdown fence.  A fence one character
+    # longer than every run in the body makes the wrapper's closing boundary
+    # unambiguous under CommonMark's ``at least N`` closing rule.  Use a tilde
+    # when that gives a shorter, equally readable wrapper.
+    character = min(longest, key=lambda item: (longest[item], item != "`"))
+    return character * max(3, longest[character] + 1)
+
+
+def _body_starts_with_wrapper(value: str) -> bool:
+    """Detect user content that would look like our body wrapper at start."""
+
+    for line in value.splitlines():
+        if not line.strip():
+            continue
+        return _body_fence_opening(line)
+    return False
+
+
+def _body_fence_opening(raw_line: str) -> bool:
+    match = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", raw_line)
+    return match is not None and match.group(2).strip() == BODY_FENCE_INFO
+
+
+def _legacy_line_safe_markdown_body(value: str) -> str:
+    """Serialize the public schema-1 body escape used before wrappers.
+
+    Protocol 0.7/schema 1 writers protected visible field-like lines with a
+    four-space Markdown indented-code prefix.  Keep this serializer isolated
+    to compatibility writes; schema 2 must use the versioned fence below.
+    """
+
+    safe: list[str] = []
+    fence_character: str | None = None
+    fence_length = 0
+    for line in value.splitlines():
+        if fence_character is not None:
+            safe.append(line)
+            if re.fullmatch(
+                rf" {{0,3}}{re.escape(fence_character)}{{{fence_length},}}[ \t]*",
+                line,
+            ):
+                fence_character = None
+                fence_length = 0
+            continue
+        opening = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", line)
+        if opening:
+            marker = opening.group(1)
+            if marker[0] == "`" and "`" in opening.group(2):
+                raise ValueError("Backtick fence info strings must not contain backticks")
+            fence_character = marker[0]
+            fence_length = len(marker)
+            safe.append(line)
+            continue
+        if FIELD_RE.match(line) or line.startswith(("## ", "- ", "* ", "+ ")):
+            safe.append("    " + line)
+        else:
+            safe.append(line)
+    if fence_character is not None:
+        raise ValueError("Body contains an unclosed fenced code block.")
+    return "\n".join(safe)
+
+
+def line_safe_markdown_body(
+    value: str,
+    *,
+    entry_schema_version: str | int | None = None,
+) -> str:
+    """Serialize body text without creating column-zero protocol structure.
+
+    Ordinary Markdown remains unchanged.  A body with visible protocol-like
+    lines is enclosed in the explicit, versioned ``memory-custodian-body-v1``
+    fenced-block form.  The wrapper is standard Markdown and is removed only
+    when it occurs directly as the body representation of a formal Entry;
+    there is no private character/entity escape.  The explicit schema-1 mode
+    is retained solely for compatibility writers that still target the old
+    four-space body escape.
+    """
+
+    schema = normalize_entry_schema_version(entry_schema_version)
+    if schema == LEGACY_ENTRY_SCHEMA_VERSION:
+        return _legacy_line_safe_markdown_body(value)
+    if not _body_requires_fence(value) and not _body_starts_with_wrapper(value):
+        return value.replace("\r\n", "\n").replace("\r", "\n")
+    fence = _body_fence(value)
+    return f"{fence}{BODY_FENCE_INFO}\n{value}\n{fence}"
+
+
+def render_markdown_bullet(value: str) -> str:
+    """Render one top-level bullet while keeping every later line inside it."""
+
+    lines = value.splitlines()
+    if not any(line.strip() for line in lines):
+        raise ValueError("Memory body must not be empty.")
+    return "- " + lines[0] + "".join(f"\n  {line}" for line in lines[1:])
+
+
+def _normalized_body(value: str) -> str:
+    """Normalize line endings without changing body content.
+
+    Field bodies are parsed from Markdown source ranges.  Blank lines,
+    indentation, and trailing spaces are data, not formatting that the
+    protocol may silently discard.  The parser removes separator blank lines
+    around a field; apply the same boundary rule to bodies supplied to a
+    renderer or validator so the two paths compare the same representation.
+    """
+
+    normalized = value.replace("\r\n", "\n").replace("\r", "\n")
+    # split("\n") intentionally keeps interior and terminal empty lines.  A
+    # terminal empty line is the field separator in a structured Entry, while
+    # interior empty lines are paragraph content and must survive.
+    lines = normalized.split("\n")
+    while lines and not lines[0].strip():
+        lines.pop(0)
+    while lines and not lines[-1].strip():
+        lines.pop()
+    return "\n".join(lines)
+
+
+def _body_fence_open(raw_line: str) -> tuple[str, int] | None:
+    match = BODY_FENCE_RE.fullmatch(raw_line)
+    if match is None:
+        return None
+    marker = match.group(1)
+    return marker[0], len(marker)
+
+
+def _body_fence_close(raw_line: str, character: str, length: int) -> bool:
+    return re.fullmatch(
+        rf" {{0,3}}{re.escape(character)}{{{length},}}[ \t]*",
+        raw_line,
+    ) is not None
+
+
+def _decoded_legacy_body_line(raw_line: str, visible) -> str:
+    """Decode the schema-1 writer's explicit four-space body protection.
+
+    The public Protocol 0.7/schema 1 implementation protected a body line
+    that looked like an Entry field, heading, or list item by prefixing four
+    spaces.  Keep ordinary indented Markdown code literal; only that narrow,
+    protocol-shaped form is decoded.  Schema 2 never calls this helper: its
+    versioned fenced wrapper is the only body envelope it owns.
+    """
+
+    if not visible.indented_code or not raw_line.startswith("    "):
+        return raw_line
+    candidate = raw_line[4:]
+    if FIELD_RE.match(candidate) or candidate.startswith(("## ", "- ", "* ", "+ ")):
+        return candidate
+    return raw_line
+
+
+def _validate_rendered_entry(
+    text: str,
+    entry_id: str,
+    body_field: str,
+    body: str,
+    extra_body_field: str | None = None,
+    extra_body: str | None = None,
+) -> None:
+    if not _normalized_body(body):
+        raise ValueError(f"Rendered Entry {body_field} body must not be empty.")
+    parsed = parse_structured_entries(
+        Path("__rendered_entry__.md"), text,
+        entry_schema_version=ENTRY_SCHEMA_VERSION,
+    )
+    if len(parsed) != 1 or parsed[0].entry_id.casefold() != entry_id.casefold():
+        raise ValueError("Rendered Entry did not round-trip as exactly one structured Entry.")
+    entry = parsed[0]
+    if (
+        entry.field_counts.get(body_field) != 1
+        or entry.field_bodies.get(body_field, "") != _normalized_body(body)
+    ):
+        raise ValueError(f"Rendered Entry {body_field} body did not round-trip safely.")
+    if extra_body_field is not None and (
+        entry.field_counts.get(extra_body_field) != 1
+        or entry.field_bodies.get(extra_body_field, "") != _normalized_body(extra_body or "")
+    ):
+        raise ValueError(f"Rendered Entry {extra_body_field} body did not round-trip safely.")
+
+
 def render_active_entry(
     kind: str,
     entry_id: str,
@@ -179,7 +532,13 @@ def render_active_entry(
     subject: str | None = None,
     facet: str | None = None,
     supersedes: str | None = None,
+    promoted_from: str | None = None,
 ) -> str:
+    from .markdown import render_canonical_h2
+
+    normalized_title = " ".join(title.split())
+    if not normalized_title:
+        raise ValueError("Rendered Entry title must not be empty.")
     labels = {
         "decision": "Decision",
         "constraint": "Constraint",
@@ -190,8 +549,13 @@ def render_active_entry(
         "rule": "Rule",
         "profile": "Profile",
     }
+    heading_title = (
+        f"Tombstone: {normalized_title}"
+        if kind in {"tombstone", "do-not-use"}
+        else normalized_title
+    )
     lines = [
-        f"## {entry_id} — {'Tombstone: ' if kind in {'tombstone', 'do-not-use'} else ''}{title}",
+        render_canonical_h2(entry_id, heading_title),
         "",
         "Status: active",
         f"Scope: {scope}",
@@ -203,10 +567,18 @@ def render_active_entry(
     lines.extend(["Evidence:", *(f"- {item}" for item in evidence)])
     if supersedes:
         lines.extend([f"Supersedes: {supersedes}"])
-    lines.extend(["", f"{labels[kind]}:", message])
+    if promoted_from:
+        lines.append(f"Promoted-From: {promoted_from}")
+    body_field = labels[kind]
+    lines.extend(["", f"{body_field}:", line_safe_markdown_body(message)])
     if reason:
-        lines.extend(["", "Reason:", reason])
-    return "\n".join(lines)
+        lines.extend(["", "Reason:", line_safe_markdown_body(reason)])
+    rendered = "\n".join(lines)
+    _validate_rendered_entry(
+        rendered, entry_id, body_field, message,
+        "Reason" if reason else None, reason,
+    )
+    return rendered
 
 
 def render_candidate_entry(
@@ -221,8 +593,18 @@ def render_candidate_entry(
     subject: str | None = None,
     facet: str | None = None,
 ) -> str:
+    from .markdown import render_canonical_h2
+
+    normalized_title = " ".join(title.split())
+    if not normalized_title:
+        raise ValueError("Rendered Entry title must not be empty.")
+    promotion_requirement = (
+        note.strip()
+        if note is not None and note.strip()
+        else "Confirm with the user or an authoritative project source."
+    )
     lines = [
-        f"## {entry_id} — {title}",
+        render_canonical_h2(entry_id, normalized_title),
         "",
         "Status: candidate",
         f"Candidate-Type: {candidate_type}",
@@ -237,32 +619,54 @@ def render_candidate_entry(
         *(f"- {item}" for item in evidence),
         "",
         "Statement:",
-        message,
+        line_safe_markdown_body(message),
         "",
         "Promotion-Requirement:",
-        note or "Confirm with the user or an authoritative project source.",
+        line_safe_markdown_body(promotion_requirement),
     ])
-    return "\n".join(lines)
+    rendered = "\n".join(lines)
+    _validate_rendered_entry(
+        rendered, entry_id, "Statement", message,
+        "Promotion-Requirement",
+        promotion_requirement,
+    )
+    return rendered
 
 
-def split_h2(text: str) -> tuple[str, list[str]]:
-    matches = list(re.finditer(r"(?m)^## .*$", text))
-    if not matches:
-        return text, []
-    preamble = text[: matches[0].start()].rstrip()
-    entries = [
-        text[match.start() : (matches[index + 1].start() if index + 1 < len(matches) else len(text))].strip()
-        for index, match in enumerate(matches)
+def normalize_entry_schema_version(value: str | int | None) -> str:
+    """Return the parser grammar for an Entry source.
+
+    Schema 1 is the pre-wrapper grammar.  It is intentionally retained only
+    as an explicit compatibility mode: a body that happens to contain a
+    ``memory-custodian-body-v1`` fence is literal source in that mode.
+    """
+
+    normalized = str(value if value is not None else ENTRY_SCHEMA_VERSION)
+    if normalized not in {LEGACY_ENTRY_SCHEMA_VERSION, ENTRY_SCHEMA_VERSION}:
+        raise ValueError(f"Unsupported Entry schema version: {normalized}")
+    return normalized
+
+
+def parse_structured_entries(
+    path: Path,
+    text: str,
+    *,
+    entry_schema_version: str | int | None = None,
+) -> list[StructuredEntry]:
+    from .protocol import parse_markdown_units
+    from .markdown import canonical_h2_parts, visible_lines
+
+    schema = normalize_entry_schema_version(entry_schema_version)
+    decode_body_fence = schema == ENTRY_SCHEMA_VERSION
+    sections = [
+        unit.text
+        for unit in parse_markdown_units(text).units
+        if unit.kind == "h2"
     ]
-    return preamble, entries
-
-
-def parse_structured_entries(path: Path, text: str) -> list[StructuredEntry]:
-    _preamble, sections = split_h2(text)
     parsed: list[StructuredEntry] = []
     for section in sections:
         lines = section.splitlines()
-        heading = ENTRY_ID_RE.search(lines[0])
+        heading = canonical_h2_parts(lines[0], ENTRY_HEADING_ID_RE)
         if not heading:
             continue
         fields: dict[str, str] = {}
@@ -271,6 +675,7 @@ def parse_structured_entries(path: Path, text: str) -> list[StructuredEntry]:
         evidence: list[str] = []
         current_field: str | None = None
         current_body: list[str] = []
+        display_lines: list[str] = []
 
         def flush_field() -> None:
             nonlocal current_field, current_body
@@ -279,7 +684,46 @@ def parse_structured_entries(path: Path, text: str) -> list[StructuredEntry]:
             current_field = None
             current_body = []
 
-        for line in lines[1:]:
+        visible_by_index = {
+            line.index: line for line in visible_lines(section)
+        }
+        body_fence: tuple[str, int] | None = None
+        body_fields = TYPED_BODY_FIELDS | {"Reason", "Promotion-Requirement"}
+        for line_index, raw_line in enumerate(lines):
+            if line_index == 0:
+                display_lines.append(raw_line)
+                continue
+            if body_fence is not None:
+                if _body_fence_close(raw_line, *body_fence):
+                    body_fence = None
+                else:
+                    current_body.append(raw_line)
+                    display_lines.append(raw_line)
+                continue
+            visible = visible_by_index.get(line_index)
+            opened = _body_fence_open(raw_line)
+            if (
+                decode_body_fence
+                and current_field in body_fields
+                and not current_body
+                and opened is not None
+            ):
+                body_fence = opened
+                continue
+            display_lines.append(raw_line)
+            if visible is None:
+                if current_field is not None:
+                    current_body.append(raw_line)
+                continue
+            if visible.indented_code:
+                if current_field is not None:
+                    current_body.append(
+                        _decoded_legacy_body_line(raw_line, visible)
+                        if schema == LEGACY_ENTRY_SCHEMA_VERSION
+                        else raw_line
+                    )
+                continue
+            line = visible.text
             matched_field = FIELD_RE.match(line)
             if matched_field:
                 flush_field()
@@ -292,22 +736,27 @@ def parse_structured_entries(path: Path, text: str) -> list[StructuredEntry]:
             if current_field == "Evidence" and line.startswith("- "):
                 evidence.append(line[2:].strip())
                 current_body.append(line[2:].strip())
-            elif current_field is not None and line.strip():
-                current_body.append(line.strip())
+            elif current_field is not None:
+                # Preserve paragraph separators, trailing spaces, and
+                # continuation indentation.  Only blank lines at the start
+                # or end of an occurrence are removed by _normalized_body;
+                # those are field separators rather than body content.
+                current_body.append(raw_line)
         flush_field()
         field_bodies = {
-            key: "\n".join(
-                line
-                for occurrence in occurrences
-                for line in occurrence
-                if line.strip()
-            ).strip()
+            key: _normalized_body(
+                "\n".join(
+                    line
+                    for occurrence in occurrences
+                    for line in occurrence
+                )
+            )
             for key, occurrences in occurrence_bodies.items()
         }
-        title = re.sub(r"^.*?\s+—\s+", "", lines[0]).strip()
+        title = heading[1]
         parsed.append(
             StructuredEntry(
-                heading.group(0),
+                heading[0],
                 title,
                 fields.get("Status", ""),
                 fields.get("Scope", ""),
@@ -317,9 +766,156 @@ def parse_structured_entries(path: Path, text: str) -> list[StructuredEntry]:
                 fields,
                 field_counts,
                 field_bodies,
+                "\n".join(display_lines),
             )
         )
     return parsed
+
+
+def parse_entry_units(
+    path: Path,
+    text: str,
+    *,
+    entry_schema_version: str | int | None = None,
+) -> tuple[EntryUnit, ...]:
+    """Return source units with an explicit raw/semantic Entry boundary.
+
+    Formal Entries are matched to their original Markdown units by source
+    text.  The source unit remains the mutation operand, while its parsed
+    ``display_text`` is the selector/search representation.  Legacy bullets,
+    preambles, and non-Entry H2 units deliberately retain their source text
+    as semantic text because they have no formal body envelope to decode.
+    """
+
+    from .protocol import parse_markdown_units
+
+    document = parse_markdown_units(text)
+    structured_by_source: dict[str, list[StructuredEntry]] = {}
+    for entry in parse_structured_entries(
+        path,
+        text,
+        entry_schema_version=entry_schema_version,
+    ):
+        structured_by_source.setdefault(entry.text, []).append(entry)
+
+    units: list[EntryUnit] = []
+    for source in document.units:
+        structured = None
+        if source.kind == "h2":
+            candidates = structured_by_source.get(source.text)
+            if candidates:
+                structured = candidates.pop(0)
+        units.append(EntryUnit(source, structured))
+    return tuple(units)
+
+
+def migrate_entry_schema(
+    path: Path,
+    text: str,
+    *,
+    from_schema: str | int,
+    to_schema: str | int | None = None,
+) -> tuple[str, int]:
+    """Encode existing formal Entry bodies for a newer Entry schema.
+
+    The source is parsed explicitly with ``from_schema`` before any body
+    fence is interpreted.  This is the important compatibility boundary for
+    schema 1: a manually present ``memory-custodian-body-v1`` block is first
+    captured as literal body text, then escaped as a literal when schema 2 is
+    written.  Non-formal Markdown units are left byte-for-byte untouched.
+    """
+
+    source_schema = normalize_entry_schema_version(from_schema)
+    target_schema = normalize_entry_schema_version(to_schema)
+    if source_schema == target_schema:
+        return text, 0
+    if (source_schema, target_schema) != (
+        LEGACY_ENTRY_SCHEMA_VERSION,
+        ENTRY_SCHEMA_VERSION,
+    ):
+        raise ValueError("Only Entry schema 1-to-2 migration is supported.")
+    from .markdown import canonical_h2_parts, visible_lines
+    from .protocol import parse_markdown_units
+
+    body_fields = TYPED_BODY_FIELDS | {"Reason", "Promotion-Requirement"}
+    replacements: list[tuple[int, int, int, str]] = []
+    for unit in parse_markdown_units(text).units:
+        if unit.kind != "h2":
+            continue
+        lines = unit.text.splitlines()
+        if not lines or not canonical_h2_parts(lines[0], ENTRY_HEADING_ID_RE):
+            continue
+        parsed = parse_structured_entries(
+            path,
+            unit.text,
+            entry_schema_version=source_schema,
+        )
+        if len(parsed) != 1:
+            continue
+        entry = parsed[0]
+        visible = {
+            line.index: line
+            for line in visible_lines(unit.text)
+            if not line.indented_code
+        }
+        field_lines: list[tuple[int, str]] = []
+        for index, line in sorted(visible.items()):
+            match = FIELD_RE.fullmatch(line.text)
+            if match:
+                field_lines.append((index, match.group(1)))
+        if not field_lines:
+            continue
+        replacements_for_unit: list[tuple[int, int, list[str]]] = []
+        for position, (field_index, field_name) in enumerate(field_lines):
+            if field_name not in body_fields or entry.field_counts.get(field_name) != 1:
+                continue
+            body = entry.field_bodies.get(field_name, "")
+            if not body.strip():
+                continue
+            next_index = (
+                field_lines[position + 1][0]
+                if position + 1 < len(field_lines)
+                else len(lines)
+            )
+            encoded = line_safe_markdown_body(
+                body,
+                entry_schema_version=target_schema,
+            ).splitlines()
+            # Keep a readable field separator while making the body range
+            # itself unambiguous to the target parser.
+            if next_index < len(lines):
+                encoded.append("")
+            replacements_for_unit.append((field_index, next_index, encoded))
+        if not replacements_for_unit:
+            continue
+        updated_lines = list(lines)
+        for start, end, encoded in sorted(replacements_for_unit, reverse=True):
+            updated_lines[start + 1:end] = encoded
+            # Inline typed bodies are uncommon but legal in the field grammar.
+            # Move that value into the same explicit body representation used
+            # by multiline fields instead of leaving an undecoded prefix.
+            if FIELD_RE.fullmatch(updated_lines[start] or ""):
+                updated_lines[start] = f"{field_lines[[item[0] for item in field_lines].index(start)][1]}:"
+        updated = "\n".join(updated_lines)
+        if updated != unit.text:
+            replacements.append((unit.start_line, unit.end_line, len(lines), updated))
+
+    if not replacements:
+        return text, 0
+    source_lines = text.splitlines(keepends=True)
+    for start, end, old_line_count, replacement in sorted(replacements, reverse=True):
+        if start < 0 or end > len(source_lines) or start + old_line_count > end:
+            raise ValueError("Entry schema migration source changed while building an exact-range mutation.")
+        original = source_lines[start:end]
+        eol = "\r\n" if any(line.endswith("\r\n") for line in original) else "\n"
+        # ``parse_markdown_units`` trims separator blank lines from a unit's
+        # semantic text. Replace only the unit content and retain those
+        # trailing source lines so migration does not collapse unrelated
+        # Markdown units into the closing body fence.
+        trailing = source_lines[start + old_line_count:end]
+        replacement_lines = [line + eol for line in replacement.splitlines()]
+        source_lines[start:end] = [*replacement_lines, *trailing]
+    return "".join(source_lines), len(replacements)
 
 
 def expected_typed_body(entry: StructuredEntry, relative_path: str) -> str | None:
@@ -346,15 +942,43 @@ def expected_typed_body(entry: StructuredEntry, relative_path: str) -> str | Non
 def structured_entry_schema_issues(
     entry: StructuredEntry,
     relative_path: str,
+    *,
+    require_active_identity: bool = False,
 ) -> list[str]:
-    """Validate the declared Protocol 0.6 structure of one formal entry."""
+    """Validate the declared Protocol 0.7 structure of one formal entry."""
 
     issues: list[str] = []
     prefix = f"{relative_path}: {entry.entry_id}"
+    for name in sorted(set(entry.field_counts) - ENTRY_FIELDS):
+        issues.append(f"{prefix} has unknown field {name}")
+
+    for name in sorted(set(entry.field_counts) & ENTRY_SCALAR_FIELDS):
+        if not entry.fields.get(name, "").strip():
+            issues.append(f"{prefix} {name} must not be empty")
+        if (
+            entry.field_counts.get(name) == 1
+            and entry.field_bodies.get(name, "")
+            != _normalized_body(entry.fields.get(name, ""))
+        ):
+            issues.append(
+                f"{prefix} scalar field {name} has an unexpected visible continuation line"
+            )
+
     for name in ("Status", "Scope", "Evidence"):
         count = entry.field_counts.get(name, 0)
         if count != 1:
             issues.append(f"{prefix} must declare exactly one {name} field (found {count})")
+    if entry.field_counts.get("Evidence") == 1 and not entry.evidence:
+        issues.append(f"{prefix} Evidence must contain at least one non-empty item")
+    elif entry.field_counts.get("Evidence") == 1 and any(
+        not value.strip() for value in entry.evidence
+    ):
+        issues.append(f"{prefix} Evidence must not contain empty items")
+
+    if entry.status not in VALID_ENTRY_STATUSES:
+        issues.append(f"{prefix} has invalid Status {entry.status!r}")
+    if VALID_SCOPES_RE.fullmatch(entry.scope) is None:
+        issues.append(f"{prefix} has invalid Scope {entry.scope!r}")
 
     for name, count in sorted(entry.field_counts.items()):
         if count > 1:
@@ -393,14 +1017,41 @@ def structured_entry_schema_issues(
         issues.append(f"{prefix} superseded lifecycle cannot declare Promoted-To")
     if entry.status == "promoted" and superseded_by:
         issues.append(f"{prefix} promoted lifecycle cannot declare Superseded-By")
+    if entry.status == "superseded" and not entry.fields.get("Superseded-By", "").strip():
+        issues.append(f"{prefix} superseded entry has no Superseded-By")
+    if entry.status == "promoted" and not entry.fields.get("Promoted-To", "").strip():
+        issues.append(f"{prefix} promoted entry has no Promoted-To")
+
+    if require_active_identity and entry.status == "active":
+        code = entry.entry_id.split("-", 2)[1].upper()
+        if code in STRUCTURAL_ENTRY_CODES and not relative_path.startswith(("rules/", "profiles/")):
+            for name in ("Subject", "Facet"):
+                if entry.field_counts.get(name) != 1 or not entry.fields.get(name, "").strip():
+                    issues.append(
+                        f"{prefix} active structural Entry must declare a non-empty {name}"
+                    )
 
     if entry.status in {"candidate", "promoted"}:
+        provisional_subject = entry.fields.get("Provisional-Subject", "").strip()
+        provisional_facet = entry.fields.get("Provisional-Facet", "").strip()
+        if bool(provisional_subject) != bool(provisional_facet):
+            issues.append(
+                f"{prefix} must declare Provisional-Subject and Provisional-Facet together"
+            )
         candidate_type_count = entry.field_counts.get("Candidate-Type", 0)
         if candidate_type_count != 1:
             issues.append(
                 f"{prefix} must declare exactly one Candidate-Type field "
                 f"(found {candidate_type_count})"
             )
+        requirement_count = entry.field_counts.get("Promotion-Requirement", 0)
+        if requirement_count != 1:
+            issues.append(
+                f"{prefix} must declare exactly one Promotion-Requirement field "
+                f"(found {requirement_count})"
+            )
+        elif not entry.field_bodies.get("Promotion-Requirement", "").strip():
+            issues.append(f"{prefix} has an empty Promotion-Requirement body")
     elif entry.field_counts.get("Candidate-Type", 0):
         issues.append(
             f"{prefix} non-candidate lifecycle cannot declare Candidate-Type"
@@ -430,10 +1081,17 @@ def structured_entry_storage_issues(
     if relative_path == "inbox.md":
         if code != "INBOX":
             issues.append(f"{prefix} type does not match its storage location")
+        if entry.status not in {"candidate", "promoted"}:
+            issues.append(
+                f"{prefix} has Status {entry.status!r}; inbox entries must be candidate or promoted"
+            )
         return issues
 
     if code == "INBOX":
         issues.append(f"{prefix} must be stored in inbox.md")
+        return issues
+    if entry.status in {"candidate", "promoted"}:
+        issues.append(f"{prefix} {entry.status} Entry must be stored in inbox.md")
         return issues
 
     expected_codes = project_files.get(relative_path)
@@ -476,29 +1134,326 @@ def structured_entry_storage_issues(
     return issues
 
 
-def supersede_entry(text: str, old_id: str, new_id: str) -> str:
-    preamble, sections = split_h2(text)
-    changed = False
-    updated: list[str] = []
-    for section in sections:
-        match = ENTRY_ID_RE.search(section.splitlines()[0])
-        if not match or match.group(0).casefold() != old_id.casefold():
-            updated.append(section)
+def parse_entry_inventory(
+    path: Path,
+    text: str,
+    relative_path: str,
+    project_root: Path,
+    *,
+    require_active_identity: bool = False,
+    entry_schema_version: str | int | None = None,
+) -> tuple[tuple[StructuredEntry, ...], tuple[str, ...]]:
+    """Parse entries together with the complete integrity issues for a file.
+
+    Readers that make safety decisions (conflict and merge review in
+    particular) must not silently discard malformed formal units.  The normal
+    check command already reports these components independently; this helper
+    gives read-only decision paths the same evidence without introducing a
+    second schema implementation.
+    """
+
+    issues: list[str] = []
+    try:
+        issues.extend(entry_unit_issues(text, relative_path))
+        parsed = tuple(parse_structured_entries(
+            path,
+            text,
+            entry_schema_version=entry_schema_version,
+        ))
+    except (TypeError, ValueError) as exc:
+        return (), (f"{relative_path}: Markdown entry parsing failed: {exc}",)
+    for entry in parsed:
+        issues.extend(
+            structured_entry_schema_issues(
+                entry,
+                relative_path,
+                require_active_identity=require_active_identity,
+            )
+        )
+        issues.extend(structured_entry_storage_issues(entry, relative_path))
+        if entry.evidence:
+            try:
+                validate_evidence(
+                    entry.evidence,
+                    project_root,
+                    candidate=entry.status in {"candidate", "promoted"},
+                    allow_missing=True,
+                    allow_internal=entry.status not in {"candidate", "promoted"},
+                )
+            except ValueError as exc:
+                # Keep diagnostics deterministic and avoid echoing arbitrary
+                # evidence payloads (which may contain sensitive text).
+                issues.append(
+                    f"{relative_path}: {entry.entry_id} has invalid Evidence schema or unsafe source path"
+                )
+    return parsed, tuple(dict.fromkeys(issues))
+
+
+def structured_relation_issues(
+    entries: list[StructuredEntry],
+    *,
+    merged_subject_ids: set[str] | None = None,
+) -> list[str]:
+    """Validate reciprocal lifecycle relations and preserved structural identity."""
+
+    by_id: dict[str, list[StructuredEntry]] = {}
+    merged_subjects = {value.casefold() for value in (merged_subject_ids or set())}
+    for entry in entries:
+        by_id.setdefault(entry.entry_id.casefold(), []).append(entry)
+    issues: set[str] = set()
+
+    def unique(entry_id: str) -> StructuredEntry | None:
+        matches = by_id.get(entry_id.casefold(), [])
+        return matches[0] if len(matches) == 1 else None
+
+    def identity(entry: StructuredEntry) -> tuple[str, str, str]:
+        return (
+            entry.scope.casefold(),
+            entry.fields.get("Subject", "").casefold(),
+            entry.fields.get("Facet", "").casefold(),
+        )
+
+    for entry in entries:
+        for relation in (
+            "Supersedes",
+            "Superseded-By",
+            "Promoted-From",
+            "Promoted-To",
+            "Exception-To",
+        ):
+            target_id = entry.fields.get(relation, "")
+            if not target_id:
+                continue
+            matches = by_id.get(target_id.casefold(), [])
+            if not matches:
+                issues.add(f"{entry.entry_id} {relation} references missing entry {target_id}")
+            elif len(matches) != 1:
+                issues.add(
+                    f"{entry.entry_id} {relation} target {target_id} resolves to "
+                    f"{len(matches)} entries; relation targets must be unique"
+                )
+
+        exception_target_id = entry.fields.get("Exception-To", "")
+        if exception_target_id:
+            target_matches = by_id.get(exception_target_id.casefold(), [])
+            if (
+                entry.status != "active"
+                or not entry.scope.casefold().startswith("area:")
+                or len(target_matches) != 1
+                or target_matches[0].status != "active"
+                or target_matches[0].scope.casefold() != "project"
+                or bool(target_matches[0].fields.get("Exception-To"))
+                or (
+                    entry.fields.get("Subject", "").casefold()
+                    != target_matches[0].fields.get("Subject", "").casefold()
+                )
+                or (
+                    entry.fields.get("Facet", "").casefold()
+                    != target_matches[0].fields.get("Facet", "").casefold()
+                )
+            ):
+                issues.add(
+                    f"{entry.entry_id} Exception-To relation is invalid; it must point from an active area owner to a matching project owner"
+                )
+
+        previous_id = entry.fields.get("Supersedes", "")
+        previous = unique(previous_id) if previous_id else None
+        if previous is not None:
+            if entry.status not in {"active", "superseded"} or previous.status != "superseded":
+                issues.add(
+                    f"{entry.entry_id} Supersedes requires a current/historical replacement and superseded source"
+                )
+            if previous.fields.get("Superseded-By", "").casefold() != entry.entry_id.casefold():
+                issues.add(f"{entry.entry_id} Supersedes relation is not reciprocal")
+            if identity(entry) != identity(previous):
+                issues.add(
+                    f"{entry.entry_id} Supersedes must preserve Scope+Subject+Facet identity"
+                )
+
+        replacement_id = entry.fields.get("Superseded-By", "")
+        replacement = unique(replacement_id) if replacement_id else None
+        if replacement is not None:
+            if entry.status != "superseded" or replacement.status not in {"active", "superseded"}:
+                issues.add(
+                    f"{entry.entry_id} Superseded-By requires a superseded source and current/historical replacement"
+                )
+            if replacement.fields.get("Supersedes", "").casefold() != entry.entry_id.casefold():
+                issues.add(f"{entry.entry_id} Superseded-By relation is not reciprocal")
+            if identity(entry) != identity(replacement):
+                issues.add(
+                    f"{entry.entry_id} Superseded-By must preserve Scope+Subject+Facet identity"
+                )
+
+        source_id = entry.fields.get("Promoted-From", "")
+        source = unique(source_id) if source_id else None
+        if source is not None:
+            expected_codes = {
+                "decision": "DEC",
+                "constraint": "CON",
+                "preference": "PREF",
+                "tombstone": "DNU",
+                "do-not-use": "DNU",
+            }
+            target_code = entry.entry_id.split("-", 2)[1].upper()
+            candidate_type = source.fields.get("Candidate-Type", "").casefold()
+            expected_code = expected_codes.get(candidate_type)
+            if candidate_type == "decision" and source.scope.casefold().startswith("area:"):
+                expected_code = "AREA"
+            if entry.status != "active" or source.status != "promoted":
+                issues.add(
+                    f"{entry.entry_id} Promoted-From requires an active target and promoted candidate"
+                )
+            if source.fields.get("Promoted-To", "").casefold() != entry.entry_id.casefold():
+                issues.add(f"{entry.entry_id} Promoted-From relation is not reciprocal")
+            if expected_code != target_code:
+                issues.add(
+                    f"{entry.entry_id} type does not match source Candidate-Type {candidate_type!r}"
+                )
+            if entry.scope.casefold() != source.scope.casefold():
+                issues.add(f"{entry.entry_id} promotion must preserve Scope")
+            provisional = (
+                source.fields.get("Provisional-Subject", "").casefold(),
+                source.fields.get("Provisional-Facet", "").casefold(),
+            )
+            target_identity = (
+                entry.fields.get("Subject", "").casefold(),
+                entry.fields.get("Facet", "").casefold(),
+            )
+            if provisional != ("", "") and provisional != target_identity:
+                issues.add(f"{entry.entry_id} promotion must preserve provisional Subject+Facet")
+
+        target_id = entry.fields.get("Promoted-To", "")
+        target = unique(target_id) if target_id else None
+        if target is not None:
+            if entry.status != "promoted" or target.status != "active":
+                issues.add(
+                    f"{entry.entry_id} Promoted-To requires a promoted candidate and active target"
+                )
+            if target.fields.get("Promoted-From", "").casefold() != entry.entry_id.casefold():
+                issues.add(f"{entry.entry_id} Promoted-To relation is not reciprocal")
+
+    successor: dict[str, str] = {}
+    for entry in entries:
+        if entry.status != "superseded":
             continue
-        if re.search(r"(?m)^Status:\s*superseded\s*$", section, re.I):
-            existing = re.search(r"(?m)^Superseded-By:\s*(\S+)", section)
-            suffix = f" by {existing.group(1)}" if existing else ""
+        if unique(entry.entry_id) is None:
+            continue
+        replacement_id = entry.fields.get("Superseded-By", "")
+        if not replacement_id:
+            # A historical Entry whose Subject was merged is terminal by the
+            # Subject lifecycle, not by an active Entry replacement.  Other
+            # superseded entries still require an explicit successor.
+            if entry.fields.get("Subject", "").casefold() not in merged_subjects:
+                issues.add(
+                    f"{entry.entry_id} supersession chain does not terminate at an active replacement"
+                )
+            continue
+        if unique(replacement_id) is not None:
+            successor[entry.entry_id.casefold()] = replacement_id.casefold()
+
+    checked: set[str] = set()
+    for start in sorted(successor):
+        if start in checked:
+            continue
+        order: list[str] = []
+        positions: dict[str, int] = {}
+        current = start
+        while current in successor:
+            if current in positions:
+                cycle = order[positions[current]:]
+                labels = [unique(value).entry_id for value in cycle]
+                start_at = min(range(len(labels)), key=lambda index: labels[index].casefold())
+                labels = labels[start_at:] + labels[:start_at]
+                issues.add("supersession cycle detected: " + " -> ".join([*labels, labels[0]]))
+                break
+            if current in checked:
+                break
+            positions[current] = len(order)
+            order.append(current)
+            current = successor[current]
+        terminal = unique(current)
+        if current not in successor and terminal is not None and terminal.status != "active":
+            issues.add(
+                f"{unique(start).entry_id} supersession chain does not terminate at an active replacement"
+            )
+        checked.update(order)
+
+    return sorted(issues)
+
+
+def supersede_entry(
+    text: str,
+    old_id: str,
+    new_id: str,
+    *,
+    relative_path: str = "__supersession__.md",
+    entry_schema_version: str | int | None = None,
+) -> str:
+    from .markdown import visible_lines
+    from .protocol import parse_markdown_units
+
+    document = parse_markdown_units(text)
+    source_lines = text.splitlines(keepends=True)
+    changed = False
+    for unit in document.units:
+        if unit.kind != "h2":
+            continue
+        section = unit.text
+        parsed = parse_structured_entries(
+            Path(relative_path),
+            section,
+            entry_schema_version=entry_schema_version,
+        )
+        if len(parsed) != 1 or parsed[0].entry_id.casefold() != old_id.casefold():
+            continue
+        entry = parsed[0]
+        if entry.status == "superseded":
+            existing = entry.fields.get("Superseded-By", "")
+            suffix = f" by {existing}" if existing else ""
             raise ValueError(f"{old_id} is already superseded{suffix}.")
-        if not re.search(r"(?m)^Status:\s*active\s*$", section, re.I):
+        if entry.status != "active" or entry.field_counts.get("Status") != 1:
             raise ValueError(f"{old_id} is not an active entry.")
-        section = re.sub(r"(?m)^Status:\s*active\s*$", "Status: superseded", section, count=1)
-        status_line = re.search(r"(?m)^Status:\s*superseded\s*$", section)
-        assert status_line is not None
-        insert = status_line.end()
-        section = section[:insert] + f"\nSuperseded-By: {new_id}" + section[insert:]
-        updated.append(section)
+        status_indices = [
+            line.index
+            for line in visible_lines(section)
+            if re.fullmatch(r"Status:\s*active\s*", line.text, re.I)
+        ]
+        if len(status_indices) != 1:
+            raise ValueError(f"{old_id} has no unique visible active Status field.")
+        status_index = status_indices[0]
+        lines = section.splitlines()
+        lines[status_index:status_index + 1] = [
+            "Status: superseded",
+            f"Superseded-By: {new_id}",
+        ]
+        section = "\n".join(lines)
+        resulting = parse_structured_entries(
+            Path(relative_path),
+            section,
+            entry_schema_version=entry_schema_version,
+        )
+        if len(resulting) != 1 or (
+            structured_entry_schema_issues(resulting[0], relative_path)
+            or (
+                relative_path != "__supersession__.md"
+                and structured_entry_storage_issues(resulting[0], relative_path)
+            )
+        ):
+            raise ValueError(f"Supersession would make {old_id} structurally invalid.")
+        absolute_status_index = unit.start_line + status_index
+        if absolute_status_index >= len(source_lines):
+            raise ValueError("Supersession source changed while building mutation.")
+        original_line = source_lines[absolute_status_index]
+        line_ending = (
+            "\r\n" if original_line.endswith("\r\n")
+            else "\n" if original_line.endswith("\n")
+            else ""
+        )
+        source_lines[absolute_status_index] = (
+            "Status: superseded" + line_ending
+            + f"Superseded-By: {new_id}" + line_ending
+        )
         changed = True
     if not changed:
         raise ValueError(f"Entry ID not found: {old_id}")
-    parts = [preamble, *updated] if preamble else updated
-    return "\n\n".join(part for part in parts if part).rstrip() + "\n"
+    return "".join(source_lines)

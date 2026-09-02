@@ -20,9 +20,10 @@ In a project that contains MemoryCustodian memory, do not start substantial plan
 
 1. Read `manifest.md` if present. If the memory directory exists but the file does not, stop as described below.
 2. Read `brief.md` before substantial work.
-3. Identify the task type.
-4. Load only files allowed by the manifest and matched by the current task.
-5. Respect `do-not-use.md` and tombstones before proposing plans or implementations.
+3. Choose and expose one canonical task category.
+4. Supply touched/planned repo-relative paths, or an explicit area when paths are not yet known.
+5. Use `read --strict-routing` (or the same shared routing implementation) and do not start substantial work unless the context pack is approved.
+6. Respect shared constraints and `do-not-use.md` before local preferences or task convenience.
 
 If no memory directory exists, continue normally and offer initialization only when useful. If the memory directory exists but `manifest.md` is missing, stop memory loading and report an incomplete or corrupted setup. Do not infer routes; restore the manifest, migrate, or carefully reinitialize the project first.
 
@@ -31,9 +32,9 @@ If no memory directory exists, continue normally and offer initialization only w
 1. Locate memory at `docs/memory/manifest.md`, or another project-declared memory directory under `docs/`.
 2. Read `manifest.md`; it is the sole authority for runtime task-to-file routing.
 3. Read `brief.md` before substantial work.
-4. Identify the task type.
-5. Use the manifest optional module index to discover enabled `rules/`, `profiles/`, and `areas/` files.
-6. Load only files allowed by the manifest and matched by the current task.
+4. Choose a canonical task and make that choice observable.
+5. Collect touched/planned paths before implementation, debugging, or review; use an explicit area for high-level planning when appropriate.
+6. Route with the manifest-declared task, path, and explicit-module inputs. Treat INCOMPLETE, AMBIGUOUS, INVALID, or a blocked conflict status as not approved for substantial work.
 7. Respect `do-not-use.md` and tombstones before proposing plans or implementations.
 8. Never load `archive/` unless the user explicitly asks or the task is archive maintenance.
 9. Do not load `inbox.md` unless compacting, auditing unsorted memory, or asked by the user.
@@ -65,16 +66,18 @@ already exists is never a substitute for current authorization.
 
 Classify the task into one of the supported canonical categories: general continuation, planning, implementation, artifact work, preferences, history, or maintenance. Then resolve its files exclusively from the current project manifest and use the smallest routed set that can answer the task. Any routes in generated templates or examples are defaults only; they never override a customized project manifest.
 
-Routing is deterministic for the supplied canonical task and explicit profile or area inputs. Do not perform
-hidden semantic relevance scoring. Every loaded module must be traceable to an always-load route, a canonical
-task route, or an explicit profile/area request. `subjects.md` is read by protocol operations but is not injected
-into normal context packs.
+Routing is deterministic for the supplied canonical task, touched paths, and explicit rule/profile/area inputs.
+Do not perform hidden semantic relevance scoring or infer an area from prose. Rules activate only through their
+declared canonical tasks or an explicit rule request; profiles are explicit-only; areas activate only through
+declared path globs or an explicit area request. Inspect `read --explain` dispositions and stable reason codes.
+When path-routed areas exist but scope is missing, routing is INCOMPLETE—not evidence that no area applies.
+`subjects.md` is read by protocol operations but is not injected into normal context packs.
 
 ## Writing Memory
 
 Write durable memory only when it is project-level and likely to matter later.
 
-- Protocol 0.6 active entries require a stable Entry ID, `Status: active`, a valid scope, and at least one
+- Protocol 0.7 active entries require a stable Entry ID, `Status: active`, a valid scope, and at least one
   `user-confirmed` or source-backed Evidence item.
 - New active decisions, constraints, rejected approaches, and area entries require an active Subject ID and a
   controlled Facet. Create or select the Subject explicitly before adding the entry.
@@ -82,6 +85,9 @@ Write durable memory only when it is project-level and likely to matter later.
   change scope, or review the Subject; do not create a second owner.
 - Subject display names and aliases may change without changing identity. Exact alias and canonical-reference
   collisions are rejected, but aliases, timestamps, similar names, and body text do not prove semantic equivalence.
+- Run `check --conflicts` before merge/rebase work and use merge-aware review when Git is available. Exact structural
+  conflicts block substantial work; REVIEW requires an explicit `distinct`, `superseded`, `exception`, or
+  `subject-merged` reconciliation. Protocol 0.7 previews Subject merges and governance changes but does not apply them.
 - Agent inference, code observations, possible decisions, and unconfirmed conversation content remain candidates
   in `inbox.md`; use `--candidate` and never treat them as active memory.
 - Promote a candidate only after confirmation or authoritative source evidence. Promotion creates a new formal
@@ -106,6 +112,8 @@ For sensitive, personal, credential-like, private, or machine-specific informati
 minimal abstract constraint and Evidence reference over copying raw secrets, contract text, private identifiers,
 vendor names, or unnecessary limits into repository memory. Do not commit workstation paths as shared project
 preferences without confirmation. When unsure whether a note is durable, propose the update instead of writing it.
+Store personal/machine preferences in the repo-external local overlay only after explicit root binding. Local
+memory never overrides shared constraints or tombstones, grants authority, or acts as a secret store.
 
 After writing, check the target budget. When `add`, `status`, or `check` reports `NEAR LIMIT` or `OVER BUDGET`,
 immediately perform a dry-run maintenance review before adding more active memory. At 80% or above, shorten long
@@ -136,13 +144,18 @@ When the user asks to forget something:
 6. Do not reintroduce the forgotten content during compaction.
 7. State the erasure boundary accurately: hard affects active managed memory; purge also targets managed archive;
    neither rewrites Git history nor revokes clones, forks, backups, caches, or other distributed copies.
+8. Treat optional `--history-check` as bounded local evidence. `unavailable` is not a PASS, and
+   `no-reachable-copy-detected` is not proof that no external or previously distributed copy exists.
 
 ## References
 
 Load these only when needed:
 
 - `references/memory-file-protocol.md`: file schema, budgets, and loading levels.
+- `references/admission-policy.md`: evidence admission, candidates, structural ownership, and promotion.
 - `references/manifest-policy.md`: manifest routing and loading policy.
+- `references/routing-policy.md`: canonical inputs, glob matching, completeness, explain, and strict routing.
+- `references/local-overlay-policy.md`: repo-external local state, root binding, and precedence.
 - `references/platform-adapters.md`: Codex, Claude Code, Gemini, and generic agent entry patterns.
 - `references/compaction-policy.md`: how to reduce inbox and long files safely.
 - `references/quality-audit.md`: how to audit usefulness, routing, scope, freshness, and portability.
@@ -155,7 +168,9 @@ If the project has the CLI installed, prefer deterministic commands for routine 
 
 ```bash
 memory-custodian status
-memory-custodian read --task planning
+memory-custodian read --task implementation --path cli/module.py --strict-routing --explain
+memory-custodian read --task artifact --rule output --profile docs
+memory-custodian read --task implementation --no-local
 memory-custodian subject list
 memory-custodian subject add "Library X" --kind dependency --canonical-ref dependency:pypi:library-x --evidence repo:pyproject.toml
 memory-custodian subject add "Library X" --kind dependency --canonical-ref dependency:pypi:library-x --evidence repo:pyproject.toml --apply --confirm-plan <PLAN_ID>
@@ -165,12 +180,22 @@ memory-custodian add "..." --type decision --area sync --subject MC-SUBJ-... --f
 memory-custodian add "..." --type decision --subject MC-SUBJ-... --facet behavior --supersedes MC-DEC-... --evidence user-confirmed
 # Then apply the supersede preview with --apply --confirm-plan <PLAN_ID>.
 memory-custodian enable rules/output
+memory-custodian enable area/backend --path 'cli/**'
 memory-custodian compact
-memory-custodian compact --apply --confirm-plan <PLAN_ID>  # Protocol 0.6
+memory-custodian compact --apply --confirm-plan <PLAN_ID>  # Protocol 0.7
 memory-custodian compact --target decisions.md
 memory-custodian compact --target decisions.md --apply --archive-oldest --confirm-plan <PLAN_ID>
 memory-custodian forget "topic" --mode soft
 memory-custodian forget "topic" --mode soft --apply --confirm-plan <PLAN_ID>
+memory-custodian forget --id MC-CON-... --mode hard --history-check
+memory-custodian list --status active
+memory-custodian show MC-CON-...
+memory-custodian local status
+memory-custodian check --routing
+memory-custodian check --reachability
+memory-custodian check --freshness
+memory-custodian check --conflicts
+memory-custodian check --conflicts --merge-base origin/main
 memory-custodian check --privacy
 memory-custodian check --security
 memory-custodian migrate

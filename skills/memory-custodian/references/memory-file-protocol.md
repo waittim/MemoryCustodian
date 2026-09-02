@@ -1,6 +1,6 @@
 # Memory File Protocol
 
-## Protocol 0.6 admission
+## Protocol 0.7 admission
 
 Every new formal CLI entry has an ID in the form `MC-TYPE-YYYYMMDD-8hex`, `Status: active`, a valid `Scope`, and
 at least one Evidence item. Active Evidence may be `user-confirmed`, a safe project-relative `repo:`, `doc:`, or
@@ -49,10 +49,30 @@ Area decisions use `MC-AREA` with a `Decision` body. Area constraints, preferenc
 their semantic `MC-CON`, `MC-PREF`, and `MC-DNU` IDs and typed bodies while using `Scope: area:<slug>` and
 `areas/<slug>.md`. Validation is bidirectional: Entry ID, typed body, storage path, and Scope must agree.
 
-Protocol 0.6 manifests include `entry_schema_version: 1`, `subject_schema_version: 1`, a persistent UUIDv4
-`project_id`, `subject_registry: subjects.md`, `admission_policy: evidence-required`, and
-`conflict_identity_policy: scope-subject-facet`. The project ID is identity for external mutation locks, not
-authorization.
+Protocol 0.7 manifests include Entry schema version 2, Subject schema version 1, and routing and conflict schema
+version 1, a
+persistent UUIDv4 `project_id`, `subject_registry: subjects.md`, `admission_policy: evidence-required`,
+`routing_policy: explicit-task-and-scope`, and `conflict_policy: canonical-subject-and-review`. The project ID is
+identity for external locks and local-overlay namespaces, not authentication or authorization.
+
+### Protocol 0.7 Entry schema 1 to 2 boundary
+
+`entry_schema_version` is interpreted together with `protocol_version`. Protocol 0.7/schema 1 was publicly
+available on the `0.11.0` branch before the body wrapper was added, so it is a distributed legacy format even though
+it has no formal release tag. It uses plain typed-body lines and treats a manually present
+`memory-custodian-body-v1` fence as literal body text.
+
+Protocol 0.7/schema 2 is the current grammar. Its explicit, versioned `memory-custodian-body-v1` wrapper protects
+column-zero fields, headings, and bullets. CLI `0.11.0` or newer can read schema 1 with its literal-body semantics,
+reports migration availability, and migrates to schema 2; it must not silently decode schema-1 source as schema 2.
+Schema 2 is the write format. A schema-1 manifest is not current and all strict reads, checks, conflicts, and writers
+must direct the user to preview/apply migration first. The minimum supported writer is the schema-2-capable `0.11.0`
+build; the pre-wrapper public `0.11.0` branch remains schema-1-only, must be upgraded before migration, and cannot
+safely decode schema-2 wrapper output, so a package version alone is not sufficient unless the build exposes schema 2.
+The local overlay's `local_overlay_schema_version: 1` is an independent
+topology/binding schema; its Entry bodies follow the shared manifest's Entry schema selection. A bound local overlay
+is migrated alongside the shared files in the same preview/apply plan. An unbound, multi-root, or otherwise REVIEW
+overlay blocks the shared schema flip rather than being guessed at; bind or repair it first.
 
 ## Concurrency and plan confirmation
 
@@ -65,7 +85,7 @@ guard. Every mutation is rebuilt while the applicable guard is held.
 Preview-first commands hash a repo-relative private execution plan containing base and expected output digests.
 Public previews are a separate representation. Hard and purge previews omit raw topic arguments and file digests,
 and redact matching topic text from public path and blocker metadata; their private confirmation plan is salted
-with a repo-external random nonce. Protocol 0.6 apply requires the matching Plan ID and refuses every write if any
+with a repo-external random nonce. Protocol 0.7 apply requires the matching Plan ID and refuses every write if any
 target changed.
 
 Private state directories use mode `0700` and state files use `0600` on POSIX. State reads and writes reject
@@ -127,8 +147,8 @@ Controlled Facets are `adoption-policy`, `version-policy`, `architecture`, `beha
 unique by normalized `Scope + Subject ID + Facet`. A replacement must explicitly supersede the existing owner.
 Legacy entries remain readable without these fields, while `check` reports incomplete coverage.
 
-Protocol 0.6 permits every canonical Facet above for each managed entry type. The CLI still validates through an
-explicit type-to-Facet matrix; v0.10 intentionally defines no narrower type-specific exclusions. Narrowing or
+Protocol 0.7 permits every canonical Facet above for each managed entry type. The CLI still validates through an
+explicit type-to-Facet matrix; v0.11 intentionally defines no narrower type-specific exclusions. Narrowing or
 extending this matrix requires a later protocol migration or declared extension schema.
 
 ## Non-Goals
@@ -172,19 +192,19 @@ docs/memory/
 
 ## Loading Levels
 
-Level 1 default:
+Level 1 shared safety baseline:
 
 - `brief.md`
+- `constraints.md`
 
 Level 2 task-specific:
 
 - `decisions.md`
-- `constraints.md`
 - `do-not-use.md`
-- `preferences.md`, if present and relevant
-- `rules/*.md`, if present and relevant
-- `profiles/*.md`, if present and relevant
-- `areas/*.md`, if present and relevant
+- `preferences.md`, if declared by the task route
+- `rules/*.md`, through a declared canonical task or explicit rule
+- `profiles/*.md`, only through explicit profile input
+- `areas/*.md`, through a declared path matcher or explicit area
 
 Level 3 maintenance or explicit request:
 
@@ -217,11 +237,12 @@ Recommended maximums:
 
 ### manifest.md
 
-Defines how agents should load memory, which files are default, and which files are conditional. It should include MemoryCustodian Protocol metadata with `protocol_version`, `initialized_with`, and `last_migrated_with` fields. It should also include a lightweight optional module index for enabled `rules/`, `profiles/`, and `areas/` files so agents can discover them without loading their contents.
+Defines deterministic loading for explicit task and scope inputs. Optional declarations use the normative nested
+grammar in `manifest-policy.md`; descriptions never act as machine routes.
 
 ### brief.md
 
-The only default memory file. Keep it short, current, and focused on project purpose, system shape, and active direction. A generated TODO or protocol description is not a valid project brief.
+The project-shape baseline. Keep it short, current, and focused on purpose, system shape, and active direction. A generated TODO or protocol description is not a valid project brief.
 
 ### decisions.md
 
@@ -229,7 +250,8 @@ Cross-cutting confirmed decisions with date, decision, and reason. Keep each ent
 
 ### constraints.md
 
-Hard requirements. These should be treated as stronger than preferences.
+Project-wide hard requirements and the generated substantial-work safety baseline. Move subsystem-only constraints
+to a deterministically routed area to keep this file within budget.
 
 ### preferences.md
 
@@ -254,15 +276,115 @@ Optional memory maintenance log. Keep it factual, brief, and newest first.
 
 ### rules/
 
-Optional task-specific rules. List enabled rule files in the manifest optional module index, then load a rule file only when the current task clearly matches it.
+Optional task-specific rules. Load only through declared canonical tasks or explicit `--rule` input.
 
 ### profiles/
 
-Optional workflow-specific rules. Keep Git, release, ticket, docs, and research workflows out of the core protocol. List enabled profile files in the manifest optional module index, then load a profile only when its trigger matches.
+Optional workflow-specific rules. Profiles are explicit-only; an adapter must expose the `--profile` choice.
 
 ### areas/
 
-Optional area-specific memory for subsystems, monorepos, or large projects. Prefer an area over root decisions when a choice or invariant applies only to that subsystem. List enabled area files in the manifest optional module index, then load area files only when the task touches that area.
+Optional subsystem memory. Load only through declared path globs or explicit `--area`; never infer from prose.
+
+## Conflict and Reconciliation Records
+
+Current active ownership is normalized `Scope + Subject ID + Facet`. Exact duplicate owners are conflicts.
+Project/area overlap requires a valid area-to-project `Exception-To` relationship; multiple matched areas with the
+same Subject/Facet require review. Exact Canonical-Ref or normalized alias collisions are deterministic conflicts,
+while differently named Subjects are never auto-merged.
+
+Protocol 0.7 conflict findings keep Subject registry contracts distinct: `MC-CONFLICT-003` identifies duplicate
+active Canonical-Ref, `MC-CONFLICT-004` identifies alias ownership by multiple active Subjects, and
+`MC-CONFLICT-005` identifies missing, inactive, merged, or non-reciprocal Subject references. Other Subject
+registry syntax or schema failures use `MC-CONFLICT-010 INVALID`; they must not be mapped to a collision or
+reference code.
+
+`reconciliations.md` may contain active `MC-REC` records with at least two canonical Entry IDs, admissible Evidence,
+and `Resolution: distinct|superseded|exception|subject-merged`. Protocol 0.7 validates hand-maintained records and
+previews Subject merges, but transactional governance apply waits for Protocol 0.8. Relationship resolutions name
+exactly two Entries. A supersession requires a structurally valid active replacement retaining Scope, Subject, and
+Facet. A Subject merge may retain a superseded historical source reference to the merged Subject, but its active
+target must be structurally valid and match the source Scope and Facet. Promoted provisional identity is deferred
+beyond Protocol 0.7.
+
+Strict Protocol 0.7 reads, routing checks, governance previews, and ordinary mutation guards reject duplicate,
+malformed, or wrong-level Protocol headings and malformed metadata. Legacy fallback requires no Protocol heading
+trace at all. A present section requires a valid protocol version; a Protocol 0.7 section requires the complete
+schema, Subject registry, UUIDv4 project identity, and policy metadata contract. Migrate and init repair may consume
+incomplete inputs only when their complete candidate manifest passes strict validation before any write; ambiguous
+sections require manual repair. One valid H2 plus any extra malformed Protocol heading trace is also ambiguous and
+invalid. The current contract requires the canonical version spelling `0.7`; `0.7.0`, leading-zero equivalents, and
+unsupported future versions are invalid rather than being routed with legacy grammar.
+Public Subject, supersede, forget, compact, promotion, replacement, local-overlay, status, and focused-check commands
+consume this same contract before operand lookup or Plan construction. Recovery syntax validation precedes pending
+identity creation, so malformed input cannot leave a project or Entry seed behind.
+Current-project preflight also validates all canonical routes. Fenced Markdown examples do not count as headings;
+standalone HTML comments and valid closed fences are ignored, while code spans cannot open comment state and invalid
+or unclosed fence/comment constructs fail closed. Setext, attached-hash, and four-space indented Protocol lookalikes
+are malformed traces, not metadata sections. Canonical task H3 routes must be direct content of exactly one
+`Load by task` H2. The Optional module index is unique; canonical subsections cannot repeat, declarations cannot
+precede them, sentinels cannot coexist with declarations, and routing schema 1 accepts only `activation`, `tasks`,
+`paths`, and `description`. Local overlay selection requires the resulting validated project identity.
+Promotion renders the prospective active target and validates its schema, storage, structural identity, reciprocal
+relation, Candidate-Type, and any required Optional-index mutation. Its Plan ID binds target existence/content plus
+the candidate, registry, and manifest baselines. Subject merge reuses structural operand checks and binds the exact
+registry and referenced Entry state used by the preview. Local overlay selection validates both the project-id state ancestor
+and `local/` itself as real owner-only `0700` directories. Manifest schema/project scalars are unique, binding identity
+must match, duplicate binding JSON keys are invalid, and every loaded local file is an owner-only `0600` regular file
+read through a no-follow descriptor. The manifest, declared preferences file, and profiles directory are mandatory.
+Multi-root `REVIEW` is diagnostic-only; writes and explicit local indexing require a single-root `BOUND` overlay.
+Security/privacy checks may scan path-safe REVIEW modules without making them available to context or ID operations.
+Binding roots are unique normalized absolute paths. Explicit link replaces a sole nonexistent old root after a move;
+multiple live roots remain REVIEW. A binding without `local/` is corrupt REVIEW state, not disabled state. Formal local
+Entries reuse the shared schema and Evidence checks, with only local-user/local-machine Scope and local storage types.
+They are active-only and forbid Exception-To plus every supersession/promotion lifecycle field. Entry IDs are checked
+for uniqueness across shared and local storage before local content can become BOUND or loadable.
+Local reset records directories/traversal failures and refuses symlink nodes without reading targets. Migration
+accepts operands only from normalized declarations contained in the managed memory directory, normalizes symlink-loop
+failures before seed creation, preserves human prose outside declaration shapes, and renders missing routes from the
+same authority used by initialization.
+
+Shared supersession validates the touched source operand and preserves exact Scope, Subject, and Facet identity. The
+common relation audit requires every target ID to resolve exactly once and every supersession chain to be acyclic and
+terminate at an active replacement. It verifies both sides of supersession and promotion, including lifecycle,
+Candidate-Type, Scope, and provisional Subject/Facet; freshness uses the same audit and also reports invalid
+Exception-To and active merged-Subject references.
+
+Writers serialize body lines that resemble protocol fields or H2 headings as body text and parse-check rendered
+active, candidate, local, migrated, and Subject records before writing. Typed Entry bodies and Subject titles must be
+non-empty. Plain body text keeps its source whitespace, including four-space indented code. Schema-2 writers use an
+explicit standard Markdown fence when a body contains a visible column-zero field, H2, or top-level list line that
+would otherwise be structural; its exact info string is `memory-custodian-body-v1`, and the fence is chosen longer
+than every same-character run in the body. Only the schema-2 parser removes this explicit, versioned wrapper when it
+occurs immediately after a body field. The schema-1 parser treats a manually present marker and its complete fenced
+block as literal body text until migration. The former `&#8283;` entity has no protocol meaning and is preserved as
+ordinary user content, including in pre-existing files. `show` presents the decoded body without the wrapper only
+for schema-2 input.
+Protocol 0.5 bullet writers indent continuation lines so one accepted input remains exactly one semantic unit.
+Migration validates each prospective structured Entry with the shared schema and storage rules; a legacy unit that
+cannot be migrated unambiguously remains unchanged and blocks apply. Subject aliases and titles are canonical single
+lines. Promotion validates Scope and resolved target containment before filesystem access, checks generated IDs across
+active and archive storage, and changes only the canonical Status field. Directed cycle diagnostics retain the real
+successor traversal.
+
+H2 Entries and column-zero legacy bullets are ordered peer semantic units in mixed compatibility files. Evidence,
+Aliases, Entries, and Merged-From list bullets remain attached to their declaring H2; generated typed-body bullets are
+indented. Forget, compaction, indexing, and budget packing use this one boundary grammar. New structured units are
+inserted after file preamble and before the first H2 or legacy bullet. Candidate and promoted records require exactly
+one non-empty Promotion-Requirement.
+
+Soft-forget Tombstones use the same line-safe Entry renderer and deterministic IDs. Repeating the same canonical-topic
+guard is an idempotent no-op, including a case-only spelling change; zero-write apply reports no change. Idempotence
+requires exactly one global owner, and any additional or non-equivalent same-ID owner is a blocker. Changelog continuations remain inside one bullet.
+Forget preview and lock-held apply consume one authoritative build result, and both current and compatibility paths
+must re-evaluate blockers and broad-match risk immediately before mutation.
+Pending Subject, hard-forget Tombstone, and migration Entry IDs are checked against all current owners and IDs already
+created by the plan on every build, including the lock-held rebuild.
+
+## Local Overlay
+
+Repo-external local modules use `Scope: local-user` or `Scope: local-machine`, require explicit normalized-root
+binding, and load below all shared hard memory. They cannot redefine shared routes, hold secrets, or grant authority.
 
 ### archive/
 

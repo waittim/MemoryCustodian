@@ -242,7 +242,7 @@ class PackingAndRoutingTests(unittest.TestCase):
             self.assertEqual(main(["init", "--project-root", tmp]), 0)
             manifest = Path(tmp) / "docs" / "memory" / "manifest.md"
             text = manifest.read_text(encoding="utf-8")
-            text = text.replace("- decisions.md\n- constraints.md", "- ../outside.md\n- constraints.md", 1)
+            text = text.replace("- brief.md\n- constraints.md", "- ../outside.md\n- constraints.md", 1)
             manifest.write_text(text, encoding="utf-8")
             err = StringIO()
             with redirect_stderr(err):

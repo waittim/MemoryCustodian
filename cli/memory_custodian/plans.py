@@ -5,8 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
+import stat
 import uuid
 
 from .locking import (
@@ -16,7 +18,7 @@ from .locking import (
     private_state_directory,
     read_private_file,
 )
-from .mutations import TextMutation
+from .mutations import PrivateTextMutation, TextMutation
 
 
 def digest_text(text: str) -> str:
@@ -24,7 +26,33 @@ def digest_text(text: str) -> str:
 
 
 def digest_path(path: Path) -> str:
-    return digest_text(path.read_text(encoding="utf-8")) if path.exists() else digest_text("")
+    return (
+        digest_text(_read_regular_text(path))
+        if path.exists() or path.is_symlink()
+        else digest_text("")
+    )
+
+
+def _read_regular_text(path: Path) -> str:
+    before = path.lstat()
+    if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode):
+        raise ValueError(f"Plan operand must be a regular non-symlink file: {path}")
+    try:
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except OSError as exc:
+        raise ValueError(f"Plan operand could not be opened safely: {path}") from exc
+    try:
+        opened = os.fstat(descriptor)
+        if not stat.S_ISREG(opened.st_mode) or (
+            before.st_dev, before.st_ino
+        ) != (opened.st_dev, opened.st_ino):
+            raise ValueError(f"Plan operand changed during safe open: {path}")
+        with os.fdopen(descriptor, "r", encoding="utf-8") as handle:
+            descriptor = -1
+            return handle.read()
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
 
 
 PENDING_PLAN_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
@@ -142,6 +170,7 @@ class MutationPlan:
     private_context: dict[str, object] | None = None
     sensitive: bool = False
     public_redactions: tuple[str, ...] = ()
+    private_mutations: tuple[PrivateTextMutation, ...] = ()
 
     def _canonical_path(self, path: Path) -> str:
         if self.project_root is None:
@@ -198,7 +227,11 @@ class MutationPlan:
             limit = budget_for(name)
             if limit is None:
                 continue
-            before_text = mutation.path.read_text(encoding="utf-8") if mutation.path.exists() else ""
+            before_text = (
+                _read_regular_text(mutation.path)
+                if mutation.path.exists() or mutation.path.is_symlink()
+                else ""
+            )
             before = estimate_tokens(before_text)
             after = estimate_tokens(mutation.text)
             results.append(
@@ -242,8 +275,29 @@ class MutationPlan:
             operations.append(operation)
         return operations
 
+    def _private_operations(self, *, include_digests: bool) -> list[dict[str, object]]:
+        """Render private overlay mutations without exposing their real paths."""
+
+        operations: list[dict[str, object]] = []
+        for mutation in sorted(self.private_mutations, key=lambda item: item.relative):
+            relative = mutation.relative.replace("\\", "/")
+            operation: dict[str, object] = {
+                "path": f"local/{relative}",
+                "operation": "replace" if mutation.path.exists() else "create",
+            }
+            if include_digests:
+                operation["base_sha256"] = digest_path(mutation.path)
+                # The private writer preserves the supplied bytes; unlike the
+                # shared write_text helper it does not add a terminal newline.
+                operation["expected_output_sha256"] = digest_text(mutation.text)
+            operations.append(operation)
+        return operations
+
     def private_canonical(self) -> dict[str, object]:
-        operations = self._operations(include_digests=True)
+        operations = [
+            *self._operations(include_digests=True),
+            *self._private_operations(include_digests=True),
+        ]
         return {
             "command": self.command,
             "arguments": self._json_value(self.arguments),
@@ -259,10 +313,15 @@ class MutationPlan:
         }
 
     def canonical(self) -> dict[str, object]:
-        operations = self._operations(
-            include_digests=not self.sensitive,
-            public=True,
-        )
+        operations = [
+            *self._operations(
+                include_digests=not self.sensitive,
+                public=True,
+            ),
+            *self._private_operations(
+                include_digests=not self.sensitive,
+            ),
+        ]
         return {
             "command": self.command,
             "arguments": self._json_value(

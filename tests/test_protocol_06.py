@@ -765,7 +765,7 @@ class Protocol06Tests(unittest.TestCase):
             manifest = memory / "manifest.md"
             manifest.write_text(
                 manifest.read_text(encoding="utf-8").replace(
-                    "- protocol_version: 0.6", "- protocol_version: 0.5"
+                "- protocol_version: 0.7", "- protocol_version: 0.5"
                 ),
                 encoding="utf-8",
             )
@@ -813,7 +813,7 @@ class Protocol06Tests(unittest.TestCase):
             manifest_path = Path(tmp) / "docs" / "memory" / "manifest.md"
             legacy_manifest = manifest_path.read_text(encoding="utf-8")
             legacy_manifest = legacy_manifest.replace(
-                "- protocol_version: 0.6",
+                "- protocol_version: 0.7",
                 "- protocol_version: 0.5",
             )
             legacy_manifest = re.sub(

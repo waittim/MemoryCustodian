@@ -1,0 +1,282 @@
+"""Protocol 0.7 routing, reachability, and freshness checks."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+import subprocess
+
+from .conflicts import analyze_snapshot
+from .entries import validate_evidence
+from .protocol import parse_manifest_task_file_specs
+from .routes import CANONICAL_TASKS, SUBSTANTIAL_TASKS, parse_optional_module_index
+from .snapshot import MemorySnapshot, build_snapshot
+
+
+@dataclass(frozen=True)
+class QualityFinding:
+    severity: str
+    code: str
+    message: str
+
+
+def _supplied_snapshot(
+    memory_dir: Path,
+    snapshot: MemorySnapshot | None,
+) -> MemorySnapshot:
+    """Use the supplied capture, or build one for a standalone call."""
+
+    return snapshot if snapshot is not None else build_snapshot(memory_dir)
+
+
+def _manifest_contract_finding(
+    snapshot: MemorySnapshot,
+) -> QualityFinding | None:
+    """Return the stable routing gate finding for one captured manifest."""
+
+    if snapshot.manifest_contract.present:
+        if snapshot.manifest_contract.error is None:
+            return None
+        return QualityFinding(
+            "ERROR", "MC-ROUTING-007", snapshot.manifest_contract.error,
+        )
+    return QualityFinding("ERROR", "MC-ROUTING-001", "manifest.md is missing.")
+
+
+def routing_findings(
+    memory_dir: Path,
+    *,
+    snapshot: MemorySnapshot | None = None,
+) -> tuple[QualityFinding, ...]:
+    snapshot = _supplied_snapshot(memory_dir, snapshot)
+    manifest = snapshot.manifest_text
+    contract_finding = _manifest_contract_finding(snapshot)
+    if contract_finding is not None:
+        return (contract_finding,)
+    findings: list[QualityFinding] = []
+    metadata = snapshot.manifest_contract.as_dict()
+    version = metadata.get("protocol_version", "0.5")
+    try:
+        declarations = parse_optional_module_index(manifest, legacy_compatible=version != "0.7")
+    except ValueError as exc:
+        declarations = ()
+        findings.append(QualityFinding("ERROR", "MC-ROUTING-003", str(exc)))
+    for task in sorted(SUBSTANTIAL_TASKS):
+        try:
+            specs = parse_manifest_task_file_specs(manifest, task)
+            paths = {path for path, _required in specs}
+        except ValueError:
+            continue
+        for relative, required in specs:
+            if required and snapshot.file_for(relative) is None:
+                findings.append(QualityFinding(
+                    "ERROR", "MC-ROUTING-006",
+                    f"Required module is missing for {task}: {relative}",
+                ))
+        if "constraints.md" not in paths:
+            findings.append(QualityFinding(
+                "WARNING", "MC-ROUTING-004",
+                f"Routing safety review required: {task} does not reach root constraints.md.",
+            ))
+    for declaration in declarations:
+        if snapshot.file_for(declaration.module_id) is None:
+            findings.append(QualityFinding(
+                "WARNING", "MC-ROUTING-005",
+                f"Enabled optional module is missing: {declaration.module_id}",
+            ))
+    return tuple(sorted(set(findings), key=lambda item: (item.severity, item.code, item.message)))
+
+
+def reachability_findings(
+    memory_dir: Path,
+    *,
+    snapshot: MemorySnapshot | None = None,
+) -> tuple[QualityFinding, ...]:
+    snapshot = _supplied_snapshot(memory_dir, snapshot)
+    contract_finding = _manifest_contract_finding(snapshot)
+    if contract_finding is not None:
+        return (contract_finding,)
+    manifest = snapshot.manifest_text
+    metadata = snapshot.manifest_contract.as_dict()
+    version = metadata.get("protocol_version", "0.5")
+    declarations = parse_optional_module_index(manifest, legacy_compatible=version != "0.7")
+    reachable: set[str] = set()
+    for task in CANONICAL_TASKS:
+        try:
+            reachable.update(path for path, _required in parse_manifest_task_file_specs(manifest, task))
+        except ValueError:
+            pass
+    reachable.update(item.module_id for item in declarations)
+    declarations_by_path = {item.module_id: item for item in declarations}
+    findings: list[QualityFinding] = []
+    canonical_paths = snapshot.canonical_paths
+    for item in snapshot.files:
+        path = item.path
+        if path in canonical_paths or path.name.casefold() == "readme.md":
+            continue
+        if item.relative.startswith("archive/"):
+            continue
+        for entry in item.entries:
+            if entry.status == "active":
+                findings.append(QualityFinding(
+                    "ERROR", "MC-REACH-001",
+                    f"{entry.entry_id} in {item.relative} "
+                    "is outside canonical manifest-authorized storage.",
+                ))
+    for entry in snapshot.entries:
+        if entry.status != "active":
+            continue
+        relative = entry.path.relative_to(snapshot.memory_dir).as_posix()
+        if relative not in reachable:
+            hard = entry.entry_id.split("-", 2)[1].upper() in {"CON", "DNU", "TOMB"}
+            severity = "ERROR" if hard and entry.scope == "project" else "WARNING"
+            findings.append(QualityFinding(
+                severity, "MC-REACH-001",
+                f"{entry.entry_id} in {relative} is unreachable from normal routes.",
+            ))
+        if entry.scope.startswith("area:") and entry.entry_id.split("-", 2)[1].upper() == "CON":
+            declaration = declarations_by_path.get(relative)
+            if declaration is None or declaration.activation not in {"path", "path-or-explicit", "explicit-only"}:
+                findings.append(QualityFinding(
+                    "ERROR", "MC-REACH-002",
+                    f"Area constraint {entry.entry_id} has no valid path or explicit activation.",
+                ))
+    unique = {
+        (item.severity, item.code, item.message): item
+        for item in findings
+    }
+    return tuple(sorted(unique.values(), key=lambda item: (item.severity, item.code, item.message)))
+
+
+def _head_revision(project_root: Path) -> str | None:
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=project_root,
+            text=True, capture_output=True, check=False, timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return result.stdout.strip() if result.returncode == 0 else None
+
+
+def freshness_findings(
+    project_root: Path,
+    memory_dir: Path,
+    *,
+    snapshot: MemorySnapshot | None = None,
+) -> tuple[QualityFinding, ...]:
+    # Build the managed-memory inventory exactly once.  Every subsequent
+    # freshness check, relation check, and conflict analysis must consume the
+    # same snapshot so concurrent edits cannot mix observations from different
+    # file-system instants.  Callers that already have an inventory may pass it
+    # explicitly (for example, a larger validation pipeline).
+    snapshot = snapshot or build_snapshot(memory_dir, project_root)
+    if snapshot.manifest_contract.error:
+        return (
+            QualityFinding(
+                "ERROR",
+                "MC-ROUTING-007",
+                snapshot.manifest_contract.error,
+            ),
+        )
+    findings: list[QualityFinding] = []
+    head = _head_revision(project_root)
+    saw_revision = False
+    entries = snapshot.entries
+    subject_records = snapshot.subjects
+
+    def check_evidence(owner: str, evidence: tuple[str, ...]) -> None:
+        nonlocal saw_revision
+        for value in evidence:
+            prefix, separator, rest = value.partition(":")
+            if not separator or prefix not in {"repo", "doc", "test"}:
+                continue
+            try:
+                # Validate the path syntax and containment even when the
+                # registry's structural pass allowed a missing source.
+                normalized_evidence = validate_evidence(
+                    (value,), project_root, allow_missing=True,
+                )[0]
+            except ValueError:
+                findings.append(QualityFinding(
+                    "ERROR", "MC-FRESH-001",
+                    f"{owner} Evidence has an unsafe or invalid source path.",
+                ))
+                continue
+            # validate_evidence canonicalizes path separators before checking
+            # the filesystem.  Use that same canonical value for freshness;
+            # otherwise a valid Windows-style relative path is checked under
+            # its literal POSIX backslash spelling and is falsely reported as
+            # missing.
+            prefix, separator, rest = normalized_evidence.partition(":")
+            raw_path, at, revision = rest.partition("@")
+            target = (project_root / raw_path).resolve()
+            try:
+                target.relative_to(project_root.resolve())
+            except ValueError:
+                # This is normally covered above; retain a defensive check so
+                # freshness never follows an escaping Evidence path.
+                findings.append(QualityFinding(
+                    "ERROR", "MC-FRESH-001",
+                    f"{owner} Evidence path escapes the project: {prefix}:{raw_path}",
+                ))
+                continue
+            if not target.exists():
+                findings.append(QualityFinding(
+                    "ERROR", "MC-FRESH-001",
+                    f"{owner} Evidence path does not exist: {prefix}:{raw_path}",
+                ))
+            if at:
+                saw_revision = True
+                if head is not None and not head.startswith(revision) and not revision.startswith(head):
+                    findings.append(QualityFinding(
+                        "WARNING", "MC-FRESH-002",
+                        f"{owner} Evidence revision differs from current Git HEAD.",
+                    ))
+
+    for entry in entries:
+        if entry.status in {"active", "candidate"}:
+            check_evidence(entry.entry_id, entry.evidence)
+    for subject in subject_records:
+        check_evidence(f"Subject {subject.subject_id}", subject.evidence)
+    # Relation freshness is derived only from the shared conflict result.  In
+    # particular, do not separately replay snapshot.relation_issues or the
+    # Subject merge invariant: doing so emits duplicate findings and can
+    # observe a different validation path.  Reconciliation classification is
+    # structural too; its origin metadata is the authority, not message text.
+    freshness_codes = {
+        ("subject-registry", "MC-CONFLICT-005"): "MC-FRESH-005",
+        ("subject-reference", "MC-CONFLICT-005"): "MC-FRESH-005",
+        ("exception-relation", "MC-CONFLICT-006"): "MC-FRESH-004",
+        ("entry-schema", "MC-CONFLICT-007"): "MC-FRESH-004",
+        ("subject-reference", "MC-CONFLICT-007"): "MC-FRESH-004",
+        ("entry-identity", "MC-CONFLICT-008"): "MC-FRESH-004",
+        ("entry-relation", "MC-CONFLICT-008"): "MC-FRESH-004",
+        ("reconciliation", "MC-CONFLICT-008"): "MC-FRESH-006",
+    }
+    for conflict in analyze_snapshot(snapshot).findings:
+        freshness_code = freshness_codes.get((conflict.origin, conflict.code))
+        if freshness_code:
+            findings.append(QualityFinding(
+                "ERROR", freshness_code, conflict.message,
+            ))
+    if saw_revision and head is None:
+        findings.append(QualityFinding(
+            "INFO", "MC-FRESH-003",
+            "Git is unavailable; revision-backed Evidence was not freshness-checked.",
+        ))
+    unique = {
+        (item.severity, item.code, item.message): item
+        for item in findings
+    }
+    return tuple(sorted(unique.values(), key=lambda item: (item.severity, item.code, item.message)))
+
+
+def render_quality(title: str, findings: tuple[QualityFinding, ...]) -> int:
+    status = "OK" if not any(item.severity == "ERROR" for item in findings) else "FAILED"
+    print(f"MemoryCustodian {title}: {status}")
+    if not findings:
+        print("- no findings")
+    for finding in findings:
+        print(f"- {finding.code} {finding.severity}: {finding.message}")
+    return 1 if any(item.severity == "ERROR" for item in findings) else 0

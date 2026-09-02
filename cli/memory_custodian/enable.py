@@ -13,11 +13,13 @@ from .protocol import (
     is_safe_memory_name,
     manifest_with_optional_module_index,
     protocol_metadata,
+    read_managed_text,
     resolve_memory_dir,
     resolve_project_root,
     today,
 )
 from .mutations import TextMutation, apply_mutations
+from .routes import validate_glob
 from .templates import render_area_template, render_profile_template, render_rule_template, render_template
 
 
@@ -65,16 +67,22 @@ def _build_mutations(
     manifest_path: Path,
     relative_path: str,
     template_text: str,
+    *,
+    path_globs: tuple[str, ...] = (),
 ) -> tuple[str, str | None, list[TextMutation]]:
     path = memory_dir / relative_path
     state = "kept" if path.exists() else "written"
-    target_text = path.read_text(encoding="utf-8") if path.exists() else template_text
+    target_text = read_managed_text(memory_dir, path, required=False) if path.exists() else template_text
     planned: dict[Path, str] = {} if path.exists() else {path: target_text}
     manifest_state = None
     if is_indexable_optional_path(relative_path):
+        folder = relative_path.split("/", 1)[0]
+        activation = "path-or-explicit" if folder == "areas" and path_globs else "explicit-only"
         updated_manifest, changed = manifest_with_optional_module_index(
-            manifest_path.read_text(encoding="utf-8"),
+            read_managed_text(memory_dir, manifest_path),
             relative_path,
+            activation=activation,
+            paths=path_globs,
         )
         if changed:
             planned[manifest_path] = updated_manifest
@@ -88,7 +96,7 @@ def _build_mutations(
         )
     elif changed_state and changelog.exists():
         planned[changelog] = changelog_text(
-            changelog.read_text(encoding="utf-8"),
+            read_managed_text(memory_dir, changelog),
             f"Enabled optional memory module {relative_path}.",
         )
     return state, manifest_state, [
@@ -112,6 +120,9 @@ def run(args) -> int:
         raise ValueError(f"Unknown or invalid optional feature: {args.feature}")
 
     relative_path, text = result
+    path_globs = tuple(dict.fromkeys(validate_glob(value) for value in getattr(args, "path", [])))
+    if path_globs and not relative_path.startswith("areas/"):
+        raise ValueError("--path is only valid when enabling an area module")
     with project_mutation_guard(
         project_root,
         manifest_path,
@@ -134,13 +145,14 @@ def run(args) -> int:
             )
         if comparison == 0 and guard.project_id is None:
             raise ValueError(
-                "Protocol 0.6 manifest is missing a valid project_id; run `init --repair`."
+                "Protocol 0.7 manifest is missing a valid project_id; run `init --repair`."
             )
         state, manifest_state, mutations = _build_mutations(
             memory_dir,
             manifest_path,
             relative_path,
             text,
+            path_globs=path_globs,
         )
         if mutations:
             apply_mutations(mutations)
