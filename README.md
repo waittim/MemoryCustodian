@@ -300,6 +300,8 @@ MemoryCustodian tracks three related versions:
 - **Protocol version** (`0.7`): `manifest.md` schema, entry schemas (Schema 2), and routing rules.
 - **Project memory version**: Protocol metadata declared in your repository's `manifest.md`.
 
+Protocol 0.7/schema 1 was publicly available on the `0.11.0` branch as a legacy input; CLI `0.11.0` or newer reads it with literal semantics and migrates to the current Protocol 0.7/schema 2 grammar. Strict reads and writers must not treat schema 1 as current. Bound local files are included in the same preview/apply plan.
+
 Run `memory-custodian check` to inspect compatibility, and `memory-custodian migrate` to preview and apply upgrades.
 
 For complete release history and breaking change notes, see [RELEASE-NOTES.md](RELEASE-NOTES.md).
