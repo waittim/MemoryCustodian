@@ -284,8 +284,8 @@ memory-custodian local link
 
 The included [NightNotes demo](examples/nightnotes-video-demo) demonstrates a new agent session recovering an existing JSON storage decision, offline/standard-library constraints, and a rejected SQLite approach:
 
-- 📺 [Watch the demo video](https://www.youtube.com/watch?v=mYKzzATlOPw)
-- 📊 [Reproducible live evaluation report](docs/evaluations/nightnotes-codex-gpt-5.6.md)
+- [Watch the demo video](https://www.youtube.com/watch?v=mYKzzATlOPw)
+- [Reproducible live evaluation report](docs/evaluations/nightnotes-codex-gpt-5.6.md)
 
 ### Built with Codex and GPT-5.6
 
