@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 from pathlib import Path
 import stat
@@ -17,8 +18,10 @@ from .local_overlay import (
     link_root,
     render_overlay_status,
     validated_project_identity,
+    _manifest_text,
 )
 from .locking import (
+    ensure_private_directory,
     project_mutation_guard,
 )
 from .protocol import (
@@ -31,6 +34,8 @@ from .protocol import (
     resolve_project_root,
 )
 from .snapshot import build_snapshot
+from .mutations import PrivateDeleteMutation, PrivateTextMutation
+from .transactions import apply_transaction, binding_directory, ensure_no_unfinished
 
 
 def _reset_inventory(
@@ -125,6 +130,37 @@ def _reset_inventory(
     return dependencies, blockers
 
 
+def _reset_targets(directory: Path) -> tuple[PrivateDeleteMutation, ...]:
+    root = directory.parent
+    paths = [
+        path for path in directory.rglob("*")
+        if path.is_file() and not path.is_symlink()
+    ]
+    binding = root / "bindings.json"
+    if binding.is_file() and not binding.is_symlink():
+        paths.append(binding)
+    return tuple(
+        PrivateDeleteMutation(path, path.relative_to(root).as_posix())
+        for path in sorted(set(paths), key=lambda item: item.as_posix())
+    )
+
+
+def _reset_plan_id(
+    project_id: str,
+    status: LocalStatus,
+    dependencies: list[str],
+    blockers: list[str],
+) -> str:
+    seed = "\0".join([
+        "local-reset",
+        project_id,
+        status.value,
+        *dependencies,
+        *(f"blocker:{item}" for item in blockers),
+    ]).encode("utf-8")
+    return hashlib.sha256(seed).hexdigest()[:16]
+
+
 def run(args) -> int:
     project_root = resolve_project_root(args.project_root)
     memory_dir = resolve_memory_dir(project_root, args.memory_dir)
@@ -169,8 +205,10 @@ def run(args) -> int:
         if overlay.status == LocalStatus.DISABLED:
             print("No local overlay state exists for this project; nothing to reset.")
             render_scope(ErasureScope(
-                active_memory=False,
-                managed_archive=False,
+                erasure_scope_schema_version=1,
+                operation_phase="no-op",
+                active_memory="not-applicable",
+                managed_archive="not-targeted",
                 local_overlay="not-applicable",
                 git_worktree_modified="no",
                 git_history_modified=False,
@@ -183,32 +221,91 @@ def run(args) -> int:
         blockers = list(inventory_blockers)
         if overlay.status in {LocalStatus.UNBOUND, LocalStatus.REVIEW}:
             blockers.extend(overlay.warnings)
-        seed = "\0".join([
-            "local-reset",
-            project_id,
-            overlay.status.value,
-            *dependencies,
-            *(f"blocker:{item}" for item in blockers),
-        ]).encode("utf-8")
-        print(f"Plan ID: {hashlib.sha256(seed).hexdigest()[:16]}")
+        plan_id = _reset_plan_id(project_id, overlay.status, dependencies, blockers)
+        print(f"Plan ID: {plan_id}")
         print("Blockers:")
         for blocker in blockers or ["none"]:
             print(f"- {blocker}")
+        reset_scope = ErasureScope(
+            erasure_scope_schema_version=1,
+            operation_phase="preview",
+            active_memory="not-applicable",
+            managed_archive="not-targeted",
+            local_overlay="pending-removal",
+            git_worktree_modified="no",
+            git_history_modified=False,
+            distributed_copies_revoked=False,
+            history_check_status="not-requested",
+            topic_retained_in_new_records=False,
+        )
+        render_scope(reset_scope)
+        if not args.apply:
+            print("Dry run only. Re-run with --apply --confirm-plan <PLAN_ID>.")
+            return 0
+        if blockers:
+            print("Refusing local reset while blockers remain.")
+            return 1
+        if args.confirm_plan != plan_id:
+            raise ValueError("Stale or mismatched local reset plan.")
+        assert overlay.directory is not None
+        with project_mutation_guard(
+            project_root, manifest, "local reset",
+            timeout=args.lock_timeout, break_stale=args.break_stale_lock,
+        ) as guard:
+            if guard.project_id != project_id:
+                raise ValueError("Project identity changed before local reset; preview again.")
+            locked_overlay = inspect_overlay(
+                project_root,
+                project_id,
+                shared_ids=memory_entry_ids(memory_dir),
+                entry_schema_version=entry_schema_version,
+            )
+            locked_dependencies, locked_blockers = _reset_inventory(locked_overlay.directory)
+            if locked_overlay.status in {LocalStatus.UNBOUND, LocalStatus.REVIEW}:
+                locked_blockers.extend(locked_overlay.warnings)
+            locked_plan_id = _reset_plan_id(
+                project_id,
+                locked_overlay.status,
+                locked_dependencies,
+                locked_blockers,
+            )
+            if locked_plan_id != args.confirm_plan:
+                raise ValueError("Local overlay changed before reset apply; preview again.")
+            if locked_blockers or locked_overlay.directory is None:
+                raise ValueError("Local overlay is no longer safe to reset.")
+            targets = _reset_targets(locked_overlay.directory)
+            apply_transaction(
+                project_root=project_root, memory_root=memory_dir,
+                project_id=project_id, command="local-reset", plan_id=plan_id,
+                private_deletions=targets, local_root=locked_overlay.directory.parent,
+                erasure_scope=reset_scope.canonical(),
+                force_journal=True,
+            )
+        for path in sorted(
+            (item for item in overlay.directory.rglob("*") if item.is_dir()),
+            key=lambda item: len(item.parts), reverse=True,
+        ):
+            try:
+                path.rmdir()
+            except OSError:
+                pass
+        try:
+            overlay.directory.rmdir()
+        except OSError:
+            pass
         render_scope(ErasureScope(
-            active_memory=False,
-            managed_archive=False,
-            local_overlay=(
-                "blocked-pending-local-overlay-review"
-                if blockers
-                else "current-machine-current-project-on-protocol-0.8-apply"
-            ),
+            erasure_scope_schema_version=1,
+            operation_phase="applied",
+            active_memory="not-applicable",
+            managed_archive="not-targeted",
+            local_overlay="removed",
             git_worktree_modified="no",
             git_history_modified=False,
             distributed_copies_revoked=False,
             history_check_status="not-requested",
             topic_retained_in_new_records=False,
         ))
-        print("Transactional local reset apply requires Protocol 0.8.")
+        print("Removed the current machine/project local overlay only; other machines and backups were not modified.")
         return 0
 
     with project_mutation_guard(
@@ -225,7 +322,7 @@ def run(args) -> int:
         # reserve its ID before local allocation proceeds.
         locked_project_id = mutation.project_id
         if locked_project_id is None:
-            raise ValueError("Local overlay access requires a valid Protocol 0.7 project identity.")
+            raise ValueError("Local overlay access requires a valid Protocol 0.8 project identity.")
         locked_snapshot = build_snapshot(memory_dir, project_root)
         captured_project_id = validated_project_identity(
             memory_dir,
@@ -233,6 +330,9 @@ def run(args) -> int:
         )
         if captured_project_id != locked_project_id:
             raise ValueError("Project manifest changed while acquiring the mutation lock.")
+        # Even single-file local mutations must not race an interrupted
+        # shared/local transaction for the same project identity.
+        ensure_no_unfinished(binding_directory(project_root, memory_dir, locked_project_id))
         shared_ids = {
             entry.entry_id for entry in locked_snapshot.relation_entries
         }
@@ -245,13 +345,44 @@ def run(args) -> int:
                 capture_unbound=True,
             )
         if command == "enable":
-            overlay = enable_overlay(
-                project_root,
-                locked_project_id,
-                shared_ids=shared_ids,
-                entry_schema_version=locked_snapshot.entry_schema_version,
-                overlay=overlay,
-            )
+            if overlay.status == LocalStatus.DISABLED:
+                if overlay.directory is None:
+                    raise ValueError("Local overlay enable has no safe target directory.")
+                # The project-id directory is the trusted root for this
+                # transaction.  It is private infrastructure rather than a
+                # transaction target, so establish and validate it before
+                # the journal inventories the missing ``local/`` subtree.
+                local_root = ensure_private_directory(overlay.directory.parent)
+                private_mutations = (
+                    PrivateTextMutation(overlay.directory / "manifest.md", "manifest.md", _manifest_text(locked_project_id)),
+                    PrivateTextMutation(
+                        overlay.directory / "preferences.md", "preferences.md",
+                        "# Local Preferences\n\nEntries are newest first.\n",
+                    ),
+                )
+                plan_id = hashlib.sha256(
+                    ("local-enable\0" + locked_project_id).encode("utf-8")
+                ).hexdigest()[:16]
+                apply_transaction(
+                    project_root=project_root, memory_root=memory_dir,
+                    project_id=locked_project_id, command="local-enable", plan_id=plan_id,
+                    private_mutations=private_mutations, local_root=local_root,
+                    private_directories=(overlay.directory / "profiles",),
+                    force_journal=True,
+                )
+                overlay = inspect_overlay(
+                    project_root, locked_project_id, shared_ids=shared_ids,
+                    entry_schema_version=locked_snapshot.entry_schema_version,
+                    capture_unbound=True,
+                )
+            else:
+                overlay = enable_overlay(
+                    project_root,
+                    locked_project_id,
+                    shared_ids=shared_ids,
+                    entry_schema_version=locked_snapshot.entry_schema_version,
+                    overlay=overlay,
+                )
             if overlay.directory is None:
                 raise ValueError("Local overlay enable did not produce a usable directory.")
             print(f"Local overlay enabled for project_id {locked_project_id}.")
@@ -259,20 +390,63 @@ def run(args) -> int:
             print("Run `memory-custodian local link` before local content can load.")
             return 0
         if command == "link":
-            overlay = enable_overlay(
-                project_root,
-                locked_project_id,
-                shared_ids=shared_ids,
-                entry_schema_version=locked_snapshot.entry_schema_version,
-                overlay=overlay,
-            )
-            roots = link_root(
-                project_root,
-                locked_project_id,
-                shared_ids=shared_ids,
-                entry_schema_version=locked_snapshot.entry_schema_version,
-                overlay=overlay,
-            )
+            if overlay.status == LocalStatus.DISABLED:
+                if overlay.directory is None:
+                    raise ValueError("Local overlay link has no safe target directory.")
+                local_root = ensure_private_directory(overlay.directory.parent)
+                current_root = str(project_root.resolve())
+                binding_path = local_root / "bindings.json"
+                private_mutations = (
+                    PrivateTextMutation(
+                        overlay.directory / "manifest.md",
+                        "local/manifest.md",
+                        _manifest_text(locked_project_id),
+                    ),
+                    PrivateTextMutation(
+                        overlay.directory / "preferences.md",
+                        "local/preferences.md",
+                        "# Local Preferences\n\nEntries are newest first.\n",
+                    ),
+                    PrivateTextMutation(
+                        binding_path,
+                        "bindings.json",
+                        json.dumps(
+                            {"project_id": locked_project_id, "roots": [current_root]},
+                            sort_keys=True,
+                            indent=2,
+                        ) + "\n",
+                    ),
+                )
+                plan_id = hashlib.sha256(
+                    ("local-link\0" + locked_project_id + "\0" + current_root).encode("utf-8")
+                ).hexdigest()[:16]
+                apply_transaction(
+                    project_root=project_root,
+                    memory_root=memory_dir,
+                    project_id=locked_project_id,
+                    command="local-link",
+                    plan_id=plan_id,
+                    private_mutations=private_mutations,
+                    private_directories=(overlay.directory / "profiles",),
+                    local_root=local_root,
+                    force_journal=True,
+                )
+                roots = (current_root,)
+            else:
+                overlay = enable_overlay(
+                    project_root,
+                    locked_project_id,
+                    shared_ids=shared_ids,
+                    entry_schema_version=locked_snapshot.entry_schema_version,
+                    overlay=overlay,
+                )
+                roots = link_root(
+                    project_root,
+                    locked_project_id,
+                    shared_ids=shared_ids,
+                    entry_schema_version=locked_snapshot.entry_schema_version,
+                    overlay=overlay,
+                )
             print("Local overlay linked to this normalized project root.")
             if len(roots) > 1:
                 print("Local overlay status: REVIEW")
@@ -280,7 +454,7 @@ def run(args) -> int:
             return 0
         if command == "add":
             if args.type != "preference":
-                raise ValueError("Protocol 0.7 local add currently supports --type preference only.")
+                raise ValueError("Protocol 0.8 local add currently supports --type preference only.")
             evidence = validate_evidence(args.evidence, project_root)
             entry_id = add_local_preference(
                 project_root,

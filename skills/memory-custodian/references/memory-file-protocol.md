@@ -1,6 +1,31 @@
 # Memory File Protocol
 
-## Protocol 0.7 admission
+## Protocol 0.8 / Entry schema 3
+
+Package 0.12 writes Protocol 0.8 with Entry schema 3. The manifest remains
+the shared routing authority and `subjects.md` remains a protocol registry,
+not normal context. Entry schema 3 extends schema 2 with the canonical typed
+body and `Entry-Type` rules for formal `MC-AREA` rule/profile entries while
+retaining the versioned `memory-custodian-body-v1` wrapper. Schema 1 literal
+wrapper-like text is decoded only after the source metadata selects the legacy
+grammar; schema 2/3 decode the wrapper. Search uses decoded semantic text and
+mutation preserves the raw source unit.
+
+Formal active managed entries require ID, Status, Scope, Evidence, a typed
+body, and (except `MC-TOMB`) valid Subject/Facet ownership. `MC-TOMB` is a
+topic-free erasure guard, not a structural owner. Rules/profiles use explicit
+`Entry-Type` values and remain explicit workflow inputs. Duplicate fields,
+ambiguous lifecycle, missing typed body, or ID/storage/type mismatch is
+invalid rather than silently tolerated; an active legacy entry is an audit
+ERROR until staged migration canonicalizes it.
+
+Protocol 0.8 multi-file writes use transaction schema 1; audit uses child
+schema 1 and public output uses envelope schema 1. See `transaction-policy.md`,
+`output-contract.md`, and `migration-policy.md` for recovery, JSON, and staged
+migration contracts. Hard/purge forgetting and local reset use the canonical
+ErasureScope and do not rewrite Git history or revoke distributed copies.
+
+## Protocol 0.7 compatibility admission
 
 Every new formal CLI entry has an ID in the form `MC-TYPE-YYYYMMDD-8hex`, `Status: active`, a valid `Scope`, and
 at least one Evidence item. Active Evidence may be `user-confirmed`, a safe project-relative `repo:`, `doc:`, or
@@ -49,8 +74,8 @@ Area decisions use `MC-AREA` with a `Decision` body. Area constraints, preferenc
 their semantic `MC-CON`, `MC-PREF`, and `MC-DNU` IDs and typed bodies while using `Scope: area:<slug>` and
 `areas/<slug>.md`. Validation is bidirectional: Entry ID, typed body, storage path, and Scope must agree.
 
-Protocol 0.7 manifests include Entry schema version 2, Subject schema version 1, and routing and conflict schema
-version 1, a
+Protocol 0.7 compatibility manifests include Entry schema version 2, Subject
+schema version 1, and routing and conflict schema version 1, a
 persistent UUIDv4 `project_id`, `subject_registry: subjects.md`, `admission_policy: evidence-required`,
 `routing_policy: explicit-task-and-scope`, and `conflict_policy: canonical-subject-and-review`. The project ID is
 identity for external locks and local-overlay namespaces, not authentication or authorization.
@@ -62,7 +87,7 @@ available on the `0.11.0` branch before the body wrapper was added, so it is a d
 it has no formal release tag. It uses plain typed-body lines and treats a manually present
 `memory-custodian-body-v1` fence as literal body text.
 
-Protocol 0.7/schema 2 is the current grammar. Its explicit, versioned `memory-custodian-body-v1` wrapper protects
+Protocol 0.7/schema 2 is the pre-0.12 grammar. Its explicit, versioned `memory-custodian-body-v1` wrapper protects
 column-zero fields, headings, and bullets. CLI `0.11.0` or newer can read schema 1 with its literal-body semantics,
 reports migration availability, and migrates to schema 2; it must not silently decode schema-1 source as schema 2.
 Schema 2 is the write format. A schema-1 manifest is not current and all strict reads, checks, conflicts, and writers
@@ -85,7 +110,7 @@ guard. Every mutation is rebuilt while the applicable guard is held.
 Preview-first commands hash a repo-relative private execution plan containing base and expected output digests.
 Public previews are a separate representation. Hard and purge previews omit raw topic arguments and file digests,
 and redact matching topic text from public path and blocker metadata; their private confirmation plan is salted
-with a repo-external random nonce. Protocol 0.7 apply requires the matching Plan ID and refuses every write if any
+with a repo-external random nonce. Protocol 0.8 apply requires the matching Plan ID and refuses every write if any
 target changed.
 
 Private state directories use mode `0700` and state files use `0600` on POSIX. State reads and writes reject
@@ -147,9 +172,9 @@ Controlled Facets are `adoption-policy`, `version-policy`, `architecture`, `beha
 unique by normalized `Scope + Subject ID + Facet`. A replacement must explicitly supersede the existing owner.
 Legacy entries remain readable without these fields, while `check` reports incomplete coverage.
 
-Protocol 0.7 permits every canonical Facet above for each managed entry type. The CLI still validates through an
-explicit type-to-Facet matrix; v0.11 intentionally defines no narrower type-specific exclusions. Narrowing or
-extending this matrix requires a later protocol migration or declared extension schema.
+Protocol 0.7 compatibility permits every canonical Facet above for each
+managed entry type. Protocol 0.8 retains the controlled Facet registry and
+validates type/storage/body contracts through Entry schema 3.
 
 ## Non-Goals
 
@@ -293,7 +318,7 @@ Project/area overlap requires a valid area-to-project `Exception-To` relationshi
 same Subject/Facet require review. Exact Canonical-Ref or normalized alias collisions are deterministic conflicts,
 while differently named Subjects are never auto-merged.
 
-Protocol 0.7 conflict findings keep Subject registry contracts distinct: `MC-CONFLICT-003` identifies duplicate
+Protocol 0.7 compatibility conflict findings keep Subject registry contracts distinct: `MC-CONFLICT-003` identifies duplicate
 active Canonical-Ref, `MC-CONFLICT-004` identifies alias ownership by multiple active Subjects, and
 `MC-CONFLICT-005` identifies missing, inactive, merged, or non-reciprocal Subject references. Other Subject
 registry syntax or schema failures use `MC-CONFLICT-010 INVALID`; they must not be mapped to a collision or
@@ -301,20 +326,21 @@ reference code.
 
 `reconciliations.md` may contain active `MC-REC` records with at least two canonical Entry IDs, admissible Evidence,
 and `Resolution: distinct|superseded|exception|subject-merged`. Protocol 0.7 validates hand-maintained records and
-previews Subject merges, but transactional governance apply waits for Protocol 0.8. Relationship resolutions name
+previews Subject merges; Protocol 0.8 applies governance through transactions. Relationship resolutions name
 exactly two Entries. A supersession requires a structurally valid active replacement retaining Scope, Subject, and
 Facet. A Subject merge may retain a superseded historical source reference to the merged Subject, but its active
 target must be structurally valid and match the source Scope and Facet. Promoted provisional identity is deferred
 beyond Protocol 0.7.
 
-Strict Protocol 0.7 reads, routing checks, governance previews, and ordinary mutation guards reject duplicate,
+Strict compatibility reads, routing checks, governance previews, and ordinary mutation guards reject duplicate,
 malformed, or wrong-level Protocol headings and malformed metadata. Legacy fallback requires no Protocol heading
-trace at all. A present section requires a valid protocol version; a Protocol 0.7 section requires the complete
+trace at all. A present section requires a valid protocol version; a Protocol 0.8 section requires the complete
 schema, Subject registry, UUIDv4 project identity, and policy metadata contract. Migrate and init repair may consume
 incomplete inputs only when their complete candidate manifest passes strict validation before any write; ambiguous
 sections require manual repair. One valid H2 plus any extra malformed Protocol heading trace is also ambiguous and
-invalid. The current contract requires the canonical version spelling `0.7`; `0.7.0`, leading-zero equivalents, and
-unsupported future versions are invalid rather than being routed with legacy grammar.
+invalid. The current contract requires the canonical version spelling `0.8`; `0.8.0`, leading-zero equivalents, and
+unsupported future versions are invalid rather than being routed with legacy grammar. Protocol 0.7 remains a staged
+migration source, not a current write target.
 Public Subject, supersede, forget, compact, promotion, replacement, local-overlay, status, and focused-check commands
 consume this same contract before operand lookup or Plan construction. Recovery syntax validation precedes pending
 identity creation, so malformed input cannot leave a project or Entry seed behind.

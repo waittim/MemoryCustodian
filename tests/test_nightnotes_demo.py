@@ -38,7 +38,7 @@ class NightNotesDemoTests(unittest.TestCase):
             "human-readable local JSON",
             "without network access",
             "Python standard library",
-            "Tombstone: SQLite for session persistence",
+            "Rejected:\nDo not reintroduce SQLite for session persistence",
         ):
             self.assertIn(expected, planning.stdout)
         self.assertNotIn("Consider encrypting exported notes", planning.stdout)
@@ -49,7 +49,7 @@ class NightNotesDemoTests(unittest.TestCase):
         )
         self.assertEqual(compact.returncode, 0, compact.stderr)
         self.assertIn("Candidates requiring Agent review: 1", compact.stdout)
-        self.assertIn("Consider encrypting exported notes", compact.stdout)
+        self.assertIn("Encrypt exported notes", compact.stdout)
         self.assertIn("No semantic destinations are inferred", compact.stdout)
 
     def test_demo_acceptance_test_fails_only_for_missing_persistence(self):

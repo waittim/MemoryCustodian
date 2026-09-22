@@ -1,5 +1,9 @@
 # Claude Code Adapter Install
 
+The adapter targets MemoryCustodian 0.12 / Protocol 0.8. Keep the generated
+`CLAUDE.md` thin; the Skill references are the normative source for routing,
+transaction recovery, audit/JSON, staged migration, and ErasureScope.
+
 ## Test The Plugin
 
 From this repository, test MemoryCustodian as a Claude Code plugin:
@@ -39,3 +43,6 @@ Or add the contents of `CLAUDE.snippet.md` to the target project's `CLAUDE.md`.
 Optionally copy files from `commands/` into the project's `.claude/commands/` directory.
 
 Keep `CLAUDE.md` as an entry point. Store durable memory in `docs/memory/`.
+
+For automation, use `memory-custodian audit --format json`; an interrupted
+write is handled through `audit --transactions` and opaque-ID `recover`.

@@ -942,7 +942,7 @@ def validated_project_identity(
         metadata.get("protocol_version", "0.5"),
         CURRENT_PROTOCOL_VERSION,
     ) != 0:
-        raise ValueError("Local overlay access requires Protocol 0.7.")
+        raise ValueError("Local overlay access requires Protocol 0.8.")
     return metadata["project_id"]
 
 

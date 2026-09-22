@@ -36,8 +36,8 @@ class CheckStatusSnapshotContractTests(unittest.TestCase):
     @staticmethod
     def _invalid_version(manifest: Path) -> str:
         return manifest.read_text(encoding="utf-8").replace(
-            "- protocol_version: 0.7",
-            "- protocol_version: 0.7.0",
+            "- protocol_version: 0.8",
+            "- protocol_version: 0.8.0",
             1,
         )
 
@@ -178,7 +178,7 @@ class CheckStatusSnapshotContractTests(unittest.TestCase):
 
             self.assertEqual(code, 0, output + error)
             self.assertEqual(builder.call_count, 1)
-            self.assertIn("Protocol version: 0.7 (current)", output)
+            self.assertIn("Protocol version: 0.8 (current)", output)
             self.assertNotIn("Protocol metadata: INVALID", output)
             manifest.write_text(valid, encoding="utf-8")
 

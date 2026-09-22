@@ -58,7 +58,7 @@ class FreshnessSnapshotTests(unittest.TestCase):
             captured = build_snapshot(memory, Path(root))
 
             manifest.write_text(
-                valid.replace("- protocol_version: 0.7", "- protocol_version: 0.7.0", 1),
+                valid.replace("- protocol_version: 0.8", "- protocol_version: 0.8.0", 1),
                 encoding="utf-8",
             )
             with patch(
@@ -73,7 +73,7 @@ class FreshnessSnapshotTests(unittest.TestCase):
 
             manifest.write_text(valid, encoding="utf-8")
             invalid_manifest = valid.replace(
-                "- protocol_version: 0.7", "- protocol_version: 0.7.0", 1,
+                "- protocol_version: 0.8", "- protocol_version: 0.8.0", 1,
             )
             manifest.write_text(invalid_manifest, encoding="utf-8")
             invalid_snapshot = build_snapshot(memory, Path(root))
@@ -83,7 +83,7 @@ class FreshnessSnapshotTests(unittest.TestCase):
             )
             self.assertEqual(
                 [(item.code, item.message) for item in findings],
-                [("MC-ROUTING-007", "Protocol version equivalent to 0.7 must use the canonical value 0.7; manifest has '0.7.0'")],
+                [("MC-ROUTING-007", "Protocol version equivalent to 0.8 must use the canonical value 0.8; manifest has '0.8.0'")],
             )
 
     def test_snapshot_keeps_one_manifest_capture_for_canonical_authority(self):
@@ -167,7 +167,7 @@ class FreshnessSnapshotTests(unittest.TestCase):
             self.assertTrue(snapshot.file_for("areas/backend.md").canonical)
 
             invalid = planned_manifest.replace(
-                "- protocol_version: 0.7", "- protocol_version: 0.7.0", 1,
+                "- protocol_version: 0.8", "- protocol_version: 0.8.0", 1,
             )
             invalid_snapshot = build_snapshot(
                 memory,
@@ -176,7 +176,7 @@ class FreshnessSnapshotTests(unittest.TestCase):
             )
             self.assertEqual(
                 invalid_snapshot.manifest_contract.error,
-                "Protocol version equivalent to 0.7 must use the canonical value 0.7; manifest has '0.7.0'",
+                "Protocol version equivalent to 0.8 must use the canonical value 0.8; manifest has '0.8.0'",
             )
 
     def test_ordinary_check_reports_one_structural_owner_finding(self):

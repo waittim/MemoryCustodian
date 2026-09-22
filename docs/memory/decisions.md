@@ -2,6 +2,23 @@
 
 Entries are newest first.
 
+## MC-DEC-20260921-40000001 — Protocol 0.8 reliability governance
+
+Status: active
+Scope: project
+Subject: MC-SUBJ-20260729-7e5c3a91
+Facet: architecture
+Evidence:
+- user-confirmed
+- doc:docs/MemoryCustodian-plan-0.12.0-erasure-aligned-revised.md
+Supersedes: MC-DEC-20260801-07000007
+
+Decision:
+Use Protocol 0.8 transactional mutation recovery, unified audit/output contracts, staged migration, and bounded erasure semantics as the pre-1.0 reliability baseline.
+
+Reason:
+Provides recoverable writes and stable machine contracts without overstating erasure.
+
 ## MC-DEC-20260827-8f4c2a91 — Protocol 0.7 body fencing
 
 Status: active
@@ -20,7 +37,7 @@ Preserves parse/write semantics.
 
 ## MC-DEC-20260801-07000007 — Protocol 0.7 governance
 
-Status: active
+Status: superseded
 Scope: project
 Subject: MC-SUBJ-20260729-7e5c3a91
 Facet: architecture
@@ -29,6 +46,7 @@ Evidence:
 - repo:cli/memory_custodian/local_overlay.py
 - test:tests/test_local_snapshot.py
 Supersedes: MC-DEC-20260729-ef44900b
+Superseded-By: MC-DEC-20260921-40000001
 
 Decision:
 Use explicit routing and review. Strict reads consume one overlay snapshot; local writes refresh IDs under lock. Defer further governance to 0.8.

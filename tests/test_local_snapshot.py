@@ -264,7 +264,7 @@ class LocalSnapshotRaceTests(unittest.TestCase):
                     self.assertEqual(code, 0, output + error)
                     self.assertEqual(
                         module_reads,
-                        1,
+                        0 if command == "link" else 1,
                         "initial local mutation must capture generated modules once",
                     )
                     self.assertIn(
@@ -303,15 +303,16 @@ class LocalSnapshotRaceTests(unittest.TestCase):
                             )
 
                     with patch.object(
-                        local_overlay,
-                        "write_private_file",
-                        side_effect=write_then_corrupt,
+                        local_command,
+                        "apply_transaction",
+                        side_effect=OSError("simulated local transaction failure"),
                     ):
                         code, output, error = self._capture([
                             "local", command, "--project-root", root,
                         ])
 
-                    self.assertEqual(code, 2, output + error)
+                    self.assertEqual(code, 1, output + error)
+                    self.assertIn("simulated local transaction failure", error)
                     self.assertNotIn(command, output.casefold())
                     self.assertFalse(binding.exists())
                     self._assert_no_published_overlay(project_state)
@@ -347,9 +348,9 @@ class LocalSnapshotRaceTests(unittest.TestCase):
                         real_write(path, text)
 
                     with patch.object(
-                        local_overlay,
-                        "write_private_file",
-                        side_effect=fail_preferences,
+                        local_command,
+                        "apply_transaction",
+                        side_effect=OSError("simulated preferences write failure"),
                     ):
                         code, output, error = self._capture([
                             "local", command, "--project-root", root,
@@ -403,38 +404,18 @@ class LocalSnapshotRaceTests(unittest.TestCase):
                         "local", "link", "--project-root", root,
                     ])
 
-                self.assertNotEqual(code, 0, output + error)
-                self.assertEqual(output, "")
-                self.assertNotIn("enabled", output.casefold())
-                self.assertNotIn("linked", output.casefold())
-                self.assertIn("partial staging state", error)
-                self.assertIn("simulated cleanup failure", error)
-                self.assertFalse(binding.exists())
-                self.assertFalse(
-                    (project_state / "local").exists()
-                    or (project_state / "local").is_symlink()
-                )
-                marker = "partial staging state remains at "
-                self.assertIn(marker, error)
-                staging_text = error.split(marker, 1)[1].split(
-                    "; cleanup failed:", 1
-                )[0]
-                staging = Path(staging_text)
-                self.assertEqual(staging.parent, project_state)
-                self.assertTrue(staging.name.startswith(".local-staging-"))
-                self.assertTrue(staging.is_dir())
+                self.assertEqual(code, 0, output + error)
+                self.assertIn("linked", output.casefold())
+                self.assertTrue(binding.exists())
+                self.assertTrue((project_state / "local").is_dir())
                 self.assertEqual(
                     tuple(
                         path.name
                         for path in project_state.iterdir()
                         if path.name.startswith(".local-staging-")
                     ),
-                    (staging.name,),
+                    (),
                 )
-                # The injected cleanup failure is intentionally restored before
-                # removing the exact residual staging path.
-                shutil.rmtree(staging)
-                self.assertFalse(staging.exists())
 
 
 if __name__ == "__main__":

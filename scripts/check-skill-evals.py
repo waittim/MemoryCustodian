@@ -16,6 +16,8 @@ ADAPTERS = (
     "adapters/gemini/GEMINI.snippet.md",
     "adapters/generic/agent-instructions.md",
 )
+CROSS_AGENT_FIXTURE = ROOT / "evals" / "memory-custodian" / "cross-agent" / "shared-contract.json"
+LIVE_EVALUATION = ROOT / "evals" / "memory-custodian" / "live-evaluation.md"
 
 
 def _read_text(path: Path) -> str:
@@ -103,11 +105,37 @@ def _check_adapters() -> list[str]:
     return issues
 
 
+def _check_cross_agent_fixture() -> list[str]:
+    issues: list[str] = []
+    if not CROSS_AGENT_FIXTURE.exists():
+        return ["evals/memory-custodian/cross-agent/shared-contract.json: missing fixture"]
+    try:
+        fixture = json.loads(_read_text(CROSS_AGENT_FIXTURE))
+    except (OSError, json.JSONDecodeError) as exc:
+        return [f"{CROSS_AGENT_FIXTURE.relative_to(ROOT)}: invalid JSON: {exc}"]
+    if fixture.get("agents") != ["codex", "claude-code", "gemini", "generic"]:
+        issues.append("cross-agent fixture must cover the four supported adapters in stable order")
+    required = {
+        "file_set", "skipped_module_set", "entry_set", "order",
+        "routing_completeness", "reason_codes", "warnings",
+        "context_sha256_field", "subject_ids_field", "conflict_status",
+        "conflict_findings", "reconciliation_findings", "erasure_scope_field",
+    }
+    contract = fixture.get("expected_contract", {})
+    missing = sorted(required - set(contract)) if isinstance(contract, dict) else sorted(required)
+    if missing:
+        issues.append("cross-agent fixture missing expected fields: " + ", ".join(missing))
+    if not LIVE_EVALUATION.exists() or "not a claim" not in _read_text(LIVE_EVALUATION):
+        issues.append("live cross-agent evaluation recipe must remain explicit and non-aspirational")
+    return issues
+
+
 def main() -> int:
     config = json.loads(_read_text(MANIFEST))
     issues = _check_skill_contract(config)
     issues.extend(_check_scenarios(config))
     issues.extend(_check_adapters())
+    issues.extend(_check_cross_agent_fixture())
 
     if issues:
         print("MemoryCustodian skill contract check: FAILED")

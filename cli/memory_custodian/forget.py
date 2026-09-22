@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import hashlib
 from pathlib import Path
 import re
@@ -31,6 +31,7 @@ from .plans import (
     pending_plan_nonce,
     print_plan,
 )
+from .transactions import apply_plan_transaction
 from .protocol import (
     CURRENT_ENTRY_SCHEMA_VERSION,
     CURRENT_PROTOCOL_VERSION,
@@ -854,7 +855,7 @@ def run(args) -> int:
         return 1
 
     if protocol_06 and not args.confirm_plan:
-        raise ValueError("Protocol 0.7 forget apply requires --confirm-plan <PLAN_ID>.")
+        raise ValueError("Protocol 0.8 forget apply requires --confirm-plan <PLAN_ID>.")
     with project_mutation_guard(
         project_root,
         memory_dir / "manifest.md",
@@ -901,7 +902,7 @@ def run(args) -> int:
                 )
         elif current_protocol_06:
             raise ValueError(
-                "Project migrated to Protocol 0.7 before compatibility forget apply; "
+                "Project migrated to Protocol 0.8 before compatibility forget apply; "
                 "preview again and confirm the new Plan ID."
             )
         elif current_comparison > 0:
@@ -926,11 +927,22 @@ def run(args) -> int:
             )
             current_plan = current_build.plan
             _require_locked_plan_is_applicable(current_build, args.allow_broad_match)
-        completed_paths = apply_mutations(list(current_plan.mutations))
+        completed_paths = apply_plan_transaction(
+            current_plan,
+            memory_dir,
+            erasure_scope=scope.canonical(),
+        )
     completed = [path.relative_to(memory_dir).as_posix() for path in completed_paths]
 
     if not completed:
         print("No changes applied; the forget guard is already present or no managed unit changed.")
+        render_scope(replace(
+            scope,
+            operation_phase="no-op",
+            active_memory=("no-match" if scope.active_memory == "pending-removal" else scope.active_memory),
+            managed_archive=("no-match" if scope.managed_archive == "pending-removal" else scope.managed_archive),
+            git_worktree_modified="no",
+        ))
         discard_pending_seed(tombstone_seed_path)
         discard_pending_seed(privacy_seed_path)
         return 0
@@ -940,5 +952,13 @@ def run(args) -> int:
         print(f"- {_public_text(name, topic, redact)}")
     discard_pending_seed(tombstone_seed_path)
     discard_pending_seed(privacy_seed_path)
+    applied_scope = replace(
+        scope,
+        operation_phase="applied",
+        active_memory=("removed" if scope.active_memory == "pending-removal" else scope.active_memory),
+        managed_archive=("removed" if scope.managed_archive == "pending-removal" else scope.managed_archive),
+        git_worktree_modified="yes",
+    )
+    render_scope(applied_scope)
     render_apply_boundary()
     return 0

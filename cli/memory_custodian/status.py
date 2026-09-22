@@ -54,7 +54,7 @@ def run(args) -> int:
         if snapshot.manifest_contract.migration_available:
             print(
                 "Protocol version: 0.7 / entry schema 1 "
-                "(migration available to entry schema 2)"
+                "(staged migration available to Entry schema 3)"
             )
         else:
             print(f"Protocol metadata: INVALID ({protocol_error})")

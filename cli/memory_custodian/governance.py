@@ -1,4 +1,4 @@
-"""Read-only Protocol 0.7 relation and reconciliation previews."""
+"""Transactional relation and reconciliation governance."""
 
 from __future__ import annotations
 
@@ -9,7 +9,10 @@ from pathlib import Path
 
 from .conflicts import canonical_entries
 from .entries import ENTRY_ID_RE, StructuredEntry, validate_evidence
-from .plans import digest_text
+from .locking import project_mutation_guard
+from .mutations import TextMutation
+from .plans import MutationPlan, digest_text
+from .transactions import apply_plan_transaction
 from .protocol import (
     CURRENT_PROTOCOL_VERSION,
     compare_versions,
@@ -103,6 +106,29 @@ def _entry_state(entry: StructuredEntry, memory_dir: Path) -> dict[str, str]:
     }
 
 
+def _replace_entry_source(document: str, entry: StructuredEntry, updated_unit: str) -> str:
+    if document.count(entry.text) != 1:
+        raise ValueError(f"Entry source must resolve exactly once: {entry.entry_id}")
+    return document.replace(entry.text, updated_unit, 1)
+
+
+def _with_exception(entry: StructuredEntry, target: str | None) -> str:
+    import re
+    unit = re.sub(r"(?m)^Exception-To:[^\n]*(?:\n|$)", "", entry.text)
+    if target is None:
+        return unit.rstrip()
+    body = next(
+        (name for name in ("Decision", "Constraint", "Preference", "Rejected") if entry.field_counts.get(name)),
+        None,
+    )
+    if body is None:
+        raise ValueError("Exception source has no canonical typed body.")
+    marker = f"\n\n{body}:"
+    if marker not in unit:
+        raise ValueError("Exception source body boundary is ambiguous.")
+    return unit.replace(marker, f"\nException-To: {target}{marker}", 1)
+
+
 def _exception_relation_blockers(
     area: StructuredEntry,
     baseline: StructuredEntry,
@@ -166,8 +192,31 @@ def _exception_add(args) -> int:
     print("Blockers:")
     for blocker in blockers or ["none"]:
         print(f"- {blocker}")
-    print(f"Plan ID: {_plan_id('exception add', project.project_id, payload)}")
-    print("Transactional Exception-To apply requires Protocol 0.8.")
+    original = read_managed_text(memory_dir, area.path)
+    updated = _replace_entry_source(original, area, _with_exception(area, baseline.entry_id))
+    plan = MutationPlan(
+        "exception add", {"entry_id": area.entry_id, "target_entry_id": baseline.entry_id},
+        project.project_id, CURRENT_PROTOCOL_VERSION,
+        () if blockers or updated == original else (TextMutation(area.path, updated),),
+        blockers=tuple(blockers),
+        private_context={
+            "dependency_sha256": _plan_id("exception-add", project.project_id, payload),
+        },
+        project_root=project.project_root,
+    )
+    print(f"Plan ID: {plan.plan_id}")
+    if not args.apply:
+        print("Dry run only. Re-run with --apply --confirm-plan <PLAN_ID>.")
+        return 0
+    if blockers:
+        return 1
+    if args.confirm_plan != plan.plan_id:
+        raise ValueError("Stale or mismatched Exception-To plan. No files written.")
+    with project_mutation_guard(project.project_root, memory_dir / "manifest.md", "exception add", timeout=args.lock_timeout, break_stale=args.break_stale_lock):
+        if plan.plan_id != args.confirm_plan:
+            raise ValueError("Exception-To source changed before apply; preview again. No files written.")
+        apply_plan_transaction(plan, memory_dir, force_journal=True)
+    print("Applied Exception-To relation.")
     return 0
 
 
@@ -222,8 +271,31 @@ def _exception_remove(args) -> int:
     print("Blockers:")
     for blocker in blockers or ["none"]:
         print(f"- {blocker}")
-    print(f"Plan ID: {_plan_id('exception remove', project.project_id, payload)}")
-    print("Transactional Exception-To apply requires Protocol 0.8.")
+    original = read_managed_text(memory_dir, area.path)
+    updated = _replace_entry_source(original, area, _with_exception(area, None))
+    plan = MutationPlan(
+        "exception remove", {"entry_id": area.entry_id}, project.project_id,
+        CURRENT_PROTOCOL_VERSION,
+        () if blockers or updated == original else (TextMutation(area.path, updated),),
+        blockers=tuple(blockers),
+        private_context={
+            "dependency_sha256": _plan_id("exception-remove", project.project_id, payload),
+        },
+        project_root=project.project_root,
+    )
+    print(f"Plan ID: {plan.plan_id}")
+    if not args.apply:
+        print("Dry run only. Re-run with --apply --confirm-plan <PLAN_ID>.")
+        return 0
+    if blockers:
+        return 1
+    if args.confirm_plan != plan.plan_id:
+        raise ValueError("Stale or mismatched Exception-To removal plan. No files written.")
+    with project_mutation_guard(project.project_root, memory_dir / "manifest.md", "exception remove", timeout=args.lock_timeout, break_stale=args.break_stale_lock):
+        if plan.plan_id != args.confirm_plan:
+            raise ValueError("Exception-To source changed before apply; preview again. No files written.")
+        apply_plan_transaction(plan, memory_dir, force_journal=True)
+    print("Removed Exception-To relation; structural overlap remains REVIEW until reconciled.")
     return 0
 
 
@@ -316,8 +388,33 @@ def _reconcile_preview(args) -> int:
     print("Blockers:")
     for blocker in blockers or ["none"]:
         print(f"- {blocker}")
-    print(f"Plan ID: {_plan_id('reconcile preview', project.project_id, payload)}")
-    print("Transactional reconciliation apply requires Protocol 0.8.")
+    existing_text = read_managed_text(memory_dir, path, required=False)
+    if existing_text:
+        updated = existing_text.rstrip() + "\n\n" + unit + "\n"
+    else:
+        updated = "# Reconciliations\n\nRecords are append-only governance evidence.\n\n" + unit + "\n"
+    plan = MutationPlan(
+        "reconcile", {"resolution": args.resolution, "entries": requested},
+        project.project_id, CURRENT_PROTOCOL_VERSION,
+        () if blockers else (TextMutation(path, updated),), blockers=tuple(blockers),
+        private_context={
+            "dependency_sha256": _plan_id("reconcile", project.project_id, payload),
+        },
+        project_root=project.project_root,
+    )
+    print(f"Plan ID: {plan.plan_id}")
+    if not args.apply:
+        print("Dry run only. Re-run with --apply --confirm-plan <PLAN_ID>.")
+        return 0
+    if blockers:
+        return 1
+    if args.confirm_plan != plan.plan_id:
+        raise ValueError("Stale or mismatched reconciliation plan. No files written.")
+    with project_mutation_guard(project.project_root, memory_dir / "manifest.md", "reconcile", timeout=args.lock_timeout, break_stale=args.break_stale_lock):
+        if plan.plan_id != args.confirm_plan:
+            raise ValueError("Reconciliation inputs changed before apply; preview again. No files written.")
+        apply_plan_transaction(plan, memory_dir, force_journal=True)
+    print(f"Applied reconciliation record {record_id}.")
     return 0
 
 

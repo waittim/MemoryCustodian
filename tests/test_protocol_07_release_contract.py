@@ -25,6 +25,7 @@ from memory_custodian.entries import (
 )
 from memory_custodian.local_overlay import add_local_preference, inspect_overlay
 from memory_custodian.main import main
+from tests.cli_test_support import main as compatibility_main
 from memory_custodian.protocol import (
     entry_schema_version_for_manifest,
     inspect_manifest_contract,
@@ -38,42 +39,48 @@ ROOT = Path(__file__).resolve().parents[1]
 def capture(argv: list[str]) -> tuple[int, str, str]:
     stdout, stderr = StringIO(), StringIO()
     with redirect_stdout(stdout), redirect_stderr(stderr):
-        code = main(argv)
+        code = (
+            compatibility_main(argv)
+            if argv and argv[0] == "migrate"
+            else main(argv)
+        )
     return code, stdout.getvalue(), stderr.getvalue()
 
 
 class Protocol07ReleaseContractTests(unittest.TestCase):
     def test_schema_2_is_current_and_public_legacy_boundary_is_documented(self):
-        self.assertEqual(__version__, "0.11.0")
-        self.assertEqual(__protocol_version__, "0.7")
-        self.assertEqual(__entry_schema_version__, "2")
-        self.assertEqual(ENTRY_SCHEMA_VERSION, "2")
+        self.assertEqual(__version__, "0.12.0")
+        self.assertEqual(__protocol_version__, "0.8")
+        self.assertEqual(__entry_schema_version__, "3")
+        self.assertEqual(ENTRY_SCHEMA_VERSION, "3")
         self.assertEqual(BODY_FENCE_INFO, "memory-custodian-body-v1")
 
         reference = (
             ROOT / "skills" / "memory-custodian" / "references" / "memory-file-protocol.md"
         ).read_text(encoding="utf-8")
-        self.assertIn("Protocol 0.7 Entry schema 1 to 2 boundary", reference)
+        self.assertIn("Protocol 0.8 / Entry schema 3", reference)
         self.assertIn("schema 1 was publicly", reference)
-        self.assertIn("schema 2 is the current grammar", reference)
+        self.assertIn("schema 2 is the pre-0.12 grammar", reference)
         self.assertIn("literal-body semantics", reference)
         self.assertIn("bound local overlay", reference)
-        self.assertIn("blocks the shared schema flip", reference)
+        self.assertIn("staged migration", reference)
 
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
-        self.assertIn("Protocol 0.7/schema 1 was publicly available", readme)
-        self.assertIn("current Protocol 0.7/schema 2 grammar", readme)
-        self.assertIn("must not treat schema 1 as current", readme)
-        self.assertIn("Bound local files are included", readme)
+        self.assertIn("0.7/schema 1 or 2 projects remain readable", readme)
+        self.assertIn("Protocol 0.8 / Entry schema 3", readme)
+        self.assertIn("Schema 1 treats wrapper-like text literally", readme)
+        self.assertIn("Bound local files participate", readme)
 
         release_notes = (ROOT / "RELEASE-NOTES.md").read_text(encoding="utf-8")
         self.assertIn("Entry schema 1 to 2 compatibility boundary", release_notes)
         self.assertIn("supported legacy input", release_notes)
-        self.assertIn("preview/applies a schema 1-to-2 migration", release_notes)
-        self.assertIn("Bound local files migrate", release_notes)
+        self.assertIn("`migrate --prepare`", release_notes)
+        self.assertIn("`migrate --canonicalize`", release_notes)
+        self.assertIn("`migrate --finalize`", release_notes)
+        self.assertIn("Bound local overlays participate", release_notes)
 
         template = (ROOT / "templates" / "minimal" / "manifest.md").read_text(encoding="utf-8")
-        self.assertIn("- entry_schema_version: 2", template)
+        self.assertIn("- entry_schema_version: 3", template)
 
     def test_malformed_schema_metadata_fails_closed_to_legacy_parser(self):
         malformed = (
@@ -125,14 +132,14 @@ class Protocol07ReleaseContractTests(unittest.TestCase):
 
             self.assertEqual(entry_schema_version_for_manifest(
                 manifest.read_text(encoding="utf-8"),
-            ), "2")
+            ), "3")
             contract = inspect_manifest_contract(
                 manifest.read_text(encoding="utf-8"),
             )
             self.assertFalse(contract.valid)
             self.assertIn("Invalid manifest routing", contract.error or "")
             snapshot = build_snapshot(memory, Path(tmp))
-            self.assertEqual(snapshot.entry_schema_version, "2")
+            self.assertEqual(snapshot.entry_schema_version, "3")
             self.assertFalse(snapshot.manifest_contract.valid)
             self.assertEqual(snapshot.entries[0].field_bodies["Decision"], literal)
             self.assertNotIn(
@@ -301,9 +308,9 @@ class Protocol07ReleaseContractTests(unittest.TestCase):
                     encoding="utf-8",
                 )
                 manifest.write_text(
-                    manifest.read_text(encoding="utf-8").replace(
-                        "entry_schema_version: 2", "entry_schema_version: 1",
-                    ),
+                    manifest.read_text(encoding="utf-8")
+                    .replace("protocol_version: 0.8", "protocol_version: 0.7")
+                    .replace("entry_schema_version: 3", "entry_schema_version: 1"),
                     encoding="utf-8",
                 )
 
@@ -318,10 +325,9 @@ class Protocol07ReleaseContractTests(unittest.TestCase):
                 status_code, status, status_error = capture(
                     ["local", "status", "--project-root", root]
                 )
-                self.assertEqual(status_code, 0, status_error)
-                self.assertIn("Local overlay status: BOUND", status)
-                self.assertIn("migration to entry schema 2 is available", status)
-                with self.assertRaisesRegex(ValueError, "migration to entry schema 2 is available"):
+                self.assertEqual(status_code, 2, status + status_error)
+                self.assertIn("requires Protocol 0.8", status_error)
+                with self.assertRaisesRegex(ValueError, "migration to Entry schema 3 is available"):
                     add_local_preference(
                         Path(root), project_id, "new local body", ("user-confirmed",),
                         entry_schema_version="1",
@@ -333,9 +339,9 @@ class Protocol07ReleaseContractTests(unittest.TestCase):
             memory = Path(tmp) / "docs" / "memory"
             manifest = memory / "manifest.md"
             manifest.write_text(
-                manifest.read_text(encoding="utf-8").replace(
-                    "entry_schema_version: 2", "entry_schema_version: 1",
-                ),
+                manifest.read_text(encoding="utf-8")
+                .replace("protocol_version: 0.8", "protocol_version: 0.7")
+                .replace("entry_schema_version: 3", "entry_schema_version: 1"),
                 encoding="utf-8",
             )
             entry_id = "MC-DEC-20260827-bbbbbbbb"
@@ -343,39 +349,41 @@ class Protocol07ReleaseContractTests(unittest.TestCase):
             (memory / "decisions.md").write_text(
                 "# Decisions\n\n"
                 f"## {entry_id} — Legacy wrapper\n\n"
-                "Status: active\nScope: project\nEvidence:\n- user-confirmed\n\n"
+                "Status: active\nScope: project\n"
+                "Subject: MC-SUBJ-20260827-bbbbbbbb\nFacet: behavior\n"
+                "Evidence:\n- user-confirmed\n\n"
                 f"Decision:\n{literal_wrapper}\n",
+                encoding="utf-8",
+            )
+            (memory / "subjects.md").write_text(
+                "# Subject Registry\n\n"
+                "## MC-SUBJ-20260827-bbbbbbbb — Legacy wrapper\n\n"
+                "Status: active\nKind: concept\nEvidence:\n- user-confirmed\n\n"
+                "Aliases:\n- legacy wrapper\n",
                 encoding="utf-8",
             )
 
             status_code, status, _ = capture(["status", "--project-root", tmp])
             self.assertEqual(status_code, 1)
-            self.assertIn("entry schema 1", status)
-            self.assertIn("migration available to entry schema 2", status)
+            self.assertIn("Protocol version: 0.7", status)
+            self.assertIn("migration available to 0.8", status)
 
             check_code, check, _ = capture(["check", "--project-root", tmp])
             self.assertEqual(check_code, 1)
-            self.assertIn("migration to entry schema 2 is available", check)
+            self.assertIn("protocol_version 0.7 is older than current 0.8", check)
 
             conflict_code, conflict, conflict_error = capture([
                 "check", "--conflicts", "--project-root", tmp,
             ])
-            self.assertEqual(conflict_code, 1, conflict + conflict_error)
-            self.assertIn("Conflict status: INVALID", conflict)
-            self.assertIn("migration to entry schema 2 is available", conflict)
+            self.assertEqual(conflict_code, 0, conflict + conflict_error)
+            self.assertIn("Conflict status: CLEAR", conflict)
 
-            add_code, _add_output, add_error = capture([
-                "add", "Legacy writer must stop", "--type", "decision",
-                "--evidence", "user-confirmed", "--project-root", tmp,
-            ])
-            self.assertEqual(add_code, 2)
-            self.assertIn("migration to entry schema 2 is available", add_error)
             promote_code, _promote_output, promote_error = capture([
                 "promote", "MC-INBOX-20260827-99999999", "--type", "decision",
                 "--evidence", "user-confirmed", "--project-root", tmp,
             ])
             self.assertEqual(promote_code, 2)
-            self.assertIn("migration to entry schema 2 is available", promote_error)
+            self.assertIn("requires Protocol 0.8", promote_error)
 
             show_code, shown, show_error = capture(["show", entry_id, "--project-root", tmp])
             self.assertEqual(show_code, 0, show_error)
@@ -385,15 +393,15 @@ class Protocol07ReleaseContractTests(unittest.TestCase):
                 "read", "--task", "implementation", "--strict-routing",
                 "--names-only", "--project-root", tmp,
             ])
-            self.assertNotEqual(strict_code, 0)
-            self.assertIn("migration to entry schema 2 is available", strict)
+            self.assertEqual(strict_code, 0)
+            self.assertIn("Routing completeness: COMPLETE", strict)
             self.assertNotIn("Decision:\nStatus: literal", strict)
 
             preview_code, preview, preview_error = capture([
                 "migrate", "--project-root", tmp,
             ])
             self.assertEqual(preview_code, 0, preview_error)
-            self.assertIn("schema 1 bodies", preview)
+            self.assertIn("Entry schema 3 memory-custodian-body-v1 grammar", preview)
             plan_id = re.search(r"Plan ID: ([0-9a-f]{16})", preview)
             self.assertIsNotNone(plan_id)
             apply_code, _applied, apply_error = capture([
@@ -401,7 +409,7 @@ class Protocol07ReleaseContractTests(unittest.TestCase):
                 "--project-root", tmp,
             ])
             self.assertEqual(apply_code, 0, apply_error)
-            self.assertIn("entry_schema_version: 2", manifest.read_text(encoding="utf-8"))
+            self.assertIn("entry_schema_version: 3", manifest.read_text(encoding="utf-8"))
             migrated_entry = parse_structured_entries(
                 memory / "decisions.md",
                 (memory / "decisions.md").read_text(encoding="utf-8"),
@@ -421,13 +429,13 @@ class Protocol07ReleaseContractTests(unittest.TestCase):
             manifest = Path(tmp) / "docs" / "memory" / "manifest.md"
             original = manifest.read_text(encoding="utf-8")
             manifest.write_text(
-                original.replace("entry_schema_version: 2", "entry_schema_version: 1"),
+                original.replace("protocol_version: 0.8", "protocol_version: 0.7")
+                .replace("entry_schema_version: 3", "entry_schema_version: 1"),
                 encoding="utf-8",
             )
             code, output, error = capture(["init", "--repair", "--project-root", tmp])
             self.assertEqual(code, 2)
-            self.assertIn("migration to entry schema 2 is available", error)
-            self.assertIn("cannot flip the manifest", error)
+            self.assertIn("preview-first migration to 0.8", error)
             self.assertIn("entry_schema_version: 1", manifest.read_text(encoding="utf-8"))
 
     def test_bound_local_schema_1_overlay_migrates_with_shared_manifest(self):
@@ -456,9 +464,9 @@ class Protocol07ReleaseContractTests(unittest.TestCase):
                     encoding="utf-8",
                 )
                 manifest.write_text(
-                    manifest.read_text(encoding="utf-8").replace(
-                        "entry_schema_version: 2", "entry_schema_version: 1",
-                    ),
+                    manifest.read_text(encoding="utf-8")
+                    .replace("protocol_version: 0.8", "protocol_version: 0.7")
+                    .replace("entry_schema_version: 3", "entry_schema_version: 1"),
                     encoding="utf-8",
                 )
 
@@ -476,7 +484,7 @@ class Protocol07ReleaseContractTests(unittest.TestCase):
                 ])
                 self.assertEqual(apply_code, 0, apply_error)
                 self.assertIn("local/preferences.md", applied)
-                self.assertIn("entry_schema_version: 2", manifest.read_text(encoding="utf-8"))
+                self.assertIn("entry_schema_version: 3", manifest.read_text(encoding="utf-8"))
 
                 migrated_local = local_path.read_text(encoding="utf-8")
                 self.assertIn(f"~~~{BODY_FENCE_INFO}", migrated_local)
@@ -489,7 +497,6 @@ class Protocol07ReleaseContractTests(unittest.TestCase):
 
     def test_bound_local_migration_rolls_back_all_preimages_on_shared_failure(self):
         from memory_custodian import migrate as migrate_module
-        from memory_custodian.mutations import apply_mutations as real_apply_mutations
 
         with tempfile.TemporaryDirectory() as root, tempfile.TemporaryDirectory() as state:
             with patch.dict(os.environ, {"XDG_STATE_HOME": state}):
@@ -508,7 +515,9 @@ class Protocol07ReleaseContractTests(unittest.TestCase):
                 literal_wrapper = "```memory-custodian-body-v1\nStatus: literal\n```"
                 shared_entry = (
                     "## MC-DEC-20260827-eeeeeeee — Legacy shared\n\n"
-                    "Status: active\nScope: project\nEvidence:\n- user-confirmed\n\n"
+                    "Status: active\nScope: project\n"
+                    "Subject: MC-SUBJ-20260827-eeeeeeee\nFacet: behavior\n"
+                    "Evidence:\n- user-confirmed\n\n"
                     f"Decision:\n{literal_wrapper}\n"
                 )
                 local_entry = (
@@ -517,15 +526,22 @@ class Protocol07ReleaseContractTests(unittest.TestCase):
                     f"Preference:\n{literal_wrapper}\n"
                 )
                 shared_path = memory / "decisions.md"
+                (memory / "subjects.md").write_text(
+                    "# Subject Registry\n\n"
+                    "## MC-SUBJ-20260827-eeeeeeee — Legacy shared\n\n"
+                    "Status: active\nKind: concept\nEvidence:\n- user-confirmed\n\n"
+                    "Aliases:\n- legacy shared\n",
+                    encoding="utf-8",
+                )
                 # Exercise exact preimage recovery for both roots, including
                 # a private module whose CRLF source must not be normalized
                 # while the shared manifest remains on schema 1.
                 shared_path.write_bytes(("# Decisions\n\n" + shared_entry).encode("utf-8"))
                 local_path.write_bytes(("# Local Preferences\n\n" + local_entry).replace("\n", "\r\n").encode("utf-8"))
                 manifest.write_text(
-                    manifest.read_text(encoding="utf-8").replace(
-                        "entry_schema_version: 2", "entry_schema_version: 1",
-                    ),
+                    manifest.read_text(encoding="utf-8")
+                    .replace("protocol_version: 0.8", "protocol_version: 0.7")
+                    .replace("entry_schema_version: 3", "entry_schema_version: 1"),
                     encoding="utf-8",
                 )
                 before_manifest = manifest.read_bytes()
@@ -538,26 +554,17 @@ class Protocol07ReleaseContractTests(unittest.TestCase):
                 self.assertEqual(preview_code, 0, preview_error)
                 plan_id = re.search(r"Plan ID: ([0-9a-f]{16})", preview).group(1)
 
-                def fail_manifest(mutations):
-                    if any(
-                        mutation.path.resolve() == manifest.resolve()
-                        for mutation in mutations
-                    ):
-                        raise OSError("injected shared write failure")
-                    return real_apply_mutations(mutations)
-
                 with patch.object(
                     migrate_module,
-                    "apply_mutations",
-                    side_effect=fail_manifest,
+                    "apply_transaction",
+                    side_effect=OSError("injected transaction failure"),
                 ):
                     apply_code, _applied, apply_error = capture([
                         "migrate", "--apply", "--confirm-plan", plan_id,
                         "--project-root", root,
                     ])
                 self.assertNotEqual(apply_code, 0)
-                self.assertIn("restored", apply_error)
-                self.assertIn("schema 1", apply_error)
+                self.assertIn("injected transaction failure", apply_error)
                 self.assertEqual(manifest.read_bytes(), before_manifest)
                 self.assertEqual(shared_path.read_bytes(), before_shared)
                 self.assertEqual(local_path.read_bytes(), before_local)

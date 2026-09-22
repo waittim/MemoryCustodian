@@ -30,6 +30,7 @@ from .locking import (
 )
 from .mutations import TextMutation, apply_mutations
 from .plans import MutationPlan, digest_path, pending_plan_directory, print_plan
+from .transactions import apply_plan_transaction
 from .protocol import (
     CURRENT_ENTRY_SCHEMA_VERSION,
     CURRENT_PROTOCOL_VERSION,
@@ -216,7 +217,7 @@ def _validate_subject_and_conflict(
     required = subject_required(kind, candidate=candidate, area=args.area)
     if required and (not subject_id or not facet):
         raise ValueError(
-            f"Protocol 0.7 active {kind} memory requires both --subject MC-SUBJ-... and --facet."
+            f"Protocol 0.8 active {kind} memory requires both --subject MC-SUBJ-... and --facet."
         )
     if bool(subject_id) != bool(facet):
         raise ValueError("--subject and --facet must be supplied together.")
@@ -537,8 +538,8 @@ def run(args) -> int:
                 )
             if current_comparison == 0:
                 raise ValueError(
-                    "Project migrated to Protocol 0.7 before the compatibility write; "
-                    "re-run add with Protocol 0.7 Evidence."
+                    "Project migrated to Protocol 0.8 before the compatibility write; "
+                    "re-run add with Protocol 0.8 Evidence."
                 )
             if current_comparison > 0:
                 raise ValueError(
@@ -557,7 +558,12 @@ def run(args) -> int:
                 print(f"Decision entry budget: over/{DECISION_ENTRY_BUDGET} tokens")
                 print(f"Not added: {exc}")
                 return 1
-            apply_mutations(mutations)
+            compatibility_plan = MutationPlan(
+                "add compatibility", {}, guard.project_id or "legacy-protocol",
+                current_metadata.get("protocol_version", "0.5"), tuple(mutations),
+                project_root=project_root,
+            )
+            apply_plan_transaction(compatibility_plan, memory_dir)
     else:
         project_id = metadata["project_id"]
         if args.supersedes:
@@ -593,7 +599,7 @@ def run(args) -> int:
                 print("Dry run only. Re-run with --apply --confirm-plan <PLAN_ID>.")
                 return 0
             if not args.confirm_plan:
-                raise ValueError("Protocol 0.7 supersede apply requires --confirm-plan <PLAN_ID>.")
+                raise ValueError("Protocol 0.8 supersede apply requires --confirm-plan <PLAN_ID>.")
             with project_mutation_guard(
                 project_root,
                 manifest_path,
@@ -631,7 +637,7 @@ def run(args) -> int:
                         f"Stale or mismatched plan: confirmed {args.confirm_plan}, "
                         f"current Plan ID is {current_plan.plan_id}. No files written."
                     )
-                apply_mutations(current_mutations)
+                apply_plan_transaction(current_plan, memory_dir)
             discard_private_file(seed_path)
             print(f"Added {args.type} memory {new_id} to {memory_dir / target}")
             print("Written files:")
@@ -660,7 +666,11 @@ def run(args) -> int:
                 print(f"Decision entry budget: over/{DECISION_ENTRY_BUDGET} tokens")
                 print(f"Not added: {exc}")
                 return 1
-            apply_mutations(mutations)
+            current_plan = MutationPlan(
+                "add", {"type": args.type}, project_id,
+                CURRENT_PROTOCOL_VERSION, tuple(mutations), project_root=project_root,
+            )
+            apply_plan_transaction(current_plan, memory_dir)
     print(f"Added {'candidate' if args.candidate or args.type == 'inbox' else args.type} memory {new_id} to {memory_dir / target}")
     if args.type == "decision" and args.allow_long and estimate_tokens(
         read_managed_text(memory_dir, memory_dir / target)

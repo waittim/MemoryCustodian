@@ -2,6 +2,79 @@
 
 ## Unreleased
 
+## v0.12.0 - 2026-09-21
+
+### Protocol 0.8 reliability baseline
+
+- Promoted the pre-1.0 reliability contract to Protocol 0.8 with Entry schema
+  3, Subject schema 1, Conflict schema 1, Routing schema 1, local-overlay
+  schema 1, transaction schema 1, audit schema 1, output schema 1, and
+  ErasureScope schema 1. Entry schema 3 keeps the explicit
+  `memory-custodian-body-v1` wrapper and preserves Protocol 0.7/schema 1
+  literal-body compatibility.
+- Formal managed entries now have a canonical typed-body/`Entry-Type` contract;
+  `MC-TOMB` remains an erasure guard rather than a Subject/Facet structural
+  owner. `subjects.md` and on-demand `reconciliations.md` remain authorities
+  for identity and governance without entering ordinary context packs.
+
+### Crash recovery and mutation safety
+
+- Retrofitted multi-file mutation paths—including governance, promotion,
+  forgetting/purge, compaction, migration, initialization/repair,
+  enable/link, schema conversion, and local reset—with the shared private
+  transaction journal. Journals use opaque metadata, atomic updates,
+  existence-aware create/replace/delete recovery, and POSIX `0700`/`0600`
+  private-state boundaries where available.
+- Added transaction inspection and opaque-ID recovery. `audit --transactions`
+  reports unfinished, malformed, or orphaned state; safe complete/rollback
+  never overwrites an external edit and protected pre-state bytes stay out of
+  reader context, audit payloads, public JSON, and errors.
+- This is crash recovery, not database ACID semantics, semantic conflict
+  resolution, or a guarantee about arbitrary filesystem races.
+
+### Unified audit and machine output
+
+- Added project audit, invocation audit, and repository contract-check
+  boundaries with stable finding severities (`INFO`, `WARNING`, `ERROR`, and
+  `BLOCKER`), `PASS`/`REVIEW`/`FAIL` status mapping, and documented exit
+  classes.
+- Added the Protocol 0.8 public JSON envelope under `--format json`; audit
+  child data carries `audit_schema_version: 1`, while internal execution
+  plans, public previews, and private transaction journals remain separate
+  representations.
+- Forget, hard/purge, ID forget, local reset, and recovery share one canonical
+  versioned `data.erasure_scope`, including operation phase and bounded Git
+  history status. `unavailable` is REVIEW, not PASS; bounded
+  `no-reachable-copy-detected` is not proof that external copies are absent.
+
+### Staged migration
+
+- Added explicit, mutually exclusive `migrate --prepare`, repeatable
+  `migrate --canonicalize`, and `migrate --finalize` stages for Protocol 0.5,
+  0.6, and 0.7/schema 1 or 2 inputs. Each stage has a distinct Plan ID and
+  transaction; Prepare leaves source metadata unchanged, Canonicalize keeps
+  ambiguous units in a manual checklist, and Finalize writes Protocol 0.8 /
+  Entry schema 3 metadata last after audit blockers are resolved.
+- Bound local overlays participate in the same schema transition. Migration
+  reads source metadata before interpreting body fences and never silently
+  downgrades newer or malformed protocol metadata.
+
+### Cross-agent contracts and boundaries
+
+- Aligned Codex, Claude Code, Gemini, and generic adapters on manifest-first
+  routing, explicit task/scope inputs, strict conflict gates, transaction
+  recovery, JSON output, and canonical ErasureScope wording.
+- Added offline adapter-drift and erasure-language static checks plus contract
+  fixtures for recovery, JSON/audit, staged migration, and bounded erasure.
+  These checks are static/offline and do not claim live-agent benchmark
+  coverage.
+- Forgetting controls what remains available to future agents through
+  MemoryCustodian. It is not a guarantee of erasure from Git history or
+  previously distributed copies. MemoryCustodian does not rewrite Git history
+  or revoke clones, forks, backups, caches, or other distributed copies.
+- Protocol 0.8 is not a 1.0 release candidate and makes no long-term 1.x
+  compatibility promise.
+
 ## v0.11.0 - 2026-08-29
 
 ### Protocol 0.7 Entry schema 1 to 2 compatibility boundary

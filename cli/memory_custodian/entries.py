@@ -1,4 +1,4 @@
-"""Protocol 0.7 entry identity, evidence, parsing, and rendering."""
+"""Canonical entry identity, evidence, parsing, and rendering."""
 
 from __future__ import annotations
 
@@ -8,7 +8,8 @@ from pathlib import Path, PurePosixPath
 import re
 import uuid
 
-ENTRY_SCHEMA_VERSION = "2"
+ENTRY_SCHEMA_VERSION = "3"
+BODY_FENCE_SCHEMA_VERSION = "2"
 LEGACY_ENTRY_SCHEMA_VERSION = "1"
 TYPE_CODES = {
     "decision": "DEC",
@@ -57,6 +58,7 @@ class StructuredEntry:
     field_counts: dict[str, int] = field(default_factory=dict)
     field_bodies: dict[str, str] = field(default_factory=dict)
     display_text: str | None = None
+    schema_version: str = ENTRY_SCHEMA_VERSION
 
 
 @dataclass(frozen=True)
@@ -135,6 +137,7 @@ ENTRY_FIELDS = frozenset({
     "Promoted-To",
     "Exception-To",
     "Candidate-Type",
+    "Entry-Type",
     "Provisional-Subject",
     "Provisional-Facet",
     "Promotion-Requirement",
@@ -257,7 +260,7 @@ def validate_evidence(
 ) -> tuple[str, ...]:
     project_root = project_root.resolve()
     if not evidence:
-        raise ValueError("Protocol 0.7 active memory requires at least one --evidence value.")
+        raise ValueError("Protocol 0.8 active memory requires at least one --evidence value.")
     validated: list[str] = []
     for raw in evidence:
         value = raw.strip()
@@ -533,6 +536,7 @@ def render_active_entry(
     facet: str | None = None,
     supersedes: str | None = None,
     promoted_from: str | None = None,
+    entry_schema_version: str | int | None = None,
 ) -> str:
     from .markdown import render_canonical_h2
 
@@ -560,6 +564,17 @@ def render_active_entry(
         "Status: active",
         f"Scope: {scope}",
     ]
+    schema = normalize_entry_schema_version(entry_schema_version)
+    code = entry_id.split("-", 2)[1].upper()
+    if schema == ENTRY_SCHEMA_VERSION and code == "AREA":
+        entry_type = {
+            "area": "decision",
+            "rule": "rule",
+            "profile": "profile",
+        }.get(kind)
+        if entry_type is None:
+            raise ValueError("MC-AREA requires an explicit schema 3 Entry-Type.")
+        lines.append(f"Entry-Type: {entry_type}")
     if subject:
         lines.append(f"Subject: {subject}")
     if facet:
@@ -642,7 +657,11 @@ def normalize_entry_schema_version(value: str | int | None) -> str:
     """
 
     normalized = str(value if value is not None else ENTRY_SCHEMA_VERSION)
-    if normalized not in {LEGACY_ENTRY_SCHEMA_VERSION, ENTRY_SCHEMA_VERSION}:
+    if normalized not in {
+        LEGACY_ENTRY_SCHEMA_VERSION,
+        BODY_FENCE_SCHEMA_VERSION,
+        ENTRY_SCHEMA_VERSION,
+    }:
         raise ValueError(f"Unsupported Entry schema version: {normalized}")
     return normalized
 
@@ -657,7 +676,7 @@ def parse_structured_entries(
     from .markdown import canonical_h2_parts, visible_lines
 
     schema = normalize_entry_schema_version(entry_schema_version)
-    decode_body_fence = schema == ENTRY_SCHEMA_VERSION
+    decode_body_fence = schema in {BODY_FENCE_SCHEMA_VERSION, ENTRY_SCHEMA_VERSION}
     sections = [
         unit.text
         for unit in parse_markdown_units(text).units
@@ -767,6 +786,7 @@ def parse_structured_entries(
                 field_counts,
                 field_bodies,
                 "\n".join(display_lines),
+                schema,
             )
         )
     return parsed
@@ -829,11 +849,41 @@ def migrate_entry_schema(
     target_schema = normalize_entry_schema_version(to_schema)
     if source_schema == target_schema:
         return text, 0
-    if (source_schema, target_schema) != (
-        LEGACY_ENTRY_SCHEMA_VERSION,
+    if source_schema == BODY_FENCE_SCHEMA_VERSION and target_schema == ENTRY_SCHEMA_VERSION:
+        updated = text
+        changed = 0
+        for entry in parse_structured_entries(path, text, entry_schema_version=source_schema):
+            code = entry.entry_id.split("-", 2)[1].upper()
+            if code != "AREA" or entry.field_counts.get("Entry-Type"):
+                continue
+            body_types = {
+                "Decision": "decision", "Constraint": "constraint",
+                "Preference": "preference", "Rejected": "do-not-use",
+                "Rule": "rule", "Profile": "profile",
+            }
+            present = [value for field, value in body_types.items() if entry.field_counts.get(field) == 1]
+            if len(present) != 1:
+                continue
+            entry_type = present[0]
+            relative = path.as_posix()
+            if relative.startswith("rules/") and entry_type != "rule":
+                continue
+            if relative.startswith("profiles/") and entry_type != "profile":
+                continue
+            if relative.startswith("areas/") and entry_type not in {"decision", "constraint", "preference", "do-not-use"}:
+                continue
+            unit, count = re.subn(
+                r"(?m)^(Scope:[^\n]*)$", rf"\1\nEntry-Type: {entry_type}", entry.text, count=1,
+            )
+            if count == 1 and updated.count(entry.text) == 1:
+                updated = updated.replace(entry.text, unit, 1)
+                changed += 1
+        return updated, changed
+    if source_schema != LEGACY_ENTRY_SCHEMA_VERSION or target_schema not in {
+        BODY_FENCE_SCHEMA_VERSION,
         ENTRY_SCHEMA_VERSION,
-    ):
-        raise ValueError("Only Entry schema 1-to-2 migration is supported.")
+    }:
+        raise ValueError("Only Entry schema 1-to-2/3 and 2-to-3 migration is supported.")
     from .markdown import canonical_h2_parts, visible_lines
     from .protocol import parse_markdown_units
 
@@ -915,7 +965,17 @@ def migrate_entry_schema(
         trailing = source_lines[start + old_line_count:end]
         replacement_lines = [line + eol for line in replacement.splitlines()]
         source_lines[start:end] = [*replacement_lines, *trailing]
-    return "".join(source_lines), len(replacements)
+    migrated_text = "".join(source_lines)
+    migrated_count = len(replacements)
+    if target_schema == ENTRY_SCHEMA_VERSION:
+        migrated_text, schema3_count = migrate_entry_schema(
+            path,
+            migrated_text,
+            from_schema=BODY_FENCE_SCHEMA_VERSION,
+            to_schema=ENTRY_SCHEMA_VERSION,
+        )
+        migrated_count += schema3_count
+    return migrated_text, migrated_count
 
 
 def expected_typed_body(entry: StructuredEntry, relative_path: str) -> str | None:
@@ -931,6 +991,17 @@ def expected_typed_body(entry: StructuredEntry, relative_path: str) -> str | Non
     if code == "INBOX":
         return "Statement"
     if code == "AREA":
+        entry_type = entry.fields.get("Entry-Type", "").casefold()
+        by_type = {
+            "decision": "Decision",
+            "constraint": "Constraint",
+            "preference": "Preference",
+            "do-not-use": "Rejected",
+            "rule": "Rule",
+            "profile": "Profile",
+        }
+        if entry.schema_version == ENTRY_SCHEMA_VERSION:
+            return by_type.get(entry_type)
         if relative_path.startswith("rules/"):
             return "Rule"
         if relative_path.startswith("profiles/"):
@@ -945,7 +1016,7 @@ def structured_entry_schema_issues(
     *,
     require_active_identity: bool = False,
 ) -> list[str]:
-    """Validate the declared Protocol 0.7 structure of one formal entry."""
+    """Validate the declared formal Entry structure for its selected schema."""
 
     issues: list[str] = []
     prefix = f"{relative_path}: {entry.entry_id}"
@@ -983,6 +1054,21 @@ def structured_entry_schema_issues(
     for name, count in sorted(entry.field_counts.items()):
         if count > 1:
             issues.append(f"{prefix} has duplicate {name} fields")
+
+    code = entry.entry_id.split("-", 2)[1].upper()
+    if entry.schema_version == ENTRY_SCHEMA_VERSION:
+        entry_type_count = entry.field_counts.get("Entry-Type", 0)
+        if code == "AREA":
+            if entry_type_count != 1:
+                issues.append(
+                    f"{prefix} must declare exactly one Entry-Type field (found {entry_type_count})"
+                )
+            elif entry.fields.get("Entry-Type", "").casefold() not in {
+                "decision", "constraint", "preference", "do-not-use", "rule", "profile"
+            }:
+                issues.append(f"{prefix} has invalid Entry-Type")
+        elif entry_type_count:
+            issues.append(f"{prefix} Entry-Type is only valid for MC-AREA entries")
 
     expected_body = expected_typed_body(entry, relative_path)
     if expected_body is not None:
@@ -1023,7 +1109,6 @@ def structured_entry_schema_issues(
         issues.append(f"{prefix} promoted entry has no Promoted-To")
 
     if require_active_identity and entry.status == "active":
-        code = entry.entry_id.split("-", 2)[1].upper()
         if code in STRUCTURAL_ENTRY_CODES and not relative_path.startswith(("rules/", "profiles/")):
             for name in ("Subject", "Facet"):
                 if entry.field_counts.get(name) != 1 or not entry.fields.get(name, "").strip():
@@ -1107,8 +1192,13 @@ def structured_entry_storage_issues(
         if "/" in area_name or not area_name:
             issues.append(f"{prefix} has a non-canonical area storage path")
             return issues
-        if code not in {"AREA", "CON", "PREF", "DNU"}:
+        if code not in {"AREA", "DEC", "CON", "PREF", "DNU"}:
             issues.append(f"{prefix} type does not match its area storage location")
+        if code == "AREA" and entry.schema_version == ENTRY_SCHEMA_VERSION:
+            if entry.fields.get("Entry-Type", "").casefold() not in {
+                "decision", "constraint", "preference", "do-not-use"
+            }:
+                issues.append(f"{prefix} Entry-Type is invalid for area storage")
         expected_scope = f"area:{area_name}"
         if entry.scope != expected_scope:
             issues.append(
@@ -1121,6 +1211,8 @@ def structured_entry_storage_issues(
             issues.append(f"{prefix} type does not match its rule storage location")
         if entry.scope != "project":
             issues.append(f"{prefix} rule storage requires Scope: project")
+        if entry.schema_version == ENTRY_SCHEMA_VERSION and entry.fields.get("Entry-Type", "").casefold() != "rule":
+            issues.append(f"{prefix} rule storage requires Entry-Type: rule")
         return issues
 
     if relative_path.startswith("profiles/") and relative_path.endswith(".md"):
@@ -1128,6 +1220,8 @@ def structured_entry_storage_issues(
             issues.append(f"{prefix} type does not match its profile storage location")
         if entry.scope != "project":
             issues.append(f"{prefix} profile storage requires Scope: project")
+        if entry.schema_version == ENTRY_SCHEMA_VERSION and entry.fields.get("Entry-Type", "").casefold() != "profile":
+            issues.append(f"{prefix} profile storage requires Entry-Type: profile")
         return issues
 
     issues.append(f"{prefix} formal entry is outside a canonical storage file")

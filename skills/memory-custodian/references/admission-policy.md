@@ -1,8 +1,10 @@
 # Admission Policy
 
-Protocol 0.7 admits active durable memory only when the entry has a stable Entry ID, `Status: active`, a valid
-scope, a typed body, and at least one `user-confirmed` or source-backed Evidence item. Decisions, constraints,
-rejections, and area entries also require an active Subject ID and controlled Facet.
+Protocol 0.8 / Entry schema 3 admits active durable memory only when the
+entry has a stable Entry ID, `Status: active`, a valid Scope, Evidence, and a
+matching typed body. Decisions, constraints, rejections, and area hard-memory
+entries also require an active Subject ID and controlled Facet; `MC-TOMB` is a
+topic-free erasure guard and is not a structural owner.
 
 Agent inference, code observations, tentative conclusions, and unconfirmed conversation content belong in
 `inbox.md` as candidates. Candidate promotion is explicit: confirm the claim or cite an authoritative project

@@ -244,7 +244,7 @@ def route_context(
         # applies the migration gate after this compatibility view is built.
         allow_legacy_entry_schema=True,
     ).get("protocol_version", "0.5")
-    declarations = parse_optional_module_index(manifest, legacy_compatible=version != "0.7")
+    declarations = parse_optional_module_index(manifest, legacy_compatible=version not in {"0.7", "0.8"})
     canonical = canonical_task(supplied_task)
     declared_slugs = {
         kind: {item.slug for item in declarations if item.module_type == kind}

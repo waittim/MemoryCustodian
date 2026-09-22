@@ -24,6 +24,7 @@ from .protocol import (
 from .mutations import TextMutation, apply_mutations
 from .locking import project_mutation_guard
 from .plans import MutationPlan, print_plan
+from .transactions import apply_plan_transaction
 from .templates import render_template
 from .entries import parse_structured_entries
 from .protocol import (
@@ -87,7 +88,7 @@ def _execute_plan(
         print("Dry run only. Re-run with --apply" + (" --confirm-plan <PLAN_ID>." if protocol_06 else "."))
         return False
     if protocol_06 and not args.confirm_plan:
-        raise ValueError("Protocol 0.7 compact apply requires --confirm-plan <PLAN_ID>.")
+        raise ValueError("Protocol 0.8 compact apply requires --confirm-plan <PLAN_ID>.")
     with project_mutation_guard(
         project_root,
         memory_dir / "manifest.md",
@@ -124,7 +125,7 @@ def _execute_plan(
                 )
         elif current_comparison == 0:
             raise ValueError(
-                "Project migrated to Protocol 0.7 before compatibility compact apply; "
+                "Project migrated to Protocol 0.8 before compatibility compact apply; "
                 "preview again and confirm the new Plan ID."
             )
         elif current_comparison > 0:
@@ -137,7 +138,7 @@ def _execute_plan(
                 "Migration available: Protocol 0.5 apply keeps legacy confirmation "
                 "behavior under the bootstrap mutation guard."
             )
-        apply_mutations(current_mutations)
+        apply_plan_transaction(current_plan, memory_dir)
         mutations = current_mutations
     print("Written files:")
     for mutation in mutations:

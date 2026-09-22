@@ -57,7 +57,7 @@ def routing_findings(
     metadata = snapshot.manifest_contract.as_dict()
     version = metadata.get("protocol_version", "0.5")
     try:
-        declarations = parse_optional_module_index(manifest, legacy_compatible=version != "0.7")
+        declarations = parse_optional_module_index(manifest, legacy_compatible=version not in {"0.7", "0.8"})
     except ValueError as exc:
         declarations = ()
         findings.append(QualityFinding("ERROR", "MC-ROUTING-003", str(exc)))
@@ -99,7 +99,7 @@ def reachability_findings(
     manifest = snapshot.manifest_text
     metadata = snapshot.manifest_contract.as_dict()
     version = metadata.get("protocol_version", "0.5")
-    declarations = parse_optional_module_index(manifest, legacy_compatible=version != "0.7")
+    declarations = parse_optional_module_index(manifest, legacy_compatible=version not in {"0.7", "0.8"})
     reachable: set[str] = set()
     for task in CANONICAL_TASKS:
         try:

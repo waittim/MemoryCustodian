@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 
 from .protocol import (
+    CURRENT_ENTRY_SCHEMA_VERSION,
     CURRENT_PROTOCOL_VERSION,
     DECISION_ENTRY_BUDGET,
     budget_for,
@@ -251,7 +252,7 @@ def run(args) -> int:
             continue
         if relative in {
             "decisions.md", "constraints.md", "do-not-use.md", "preferences.md", "inbox.md"
-        } or relative.startswith(("areas/", "rules/", "profiles/")):
+        } or relative.startswith("areas/"):
             units = parse_markdown_units(text).units
             legacy_h2 = sum(
                 1
@@ -266,9 +267,15 @@ def run(args) -> int:
             legacy_bullets = sum(1 for unit in units if unit.kind == "bullet")
             legacy_count = legacy_h2 + legacy_bullets
             if legacy_count:
-                warnings.append(
-                    f"{relative}: {legacy_count} legacy entr{'y' if legacy_count == 1 else 'ies'} "
-                    "remain readable without structured Evidence"
+                destination = (
+                    issues
+                    if snapshot.entry_schema_version == CURRENT_ENTRY_SCHEMA_VERSION
+                    and relative != "inbox.md"
+                    else warnings
+                )
+                destination.append(
+                    f"{relative}: {legacy_count} active legacy entr{'y' if legacy_count == 1 else 'ies'} "
+                    "remain readable but are not Protocol 0.8 compliant"
                 )
 
         ids = heading_entry_ids(text)

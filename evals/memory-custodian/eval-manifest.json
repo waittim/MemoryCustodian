@@ -49,7 +49,11 @@
     "subject-merge-preview",
     "history-erasure-boundary",
     "bounded-history-evidence",
-    "local-reset-boundary"
+    "local-reset-boundary",
+    "transaction-recovery",
+    "output-json-erasure-scope",
+    "staged-migration",
+    "cross-agent-contract"
   ],
   "required_sections": [
     "## Purpose",
@@ -160,6 +164,33 @@
         "neither rewrites Git history nor revokes clones, forks, backups, caches",
         "hard affects active managed memory",
         "purge also targets managed archive"
+      ]
+    },
+    {
+      "id": "protocol-08-machine-contract",
+      "terms": [
+        "package 0.12.0 / Protocol 0.8",
+        "Entry schema 3",
+        "transaction schema 1",
+        "output_schema_version: 1",
+        "audit_schema_version: 1",
+        "data.erasure_scope"
+      ]
+    },
+    {
+      "id": "transaction-recovery",
+      "terms": [
+        "All multi-file mutations use the shared transaction engine",
+        "audit --transactions",
+        "complete/rollback"
+      ]
+    },
+    {
+      "id": "staged-migration",
+      "terms": [
+        "migrate --prepare",
+        "migrate --canonicalize",
+        "migrate --finalize"
       ]
     },
     {

@@ -399,13 +399,14 @@ def build_snapshot(
                 entries,
                 tuple(dict.fromkeys([*entry_issues, *required_identity])),
             )
+            check_entry_issues = tuple(dict.fromkeys([*entry_issues, *required_identity]))
         files.append(
             SnapshotFile(
                 path,
                 relative,
                 text,
                 entries,
-                entry_issues,
+                check_entry_issues,
                 conflict_entry_issues,
                 entry_issues,
                 (),

@@ -1,8 +1,9 @@
-"""Conservative, preview-first migration to the current Protocol 0.7 contract."""
+"""Conservative, staged migration to the current Protocol 0.8 contract."""
 
 from __future__ import annotations
 
 import hashlib
+import json
 from dataclasses import dataclass
 from pathlib import Path
 import re
@@ -27,16 +28,18 @@ from .locking import (
     project_mutation_guard,
     read_private_file,
     write_private_file,
+    private_state_directory,
 )
 from .markdown import visible_lines
 from .mutations import (
+    PrivateDeleteMutation,
     PrivateTextMutation,
     TextMutation,
     apply_mutations,
     apply_private_mutations,
     restore_text_file_exact,
 )
-from .local_overlay import LocalStatus, inspect_overlay
+from .local_overlay import LocalStatus, inspect_overlay, overlay_directory
 from .plans import (
     MutationPlan,
     digest_text,
@@ -45,6 +48,8 @@ from .plans import (
     pending_entry_suffixes,
     print_plan,
 )
+from .transactions import apply_plan_transaction
+from .transactions import apply_transaction, bootstrap_binding_id
 from .protocol import (
     CURRENT_ENTRY_SCHEMA_VERSION,
     CURRENT_PROTOCOL_VERSION,
@@ -62,6 +67,7 @@ from .protocol import (
     protocol_metadata,
     read_managed_text,
     strict_protocol_metadata,
+    validate_manifest_routes,
     valid_project_id,
     resolve_memory_dir,
     resolve_project_root,
@@ -645,20 +651,20 @@ def _build_plan(project_root: Path, memory_dir: Path) -> tuple[MutationPlan, lis
         put_mutation(memory_dir / relative, migrated_source)
     if schema_migrated_count:
         changes.append(
-            "managed Entry files: encode schema 1 bodies with the schema 2 "
+            "managed Entry files: migrate legacy bodies to the Entry schema 3 "
             "memory-custodian-body-v1 grammar"
         )
     if local_schema_migrated_count:
         changes.append(
-            "bound local Entry files: encode schema 1 bodies with the schema 2 "
+            "bound local Entry files: migrate legacy bodies to the Entry schema 3 "
             "memory-custodian-body-v1 grammar"
         )
     if updated != original:
         put_mutation(manifest_path, updated)
     if metadata_changed or updated != original:
-        changes.append("manifest.md: upgrade protocol metadata to 0.7 and preserve/generate project_id")
+        changes.append("manifest.md: upgrade protocol metadata to 0.8/schema 3 and preserve/generate project_id")
     if routing_changed:
-        changes.append("manifest.md: complete canonical task routing for Protocol 0.7")
+        changes.append("manifest.md: complete canonical task routing for Protocol 0.8")
     if index_changed:
         changes.append("manifest.md: add optional module index")
     if legacy_optional_count:
@@ -717,7 +723,7 @@ def _build_plan(project_root: Path, memory_dir: Path) -> tuple[MutationPlan, lis
             changelog_path,
             changelog_text(
                 changelog_original,
-                "Migrated project memory to Protocol 0.7 and Entry schema 2 "
+                "Migrated project memory to Protocol 0.8 and Entry schema 3 "
                 "without rewriting legacy freeform units.",
             ),
         )
@@ -732,6 +738,44 @@ def _build_plan(project_root: Path, memory_dir: Path) -> tuple[MutationPlan, lis
             "Manual Subject assignment required: review migrated managed entries, create explicit Subjects, "
             "and assign controlled Facets without inferring equivalence from titles."
         )
+    planned_text = {mutation.path: mutation.text for mutation in mutations}
+    final_snapshot = build_snapshot(
+        memory_dir,
+        project_root,
+        planned_text=planned_text,
+    )
+    canonicalization_blockers: list[str] = []
+    for item in final_snapshot.files:
+        if item.archive:
+            continue
+        canonicalization_blockers.extend(item.check_issues)
+        if item.relative in {
+            "decisions.md", "constraints.md", "do-not-use.md", "preferences.md"
+        } or item.relative.startswith("areas/"):
+            document = item.markdown_document
+            if document is not None:
+                legacy_count = sum(
+                    unit.kind == "bullet"
+                    or (
+                        unit.kind == "h2"
+                        and not (
+                            unit.heading
+                            and ENTRY_ID_RE.search(unit.heading)
+                        )
+                    )
+                    for unit in document.units
+                )
+                if legacy_count:
+                    canonicalization_blockers.append(
+                        f"{item.relative}: {legacy_count} active legacy entries require canonicalization"
+                    )
+    canonicalization_blockers.extend(final_snapshot.subject_parse_issues)
+    canonicalization_blockers.extend(final_snapshot.subject_issues)
+    canonicalization_blockers.extend(final_snapshot.reconciliation_parse_issues)
+    canonicalization_blockers.extend(
+        issue.message for issue in final_snapshot.reconciliation_issues
+    )
+    canonicalization_blockers.extend(final_snapshot.relation_issues)
     return (
         MutationPlan(
             "migrate",
@@ -744,6 +788,7 @@ def _build_plan(project_root: Path, memory_dir: Path) -> tuple[MutationPlan, lis
                 [
                     *(f"Manual migration required for {report}." for report in manual_reports),
                     *local_blockers,
+                    *dict.fromkeys(canonicalization_blockers),
                 ]
             ),
             project_root=project_root,
@@ -754,7 +799,12 @@ def _build_plan(project_root: Path, memory_dir: Path) -> tuple[MutationPlan, lis
     )
 
 
-def run(args) -> int:
+def _run_finalize(
+    args,
+    *,
+    migration_state_path: Path | None = None,
+    source_project_id: str | None = None,
+) -> int:
     project_root = resolve_project_root(args.project_root)
     memory_dir = resolve_memory_dir(project_root, args.memory_dir)
     manifest_path = memory_dir / "manifest.md"
@@ -781,7 +831,7 @@ def run(args) -> int:
         print("Refusing migration apply while blockers remain.")
         return 1
     if not args.confirm_plan:
-        raise ValueError("Protocol 0.7 migration apply requires --confirm-plan <PLAN_ID>.")
+        raise ValueError("Protocol 0.8 migration finalize requires --confirm-plan <PLAN_ID>.")
 
     with project_mutation_guard(
         project_root,
@@ -806,50 +856,37 @@ def run(args) -> int:
             raise ValueError(
                 f"Stale or mismatched plan: confirmed {args.confirm_plan}, current Plan ID is {current.plan_id}. No files written."
             )
-        # Migration is the one multi-root operation that can change the
-        # parser selected by the shared manifest.  Capture exact preimages
-        # before writing anything, keep the manifest's schema flip last among
-        # shared writes, and restore every operand on any failure.  This is
-        # intentionally separate from the general MutationPlan writer: its
-        # normal partial-write behavior remains unchanged.
-        preimages = _capture_migration_preimages(
-            memory_dir,
-            tuple(current.mutations),
-            tuple(current.private_mutations),
+        local_root = (
+            overlay_directory(current.project_id).parent
+            if current.private_mutations else None
         )
-        non_manifest = tuple(
-            mutation
-            for mutation in current.mutations
-            if mutation.path != manifest_path
-        )
-        manifest_mutations = tuple(
-            mutation
-            for mutation in current.mutations
-            if mutation.path == manifest_path
-        )
-        try:
-            if non_manifest:
-                apply_mutations(list(non_manifest))
-            if current.private_mutations:
-                apply_private_mutations(list(current.private_mutations))
-            if manifest_mutations:
-                apply_mutations(list(manifest_mutations))
-        except Exception as exc:
-            recovery_failures = _restore_migration_preimages(
-                preimages,
-                manifest_path,
+        if migration_state_path is None:
+            apply_plan_transaction(
+                current,
+                memory_dir,
+                local_root=local_root,
+                force_journal=True,
             )
-            if recovery_failures:
-                details = "; ".join(recovery_failures)
-                raise ValueError(
-                    "Migration apply failed and recovery was partial; schema 1 "
-                    f"preimages could not be restored for: {details}. "
-                    "Inspect the listed files before retrying."
-                ) from exc
-            raise ValueError(
-                "Migration apply failed; all shared and local files were restored "
-                "to their schema 1 preimages. No migration was applied."
-            ) from exc
+        else:
+            apply_transaction(
+                project_root=project_root,
+                memory_root=memory_dir,
+                project_id=(
+                    source_project_id
+                    if source_project_id and valid_project_id(source_project_id)
+                    else None
+                ),
+                command="migrate-finalize",
+                plan_id=current.plan_id,
+                shared_mutations=tuple(current.mutations),
+                private_mutations=tuple(current.private_mutations),
+                local_root=local_root,
+                migration_deletions=(PrivateDeleteMutation(
+                    migration_state_path, migration_state_path.name
+                ),),
+                migration_root=migration_state_path.parent,
+                force_journal=True,
+            )
     for path in {*seed_paths, *current_seed_paths}:
         discard_pending_seed(path)
     print("Applied migration. Written files:")
@@ -858,3 +895,207 @@ def run(args) -> int:
     for mutation in current.private_mutations:
         print(f"- local/{mutation.relative}")
     return 0
+
+
+def _migration_state_path(project_root: Path, memory_dir: Path) -> Path:
+    binding = bootstrap_binding_id(project_root, memory_dir)
+    return private_state_directory("migrations") / f"{binding}.json"
+
+
+def _stage_payload(project_root: Path, memory_dir: Path) -> dict[str, object]:
+    manifest_path = memory_dir / "manifest.md"
+    manifest = read_managed_text(memory_dir, manifest_path)
+    metadata = strict_protocol_metadata(manifest, allow_missing_section=True)
+    route_issues = validate_manifest_routes(manifest)
+    fatal_route_issues = [
+        issue
+        for issue in route_issues
+        if "expected one canonical heading; candidates: none" not in issue
+    ]
+    if fatal_route_issues:
+        raise ValueError("Invalid manifest routing: " + "; ".join(fatal_route_issues))
+    project_id = metadata.get("project_id")
+    local_digest = None
+    if project_id and valid_project_id(project_id):
+        try:
+            overlay = inspect_overlay(
+                project_root,
+                project_id,
+                entry_schema_version=entry_schema_version_for_manifest(manifest),
+                capture_unbound=True,
+            )
+            if overlay.snapshot and overlay.snapshot.manifest:
+                local_digest = digest_text(overlay.snapshot.manifest.text)
+        except (OSError, RuntimeError, ValueError):
+            local_digest = "review-required"
+    return {
+        "migration_state_schema_version": 1,
+        "binding_id": bootstrap_binding_id(project_root, memory_dir),
+        "project_id": project_id,
+        "source_protocol_version": metadata.get("protocol_version", "0.5"),
+        "source_entry_schema_version": metadata.get("entry_schema_version", "1"),
+        "manifest_sha256": digest_text(manifest),
+        "local_manifest_sha256": local_digest,
+    }
+
+
+def _stage_plan_id(stage: str, payload: dict[str, object]) -> str:
+    encoded = json.dumps(
+        {"stage": stage, **payload}, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()[:16]
+
+
+def _prepare_preflight(project_root: Path, memory_dir: Path) -> None:
+    """Reject unsafe or malformed source operands before private state exists."""
+
+    manifest = read_managed_text(memory_dir, memory_dir / "manifest.md")
+    metadata = strict_protocol_metadata(manifest, allow_missing_section=True)
+    project_id = metadata.get("project_id")
+    if project_id and not valid_project_id(project_id):
+        raise ValueError(
+            f"Invalid project_id {project_id!r}; review manifest.md manually."
+        )
+    entry_schema_version = entry_schema_version_for_manifest(manifest)
+    # Source discovery owns optional-route containment, symlink, and decoding
+    # checks.  Formal-entry validation must also precede creation of the
+    # bootstrap binding salt or migration checkpoint.
+    _migration_sources(memory_dir, manifest)
+    _validate_existing_formal_entries(
+        project_root,
+        memory_dir,
+        entry_schema_version=entry_schema_version,
+    )
+
+
+def _prepare(args, project_root: Path, memory_dir: Path) -> int:
+    _prepare_preflight(project_root, memory_dir)
+    payload = _stage_payload(project_root, memory_dir)
+    if (
+        payload["source_protocol_version"] == CURRENT_PROTOCOL_VERSION
+        and payload["source_entry_schema_version"] == CURRENT_ENTRY_SCHEMA_VERSION
+    ):
+        manifest = read_managed_text(memory_dir, memory_dir / "manifest.md")
+        try:
+            manifest_contract_metadata(manifest)
+        except ValueError as exc:
+            raise ValueError(
+                "Current Protocol 0.8 metadata is incomplete or invalid; "
+                "repair it before migration."
+            ) from exc
+        if not (memory_dir / "subjects.md").is_file():
+            raise ValueError(
+                "Current Protocol 0.8 requires subjects.md; run "
+                "`memory-custodian init --repair`."
+            )
+        print("MemoryCustodian migration prepare: project is already Protocol 0.8 / Entry schema 3.")
+        return 0
+    plan_id = _stage_plan_id("prepare", payload)
+    print("MemoryCustodian migration prepare:")
+    print(f"- Source protocol: {payload['source_protocol_version']}")
+    print(f"- Source Entry schema: {payload['source_entry_schema_version']}")
+    print("- Shared protocol metadata remains unchanged during prepare.")
+    print("- Manual Subject, Facet, Evidence, relation, and legacy-entry review may be required.")
+    print(f"Plan ID: {plan_id}")
+    if not args.apply:
+        print("Dry run only. Re-run with --prepare --apply --confirm-plan <PLAN_ID>.")
+        return 0
+    if args.confirm_plan != plan_id:
+        raise ValueError("Stale or mismatched migration prepare plan.")
+    path = _migration_state_path(project_root, memory_dir)
+    with project_mutation_guard(
+        project_root, memory_dir / "manifest.md", "migrate prepare",
+        timeout=args.lock_timeout, break_stale=args.break_stale_lock,
+        allow_legacy=True,
+        allow_metadata_repair=True,
+    ):
+        current = _stage_payload(project_root, memory_dir)
+        current_plan_id = _stage_plan_id("prepare", current)
+        if current_plan_id != args.confirm_plan:
+            raise ValueError("Migration source changed before prepare apply; preview again.")
+        apply_transaction(
+            project_root=project_root, memory_root=memory_dir,
+            project_id=None, command="migrate-prepare", plan_id=current_plan_id,
+            migration_mutations=(PrivateTextMutation(
+                path, path.name, json.dumps(current, sort_keys=True) + "\n"
+            ),),
+            migration_root=path.parent, force_journal=True,
+        )
+    print("Prepared repo-external migration state; shared memory was not changed.")
+    return 0
+
+
+def _canonicalize(args, project_root: Path, memory_dir: Path) -> int:
+    path = _migration_state_path(project_root, memory_dir)
+    if not path.exists():
+        raise ValueError("Migration is not prepared; run `migrate --prepare` first.")
+    state = json.loads(read_private_file(path))
+    current = _stage_payload(project_root, memory_dir)
+    if state.get("binding_id") != current.get("binding_id"):
+        raise ValueError("Migration state is bound to a different project root.")
+    plan, changes, _seed_paths = _build_plan(project_root, memory_dir)
+    payload = {"state": state, "current_manifest_sha256": current["manifest_sha256"], "blockers": list(plan.blockers)}
+    plan_id = _stage_plan_id("canonicalize", payload)
+    print("MemoryCustodian migration canonicalization checklist:")
+    for change in changes or ["No mechanical source rewrite is currently available."]:
+        print(f"- {change}")
+    for blocker in plan.blockers:
+        print(f"- BLOCKER: {blocker}")
+    print(f"Plan ID: {plan_id}")
+    if not args.apply:
+        print("Dry run only. Explicit semantic inputs remain required for ambiguous entries.")
+        return 0
+    if args.confirm_plan != plan_id:
+        raise ValueError("Stale or mismatched migration canonicalize plan.")
+    state["canonicalize_manifest_sha256"] = current["manifest_sha256"]
+    with project_mutation_guard(
+        project_root, memory_dir / "manifest.md", "migrate canonicalize",
+        timeout=args.lock_timeout, break_stale=args.break_stale_lock,
+        allow_legacy=True,
+        allow_metadata_repair=True,
+    ):
+        latest = _stage_payload(project_root, memory_dir)
+        if latest["manifest_sha256"] != current["manifest_sha256"]:
+            raise ValueError("Migration source changed before canonicalize apply; preview again.")
+        apply_transaction(
+            project_root=project_root, memory_root=memory_dir,
+            project_id=(
+                str(state.get("project_id"))
+                if valid_project_id(str(state.get("project_id", ""))) else None
+            ),
+            command="migrate-canonicalize", plan_id=plan_id,
+            migration_mutations=(PrivateTextMutation(
+                path, path.name, json.dumps(state, sort_keys=True) + "\n"
+            ),), migration_root=path.parent, force_journal=True,
+        )
+    print("Canonicalization checkpoint recorded; no semantic facts were inferred.")
+    return 0
+
+
+def run(args) -> int:
+    project_root = resolve_project_root(args.project_root)
+    memory_dir = resolve_memory_dir(project_root, args.memory_dir)
+    if args.prepare:
+        return _prepare(args, project_root, memory_dir)
+    if args.canonicalize:
+        return _canonicalize(args, project_root, memory_dir)
+    state_path = _migration_state_path(project_root, memory_dir)
+    if not state_path.exists():
+        raise ValueError("Migration finalize requires a prepared migration state.")
+    state = json.loads(read_private_file(state_path))
+    current = _stage_payload(project_root, memory_dir)
+    if state.get("binding_id") != current.get("binding_id"):
+        raise ValueError("Migration state is bound to a different project root.")
+    if "canonicalize_manifest_sha256" not in state:
+        raise ValueError(
+            "Migration finalize requires an applied canonicalization checkpoint."
+        )
+    if state.get("canonicalize_manifest_sha256") != current.get("manifest_sha256"):
+        raise ValueError(
+            "Migration source changed after canonicalization; run canonicalize again."
+        )
+    return _run_finalize(
+        args,
+        migration_state_path=state_path,
+        source_project_id=(str(state.get("project_id")) if state.get("project_id") else None),
+    )

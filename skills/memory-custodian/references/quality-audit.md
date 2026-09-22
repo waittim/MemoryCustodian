@@ -1,5 +1,26 @@
 # Memory Quality Audit
 
+Protocol 0.8 separates three audit layers and gives their results one
+finding/status model. Package 0.12 emits `INFO`, `WARNING`, `ERROR`, and
+`BLOCKER` findings; no finding or INFO is `PASS`, WARNING-only is `REVIEW`,
+and ERROR/BLOCKER is `FAIL`. Exit classes are 0 for PASS/REVIEW, 1 for an
+ERROR/domain failure, and 2 for a BLOCKER or fatal invocation error.
+
+Use `--format json` for automation. The public envelope has
+`output_schema_version: 1`; project audit stores `audit_schema_version: 1`
+inside `data`. Text and JSON are two renderings of the same audit result. A
+forgetting/local-reset/recovery result carries the same versioned
+`data.erasure_scope` and bounded `history_check_status` described in
+`forgetting-policy.md` and `output-contract.md`.
+
+Project audit checks persistent routing, reachability, evidence, relations,
+Subjects, conflicts, budgets, local state, transaction state, and erasure
+policy. Invocation audit is the `read --explain` routing result (or
+`audit --routing-input`) for one task/path/scope. Repository contract checks
+(`check-adapter-contracts.py`, `check-erasure-language.py`, and
+`check-version.py`) inspect this source tree; they are not project audit and
+do not claim a live agent benchmark.
+
 Use this audit for production memory, before compaction, or when context loads but fails to help.
 
 Run `memory-custodian check --privacy` and `memory-custodian check --security` for shared-memory audits. These
@@ -7,7 +28,7 @@ deterministic pattern scans are not complete secret or personal-data detection. 
 and a redacted preview; they never auto-delete or auto-repair content. Continue to apply semantic privacy judgment
 before writing shared memory.
 
-Also run the focused Protocol 0.7 checks:
+Also run the focused Protocol 0.8 checks:
 
 ```bash
 memory-custodian check --routing
@@ -55,14 +76,15 @@ memory-custodian check --conflicts --merge-base origin/main  # when Git/ref is a
   count, file order, or merge order.
 - Resolve through explicit supersede, valid exception, `distinct` reconciliation, or Subject merge inventory.
   Use `exception add`/`exception remove` and `reconcile preview` for stable inventories, blockers, canonical output,
-  and Plan IDs. Protocol 0.7 does not apply multi-file governance changes.
+  and Plan IDs. Protocol 0.8 applies governance changes only through the
+  shared transaction journal and recovery policy.
 - Require relationship reconciliation records to identify exactly two Entries. For `distinct`, require every
   referenced active Entry to have a different `Scope + Subject + Facet`; it cannot override an exact owner conflict.
 - Use one active structural-operand validator across conflict analysis, reconciliation, and governance previews:
   each current owner must be active, have valid scope and Facet, and resolve to exactly one active Subject.
 - Apply lifecycle-aware variants for historical relations: validate the active supersession replacement; for
   Subject merge, allow only a superseded historical source's merged Subject and validate the active target and
-  matching identity. Do not treat promoted Provisional-Subject/Provisional-Facet as Protocol 0.7 reconciliation input.
+  matching identity. Do not treat promoted Provisional-Subject/Provisional-Facet as ordinary reconciliation input.
 - In merge review, validate reconciliation records against each branch's own Entry and Subject graph. Do not reuse
   a syntax-only or merge-base acknowledgement to suppress review of later changes, and exempt only exact validated
   Entry pairs rather than arbitrary subsets of a record.
@@ -74,7 +96,7 @@ memory-custodian check --conflicts --merge-base origin/main  # when Git/ref is a
   Treat wrong-level, missing-whitespace, or extra malformed Protocol heading traces as INVALID; legacy fallback
   requires no trace. Require the canonical current version spelling and reject unsupported future versions at this
   shared gate rather than routing either case with legacy grammar. A
-  present section requires a valid version, and Protocol 0.7 requires complete schema, registry, identity, and policy
+  present section requires a valid version, and Protocol 0.8 requires complete schema, registry, identity, and policy
   fields. Validate recovery candidates before preview and again before apply; reject ambiguous sections for manual
   repair. Exercise a manifest-state by public-entrypoint matrix: preview and local commands must reject before Plan
   IDs or seeds, while status and every focused check must report the same invalid contract.

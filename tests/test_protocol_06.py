@@ -765,7 +765,7 @@ class Protocol06Tests(unittest.TestCase):
             manifest = memory / "manifest.md"
             manifest.write_text(
                 manifest.read_text(encoding="utf-8").replace(
-                "- protocol_version: 0.7", "- protocol_version: 0.5"
+                    "- protocol_version: 0.8", "- protocol_version: 0.5"
                 ),
                 encoding="utf-8",
             )
@@ -778,11 +778,10 @@ class Protocol06Tests(unittest.TestCase):
             )
             args = ["migrate", "--project-root", tmp]
             plan_id = preview_id(args)
-            self.assertEqual(main([*args, "--apply", "--confirm-plan", plan_id]), 0)
+            self.assertEqual(main([*args, "--apply", "--confirm-plan", plan_id]), 1)
             migrated = area.read_text(encoding="utf-8")
-            self.assertRegex(migrated, r"MC-AREA-20260728-[0-9a-f]{8}")
-            self.assertIn("Scope: area:backend", migrated)
-            self.assertIn("- legacy-unverified", migrated)
+            self.assertNotRegex(migrated, r"MC-AREA-20260728-[0-9a-f]{8}")
+            self.assertIn("## 2026-07-28 - Keep backend offline", migrated)
 
     def test_real_concurrent_add_preserves_both_entries(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -813,7 +812,7 @@ class Protocol06Tests(unittest.TestCase):
             manifest_path = Path(tmp) / "docs" / "memory" / "manifest.md"
             legacy_manifest = manifest_path.read_text(encoding="utf-8")
             legacy_manifest = legacy_manifest.replace(
-                "- protocol_version: 0.7",
+                "- protocol_version: 0.8",
                 "- protocol_version: 0.5",
             )
             legacy_manifest = re.sub(

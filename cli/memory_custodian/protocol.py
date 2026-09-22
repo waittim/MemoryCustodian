@@ -45,8 +45,8 @@ CURRENT_PROTOCOL_VERSION = __protocol_version__
 LEGACY_ENTRY_SCHEMA_VERSION = "1"
 CURRENT_ENTRY_SCHEMA_VERSION = __entry_schema_version__
 ENTRY_SCHEMA_MIGRATION_MESSAGE = (
-    "Project uses Protocol 0.7 entry schema 1; migration to entry schema 2 is available. "
-    "Run `memory-custodian migrate --apply` after reviewing the preview."
+    "Project uses an earlier Entry schema; staged migration to Entry schema 3 is available. "
+    "Run `memory-custodian migrate --prepare` after reviewing the preview."
 )
 
 BUDGETS = {
@@ -250,10 +250,11 @@ def entry_schema_version_for_manifest(manifest: str) -> str:
     # Entry grammar is scoped to the canonical Protocol tuple.  Older, newer,
     # or non-canonical-but-equivalent protocol spellings are not evidence that
     # this CLI may decode schema 2.
-    if metadata.get("protocol_version") != CURRENT_PROTOCOL_VERSION:
-        return LEGACY_ENTRY_SCHEMA_VERSION
+    protocol = metadata.get("protocol_version")
     declared = metadata.get("entry_schema_version")
-    if declared in {LEGACY_ENTRY_SCHEMA_VERSION, CURRENT_ENTRY_SCHEMA_VERSION}:
+    if protocol == "0.8" and declared == CURRENT_ENTRY_SCHEMA_VERSION:
+        return declared
+    if protocol == "0.7" and declared in {LEGACY_ENTRY_SCHEMA_VERSION, "2"}:
         return declared
     return LEGACY_ENTRY_SCHEMA_VERSION
 
@@ -1594,7 +1595,7 @@ def validate_manifest_routes(manifest: str) -> list[str]:
                 issues.append(f"{category} route: duplicate paths: {', '.join(duplicates)}")
     protocol = protocol_metadata(manifest).get("protocol_version", "")
     try:
-        parse_optional_module_index(manifest, legacy_compatible=protocol != "0.7")
+        parse_optional_module_index(manifest, legacy_compatible=protocol not in {"0.7", "0.8"})
     except ValueError as exc:
         issues.append(f"optional module index: {exc}")
     return issues

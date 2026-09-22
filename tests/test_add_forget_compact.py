@@ -363,7 +363,7 @@ class AddForgetCompactTests(unittest.TestCase):
             curate_brief(memory)
             out = StringIO()
             with redirect_stdout(out):
-                self.assertEqual(main(["check", "--project-root", tmp]), 0)
+                self.assertEqual(main(["check", "--project-root", tmp]), 1)
 
     def test_compact_target_dedupes_constraints(self):
         with tempfile.TemporaryDirectory() as tmp:

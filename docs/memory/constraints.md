@@ -1,19 +1,61 @@
 # Constraints
 
-- Memory operations must work without network access by default.
-- Skill, plugin, and CLI installation or update flows may use network distribution.
-- Must store project memory as local Markdown files under `docs/`, with `docs/memory/` as the default managed directory.
-- Must not introduce RAG, embeddings, vector databases, or cloud memory for the MVP unless explicitly requested.
-- Must be reusable across Codex, Claude Code, Gemini, and other agents.
-- Must keep startup context small.
-- Must make memory easy to review, diff, commit, and roll back.
-- Must keep default project initialization to six task-memory files plus the non-routed `subjects.md` protocol registry.
-- Must keep workflow-specific rules out of the core protocol.
-- Must keep Skill instructions concise and operational; detailed non-goals belong in README and references.
-- Hard and purge forgetting must remove prior topic-bearing soft tombstones from managed memory.
-- Forget apply must refuse before writing when a topic appears in a non-removable body or preamble that requires semantic rewriting.
-- CLI inbox compaction must not infer semantic destinations from keywords; an Agent or user decides what memory means.
-- Safe repair and optional enablement must not overwrite curated memory.
-- Multi-file commands must precompute and validate mutation plans, then report any partial completion explicitly.
-- Repair and migration must never downgrade a newer project protocol or accept an unparseable protocol version.
-- Destructive bullet cleanup must operate on complete column-zero top-level units, including their nested and continuation content.
+## MC-CON-20260921-10000001 — Offline core operations
+
+Status: active
+Scope: project
+Subject: MC-SUBJ-20260801-20000002
+Facet: security
+Evidence:
+- repo:pyproject.toml
+
+Constraint:
+Core memory operations must work without network access. Skill, plugin, and CLI distribution may use the network.
+
+## MC-CON-20260921-10000002 — Repo-native plain-text storage
+
+Status: active
+Scope: project
+Subject: MC-SUBJ-20260801-20000002
+Facet: data-model
+Evidence:
+- user-confirmed
+
+Constraint:
+Store project memory as reviewable Markdown under `docs/`, defaulting to `docs/memory/`; do not introduce RAG, embeddings, vector databases, or cloud memory into the default architecture.
+
+## MC-CON-20260921-10000003 — Cross-agent compatibility
+
+Status: active
+Scope: project
+Subject: MC-SUBJ-20260801-60000006
+Facet: compatibility
+Evidence:
+- repo:adapters
+
+Constraint:
+The protocol must remain reusable across Codex, Claude Code, Gemini, and generic agents.
+
+## MC-CON-20260921-10000010 — Transactional multi-file mutation
+
+Status: active
+Scope: project
+Subject: MC-SUBJ-20260729-7e5c3a91
+Facet: security
+Evidence:
+- repo:cli/memory_custodian/transactions.py
+
+Constraint:
+Multi-file commands must precompute and validate plans, use private crash-recovery journals, and refuse silent partial completion.
+
+## MC-CON-20260921-10000011 — No protocol downgrade
+
+Status: active
+Scope: project
+Subject: MC-SUBJ-20260729-7e5c3a91
+Facet: version-policy
+Evidence:
+- repo:cli/memory_custodian/protocol.py
+
+Constraint:
+Repair and migration never downgrade a newer project protocol or accept an unparseable protocol version.

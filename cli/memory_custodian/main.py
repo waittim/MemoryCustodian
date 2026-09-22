@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import redirect_stdout
+from io import StringIO
 import sys
 
 from . import __version__
 from . import add as add_cmd
+from . import audit as audit_cmd
 from . import check as check_cmd
 from . import compact as compact_cmd
 from . import enable as enable_cmd
@@ -17,16 +20,21 @@ from . import migrate as migrate_cmd
 from . import local as local_cmd
 from . import index as index_cmd
 from . import read as read_cmd
+from . import recover as recover_cmd
 from . import status as status_cmd
 from . import subject as subject_cmd
 from .routes import TASK_INPUTS
 from .mutations import PartialMutationError
 from .templates import DEFAULT_MEMORY_DIR
+from .output import envelope, print_json
+from .protocol import CURRENT_PROTOCOL_VERSION
 
 
 def _add_common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--project-root", default=".", help="Project root. Defaults to the current directory.")
     parser.add_argument("--memory-dir", default=DEFAULT_MEMORY_DIR, help="Memory directory under docs/. Defaults to docs/memory.")
+    parser.add_argument("--format", choices=("text", "json"), default="text", help="Output format.")
+    parser.add_argument("--json", action="store_const", const="json", dest="format", help=argparse.SUPPRESS)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -155,12 +163,34 @@ def build_parser() -> argparse.ArgumentParser:
     check_parser.add_argument("--merge-base", help="Git ref for read-only two-sided conflict and reconciliation review.")
     check_parser.set_defaults(func=check_cmd.run)
 
+    audit_parser = sub.add_parser("audit", help="Audit persistent project memory with stable findings.")
+    _add_common(audit_parser)
+    for flag in ("routing", "reachability", "freshness", "evidence", "privacy", "security", "relations", "subjects", "conflicts", "budgets", "local", "transactions", "erasure", "history-exposure", "all"):
+        audit_parser.add_argument(f"--{flag}", action="store_true")
+    audit_parser.add_argument("--merge-base")
+    audit_parser.add_argument("--routing-input", action="store_true", help="Audit one concrete routing invocation using the read model.")
+    audit_parser.add_argument("--task", choices=TASK_INPUTS, default="default")
+    audit_parser.add_argument("--path", action="append", default=[])
+    audit_parser.add_argument("--profile", action="append", default=[])
+    audit_parser.add_argument("--area", action="append", default=[])
+    audit_parser.add_argument("--rule", action="append", default=[])
+    audit_parser.add_argument("--strict-routing", action="store_true")
+    audit_parser.add_argument("--no-local", action="store_true")
+    audit_parser.add_argument("--topic")
+    audit_parser.add_argument("--id", dest="entry_id")
+    audit_parser.set_defaults(func=audit_cmd.run)
+
     local_parser = sub.add_parser("local", help="Manage the repo-external local overlay.")
     local_sub = local_parser.add_subparsers(dest="local_command", required=True)
     for name in ("status", "enable", "link", "reset"):
         parser_for_command = local_sub.add_parser(name)
         _add_common(parser_for_command)
         if name in {"enable", "link"}:
+            parser_for_command.add_argument("--lock-timeout", type=float, default=10.0)
+            parser_for_command.add_argument("--break-stale-lock", action="store_true")
+        if name == "reset":
+            parser_for_command.add_argument("--apply", action="store_true")
+            parser_for_command.add_argument("--confirm-plan")
             parser_for_command.add_argument("--lock-timeout", type=float, default=10.0)
             parser_for_command.add_argument("--break-stale-lock", action="store_true")
         parser_for_command.set_defaults(func=local_cmd.run, lock_timeout=10.0, break_stale_lock=False)
@@ -175,6 +205,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     migrate_parser = sub.add_parser("migrate", help="Migrate memory files to the current protocol.")
     _add_common(migrate_parser)
+    migrate_stage = migrate_parser.add_mutually_exclusive_group(required=True)
+    migrate_stage.add_argument("--prepare", action="store_true", help="Prepare a staged Protocol 0.8 migration.")
+    migrate_stage.add_argument("--canonicalize", action="store_true", help="Report or apply explicit canonicalization helpers.")
+    migrate_stage.add_argument("--finalize", action="store_true", help="Finalize a prepared migration after audit blockers are cleared.")
     migrate_parser.add_argument("--apply", action="store_true", help="Write migration changes. Default is dry run.")
     migrate_parser.add_argument("--confirm-plan", help="Plan ID printed by the matching preview.")
     migrate_parser.add_argument("--lock-timeout", type=float, default=10.0)
@@ -230,6 +264,10 @@ def build_parser() -> argparse.ArgumentParser:
     _add_common(subject_merge)
     subject_merge.add_argument("subject_id")
     subject_merge.add_argument("--into", required=True, dest="target_subject_id")
+    subject_merge.add_argument("--apply", action="store_true")
+    subject_merge.add_argument("--confirm-plan")
+    subject_merge.add_argument("--lock-timeout", type=float, default=10.0)
+    subject_merge.add_argument("--break-stale-lock", action="store_true")
     subject_merge.set_defaults(func=subject_cmd.run)
 
     list_parser = sub.add_parser("list", help="List canonical memory entries by stable ID.")
@@ -253,6 +291,9 @@ def build_parser() -> argparse.ArgumentParser:
     promote_parser.add_argument("--type", required=True, choices=("decision", "constraint", "preference", "tombstone", "do-not-use"))
     promote_parser.add_argument("--evidence", action="append", required=True)
     promote_parser.add_argument("--apply", action="store_true")
+    promote_parser.add_argument("--confirm-plan")
+    promote_parser.add_argument("--lock-timeout", type=float, default=10.0)
+    promote_parser.add_argument("--break-stale-lock", action="store_true")
     promote_parser.set_defaults(func=index_cmd.run_promote)
 
     exception_parser = sub.add_parser(
@@ -263,10 +304,18 @@ def build_parser() -> argparse.ArgumentParser:
     _add_common(exception_add)
     exception_add.add_argument("entry_id", help="Active area-scoped Entry ID.")
     exception_add.add_argument("--to", required=True, dest="target_entry_id", help="Active project-scoped Entry ID.")
+    exception_add.add_argument("--apply", action="store_true")
+    exception_add.add_argument("--confirm-plan")
+    exception_add.add_argument("--lock-timeout", type=float, default=10.0)
+    exception_add.add_argument("--break-stale-lock", action="store_true")
     exception_add.set_defaults(func=governance_cmd.run)
     exception_remove = exception_sub.add_parser("remove", help="Preview removal of an Exception-To relation.")
     _add_common(exception_remove)
     exception_remove.add_argument("entry_id", help="Active area-scoped Entry ID.")
+    exception_remove.add_argument("--apply", action="store_true")
+    exception_remove.add_argument("--confirm-plan")
+    exception_remove.add_argument("--lock-timeout", type=float, default=10.0)
+    exception_remove.add_argument("--break-stale-lock", action="store_true")
     exception_remove.set_defaults(func=governance_cmd.run)
 
     reconcile_parser = sub.add_parser(
@@ -279,7 +328,21 @@ def build_parser() -> argparse.ArgumentParser:
     reconcile_preview.add_argument("--resolution", required=True, choices=sorted(governance_cmd.RESOLUTIONS))
     reconcile_preview.add_argument("--title", required=True)
     reconcile_preview.add_argument("--evidence", action="append", required=True)
+    reconcile_preview.add_argument("--apply", action="store_true")
+    reconcile_preview.add_argument("--confirm-plan")
+    reconcile_preview.add_argument("--lock-timeout", type=float, default=10.0)
+    reconcile_preview.add_argument("--break-stale-lock", action="store_true")
     reconcile_preview.set_defaults(func=governance_cmd.run)
+
+    recover_parser = sub.add_parser("recover", help="Analyze or recover an interrupted mutation transaction.")
+    _add_common(recover_parser)
+    recover_parser.add_argument("--transaction-id", help="Opaque transaction ID selected from recovery analysis.")
+    recovery_action = recover_parser.add_mutually_exclusive_group()
+    recovery_action.add_argument("--complete", action="store_true", help="Complete a safe interrupted transaction.")
+    recovery_action.add_argument("--rollback", action="store_true", help="Roll back a safe interrupted transaction.")
+    recover_parser.add_argument("--lock-timeout", type=float, default=10.0)
+    recover_parser.add_argument("--break-stale-lock", action="store_true")
+    recover_parser.set_defaults(func=recover_cmd.run)
 
     return parser
 
@@ -287,6 +350,39 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    json_mode = getattr(args, "format", "text") == "json"
+    if json_mode and args.command != "audit":
+        stream = StringIO()
+        try:
+            with redirect_stdout(stream):
+                code = args.func(args)
+        except ValueError as exc:
+            print_json(envelope(
+                command=args.command, protocol_version=CURRENT_PROTOCOL_VERSION,
+                return_code=1, rendered_text="",
+                findings=[{
+                    "code": "MC-INVOCATION-001", "severity": "ERROR", "path": "",
+                    "entry_id": None, "message": str(exc),
+                    "remediation": "Correct the invocation or project state and retry.",
+                }],
+            ))
+            return 1
+        except OSError as exc:
+            print_json(envelope(
+                command=args.command, protocol_version=CURRENT_PROTOCOL_VERSION,
+                return_code=2, rendered_text="",
+                findings=[{
+                    "code": "MC-RUNTIME-001", "severity": "BLOCKER", "path": "",
+                    "entry_id": None, "message": str(exc),
+                    "remediation": "Resolve the filesystem or recovery blocker and retry.",
+                }],
+            ))
+            return 2
+        print_json(envelope(
+            command=args.command, protocol_version=CURRENT_PROTOCOL_VERSION,
+            return_code=code, rendered_text=stream.getvalue(),
+        ))
+        return code
     try:
         return args.func(args)
     except ValueError as exc:
