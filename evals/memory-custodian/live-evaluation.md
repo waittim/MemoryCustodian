@@ -1,6 +1,9 @@
 # Reproducible Live Cross-Agent Evaluation
 
-This is a live-runtime evaluation recipe, not a claim that the static checks executed the four agents.
+This is a live-runtime evaluation recipe, not a claim that the static checks
+executed the four agents.  The offline fixture runner in
+`scripts/check-skill-evals.py` exercises the same CLI contract for each named
+adapter, but it is not a substitute for this live evaluation.
 
 1. Check out the same commit on a clean machine and install package version `0.12.0`.
 2. Disable local overlays or pass `--no-local`.
@@ -8,3 +11,7 @@ This is a live-runtime evaluation recipe, not a claim that the static checks exe
 4. Capture the exact CLI invocation and the JSON from `memory-custodian read --task implementation --path cli/memory_custodian/read.py --strict-routing --explain --no-local --format json`.
 5. Compare each result with `cross-agent/shared-contract.json`. File sets, ordering, routing completeness, reason codes, Entry/Subject identities, conflict/reconciliation findings, and `context_sha256` must match byte-for-byte.
 6. Record agent/runtime versions, OS, commit, UTC timestamp, and any deviation. A static adapter check is not a passing live result.
+
+The reproducible result record should be stored outside the fixture as an
+append-only evaluation note.  Until such a note exists, this file intentionally
+does not claim live Codex, Claude Code, Gemini, or generic-agent coverage.

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import io
 import json
 import os
@@ -9,10 +10,14 @@ import tempfile
 import unittest
 from unittest import mock
 import re
+from types import SimpleNamespace
 
 from memory_custodian.entries import parse_structured_entries, render_active_entry
 from memory_custodian.main import main
+from memory_custodian.migrate import _source_binding
 from memory_custodian.mutations import TextMutation
+from memory_custodian.protocol import parse_markdown_units
+from memory_custodian.local_overlay import LocalStatus
 from memory_custodian.transactions import (
     RootBinding,
     TransactionFailpoint,
@@ -25,6 +30,25 @@ from memory_custodian.transactions import (
 
 
 class Protocol08Tests(unittest.TestCase):
+    def _capture(self, argv):
+        output, error = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(output), contextlib.redirect_stderr(error):
+            code = main(argv)
+        return code, output.getvalue(), error.getvalue()
+
+    def _stage(self, root: Path, stage: str) -> tuple[str, str]:
+        base = ["migrate", stage, "--project-root", str(root)]
+        code, preview, error = self._capture(base)
+        self.assertEqual(code, 0, preview + error)
+        match = re.search(r"(?m)^Plan ID: ([0-9a-f]{16})$", preview)
+        self.assertIsNotNone(match, preview)
+        plan_id = match.group(1)
+        code, applied, error = self._capture([
+            *base, "--apply", "--confirm-plan", plan_id,
+        ])
+        self.assertEqual(code, 0, applied + error)
+        return plan_id, applied
+
     def test_schema3_area_entry_type_round_trip(self):
         text = render_active_entry(
             "area", "MC-AREA-20260921-abcdef12", "Area decision", "Use queues.",
@@ -91,6 +115,147 @@ class Protocol08Tests(unittest.TestCase):
             with self.assertRaises(SystemExit) as caught:
                 main(["migrate"])
         self.assertEqual(caught.exception.code, 2)
+
+    def test_staged_migration_uses_distinct_plans_and_cleans_private_state(self):
+        with tempfile.TemporaryDirectory() as temporary, tempfile.TemporaryDirectory() as state:
+            root = Path(temporary)
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": state}):
+                self.assertEqual(main(["init", "--project-root", str(root)]), 0)
+                manifest = root / "docs" / "memory" / "manifest.md"
+                manifest.write_text(
+                    manifest.read_text(encoding="utf-8")
+                    .replace("protocol_version: 0.8", "protocol_version: 0.7")
+                    .replace("entry_schema_version: 3", "entry_schema_version: 2"),
+                    encoding="utf-8",
+                )
+                prepare_id, _ = self._stage(root, "--prepare")
+                canonicalize_id, _ = self._stage(root, "--canonicalize")
+                finalize_id, _ = self._stage(root, "--finalize")
+                self.assertEqual(len({prepare_id, canonicalize_id, finalize_id}), 3)
+                migrated = manifest.read_text(encoding="utf-8")
+                self.assertIn("protocol_version: 0.8", migrated)
+                self.assertIn("entry_schema_version: 3", migrated)
+                migration_root = Path(state) / "memory-custodian" / "migrations"
+                self.assertFalse(any(migration_root.glob("*.json")))
+
+    def test_supported_legacy_metadata_combinations_enter_all_stages(self):
+        combinations = (("0.5", "1"), ("0.6", "1"), ("0.7", "1"), ("0.7", "2"))
+        for protocol_version, entry_schema_version in combinations:
+            with self.subTest(protocol=protocol_version, schema=entry_schema_version):
+                with tempfile.TemporaryDirectory() as temporary, tempfile.TemporaryDirectory() as state:
+                    root = Path(temporary)
+                    with mock.patch.dict(os.environ, {"XDG_STATE_HOME": state}):
+                        self.assertEqual(main(["init", "--project-root", str(root)]), 0)
+                        manifest = root / "docs" / "memory" / "manifest.md"
+                        source = manifest.read_text(encoding="utf-8")
+                        source = source.replace(
+                            "protocol_version: 0.8", f"protocol_version: {protocol_version}",
+                        ).replace(
+                            "entry_schema_version: 3", f"entry_schema_version: {entry_schema_version}",
+                        )
+                        manifest.write_text(source, encoding="utf-8")
+                        ids = [self._stage(root, stage)[0] for stage in (
+                            "--prepare", "--canonicalize", "--finalize",
+                        )]
+                        self.assertEqual(len(set(ids)), 3)
+                        migrated = manifest.read_text(encoding="utf-8")
+                        self.assertIn("protocol_version: 0.8", migrated)
+                        self.assertIn("entry_schema_version: 3", migrated)
+
+    def test_finalize_rejects_source_drift_after_canonicalization(self):
+        with tempfile.TemporaryDirectory() as temporary, tempfile.TemporaryDirectory() as state:
+            root = Path(temporary)
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": state}):
+                self.assertEqual(main(["init", "--project-root", str(root)]), 0)
+                manifest = root / "docs" / "memory" / "manifest.md"
+                manifest.write_text(
+                    manifest.read_text(encoding="utf-8")
+                    .replace("protocol_version: 0.8", "protocol_version: 0.7")
+                    .replace("entry_schema_version: 3", "entry_schema_version: 2"),
+                    encoding="utf-8",
+                )
+                self._stage(root, "--prepare")
+                self._stage(root, "--canonicalize")
+                brief = root / "docs" / "memory" / "brief.md"
+                brief.write_bytes(brief.read_bytes() + b"\nConcurrent source drift.\r\n")
+                code, _output, error = self._capture([
+                    "migrate", "--finalize", "--project-root", str(root),
+                ])
+                self.assertEqual(code, 2)
+                self.assertIn("source changed after canonicalization", error)
+
+    def test_migration_local_binding_hashes_raw_bytes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.assertEqual(main(["init", "--project-root", str(root)]), 0)
+            memory = root / "docs" / "memory"
+            manifest = (memory / "manifest.md").read_text(encoding="utf-8")
+            metadata = {"project_id": re.search(r"project_id: (\S+)", manifest).group(1)}
+            local_path = root / "private-local-preferences.md"
+            local_path.write_bytes(b"first\r\nsecond\r\n")
+            captured = SimpleNamespace(
+                relative="preferences.md",
+                path=local_path,
+                text="first\nsecond\n",
+            )
+            overlay = SimpleNamespace(
+                status=LocalStatus.BOUND,
+                warnings=(),
+                snapshot=SimpleNamespace(files=(captured,)),
+            )
+            with mock.patch("memory_custodian.migrate.inspect_overlay", return_value=overlay):
+                binding, _source = _source_binding(root, memory, manifest, metadata)
+            expected = hashlib.sha256(b"first\r\nsecond\r\n").hexdigest()
+            self.assertEqual(
+                binding["source_raw_byte_digests"]["local"]["preferences.md"],
+                expected,
+            )
+
+    def test_add_from_legacy_replaces_exact_h2_without_duplication(self):
+        with tempfile.TemporaryDirectory() as temporary, tempfile.TemporaryDirectory() as state:
+            root = Path(temporary)
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": state}):
+                self.assertEqual(main(["init", "--project-root", str(root)]), 0)
+                subject_args = [
+                    "subject", "add", "Legacy conversion", "--kind", "concept",
+                    "--evidence", "user-confirmed", "--project-root", str(root),
+                ]
+                code, preview, error = self._capture(subject_args)
+                self.assertEqual(code, 0, preview + error)
+                plan_id = re.search(r"(?m)^Plan ID: ([0-9a-f]{16})$", preview).group(1)
+                self.assertEqual(main([*subject_args, "--apply", "--confirm-plan", plan_id]), 0)
+                subjects = (root / "docs" / "memory" / "subjects.md").read_text(encoding="utf-8")
+                subject_id = re.search(r"(?m)^## (MC-SUBJ-\S+) — Legacy conversion$", subjects).group(1)
+                decisions = root / "docs" / "memory" / "decisions.md"
+                decisions.write_text(
+                    decisions.read_text(encoding="utf-8").rstrip()
+                    + "\n\n## 2026-09-22 - Legacy choice\nDecision:\nKeep exact body.\nReason:\nExplicit conversion.\n",
+                    encoding="utf-8",
+                )
+                units = parse_markdown_units(decisions.read_text(encoding="utf-8")).units
+                unit_index = next(
+                    index for index, unit in enumerate(units)
+                    if unit.kind == "h2" and unit.heading == "2026-09-22 - Legacy choice"
+                )
+                command = [
+                    "add", "--from-legacy", f"decisions.md:{unit_index}",
+                    "--type", "decision", "--title", "Canonical choice",
+                    "--scope", "project", "--subject", subject_id,
+                    "--facet", "behavior", "--evidence", "user-confirmed",
+                    "--project-root", str(root),
+                ]
+                code, preview, error = self._capture(command)
+                self.assertEqual(code, 0, preview + error)
+                plan_id = re.search(r"(?m)^Plan ID: ([0-9a-f]{16})$", preview).group(1)
+                code, output, error = self._capture([
+                    *command, "--apply", "--confirm-plan", plan_id,
+                ])
+                self.assertEqual(code, 0, output + error)
+                result = decisions.read_text(encoding="utf-8")
+                self.assertNotIn("## 2026-09-22 - Legacy choice", result)
+                self.assertEqual(result.count("Keep exact body."), 1)
+                self.assertIn("## MC-DEC-", result)
+                self.assertIn("Subject: " + subject_id, result)
 
     def test_local_reset_deletes_private_tree_transactionally(self):
         with tempfile.TemporaryDirectory() as temporary, tempfile.TemporaryDirectory() as state:

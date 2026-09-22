@@ -375,7 +375,11 @@ def subject_registry_issues(
                 issues.append(
                     f"subjects.md: {subject.subject_id} has duplicate {name} fields"
                 )
-        for name in ("Status", "Kind", "Evidence", "Aliases"):
+        # ``Aliases`` is an optional identity aid.  A Subject whose display
+        # title is the only known alias is still a valid registry unit; the
+        # renderer emits an empty Aliases block for new records, but readers
+        # must not reject hand-authored/legacy records that omit it entirely.
+        for name in ("Status", "Kind", "Evidence"):
             count = subject.field_counts.get(name, 0)
             if count != 1:
                 issues.append(

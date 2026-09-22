@@ -665,6 +665,12 @@ def _merge(args) -> int:
         blockers=tuple(sorted(set(blockers))),
         private_context={"dependency_sha256": hashlib.sha256(seed).hexdigest()},
         project_root=project_root,
+        dependency_paths=tuple(dict.fromkeys((
+            memory_dir / "manifest.md",
+            registry_path,
+            reconciliation_path,
+            *(entry.path for entry in canonical_entries(memory_dir, include_archive=True)),
+        ))),
     )
     print(f"Plan ID: {plan.plan_id}")
     print("Future semantics: current active/candidate references mutate; source gains Merged-Into; historical entries retain their original Subject ID.")

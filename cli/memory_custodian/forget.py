@@ -28,8 +28,10 @@ from .plans import (
     digest_text,
     discard_pending_seed,
     pending_entry_suffixes,
+    pending_plan_digest,
     pending_plan_nonce,
     print_plan,
+    record_pending_plan_digest,
 )
 from .transactions import apply_plan_transaction
 from .protocol import (
@@ -786,6 +788,12 @@ def run(args) -> int:
     broad_reasons = list(build.broad_reasons)
     changelog_updated = build.changelog_written
 
+    # Sensitive Protocol 0.8 previews keep the private stale-check digest in
+    # the repo-external pending operation record.  The public plan ID remains
+    # only the opaque random operation reference.
+    if not args.apply and protocol_06 and args.mode in {"hard", "purge"}:
+        record_pending_plan_digest(privacy_seed_path, mutation_plan.private_plan_id)
+
     print(f"Mode: {args.mode}")
     print(f"Searched files: {len(targets)}")
     print(f"Matched files: {len(matched_plans)}")
@@ -894,6 +902,13 @@ def run(args) -> int:
             )
             current_plan = current_build.plan
             _require_locked_plan_is_applicable(current_build, args.allow_broad_match)
+            if args.mode in {"hard", "purge"}:
+                expected_private_plan_id = pending_plan_digest(privacy_seed_path)
+                if expected_private_plan_id != current_plan.private_plan_id:
+                    print_plan(current_plan)
+                    raise ValueError(
+                        "Sensitive pending operation is stale or missing; preview again."
+                    )
             if current_plan.plan_id != args.confirm_plan:
                 print_plan(current_plan)
                 raise ValueError(

@@ -342,6 +342,16 @@ upgrade safely.
 
 For complete release history and breaking change notes, see [RELEASE-NOTES.md](RELEASE-NOTES.md).
 
+### Release verification
+
+The checked-in CI workflow runs the standard-library test suite and repository
+contract checks on Ubuntu and runs the Windows smoke, private-state, and JSON
+contract checks on Python 3.10 through 3.14. The cross-agent fixture runner is
+an offline deterministic CLI check executed once for each named adapter; it is
+not a live Codex, Claude Code, Gemini, or generic-agent benchmark. See
+[`live-evaluation.md`](evals/memory-custodian/live-evaluation.md) for the
+reproducible live-evaluation procedure.
+
 ---
 
 ## Contributing & License

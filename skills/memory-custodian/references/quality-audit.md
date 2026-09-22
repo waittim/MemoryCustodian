@@ -28,6 +28,34 @@ deterministic pattern scans are not complete secret or personal-data detection. 
 and a redacted preview; they never auto-delete or auto-repair content. Continue to apply semantic privacy judgment
 before writing shared memory.
 
+## Frozen finding registry
+
+Finding codes are public compatibility identifiers. Their spelling and meaning
+are frozen for Protocol 0.8; a new code is required when a later release adds a
+distinct condition. The producer supplies the severity, so a code such as
+`MC-BUDGET-001` may be `WARNING` at `NEAR LIMIT` and `ERROR` when over budget.
+
+| Namespace | Frozen codes and meaning |
+| --- | --- |
+| Routing/reachability | `MC-ROUTING-001` missing canonical route; `002` enabled module has no activation path; `003` required invocation scope is missing or invalid; `004` unsafe route configuration; `005` required module is missing; `006` active entry is unreachable; `007` invalid protocol/routing contract. `MC-REACH-001` active memory is outside canonical storage or route; `002` hard area memory has no valid activation. |
+| Subject identity | `MC-SUBJECT-001` duplicate active Subject ID; `002` duplicate normalized Canonical-Ref; `003` alias has multiple active owners; `004` active Entry references a missing Subject; `005` active Entry references a merged Subject; `006` invalid Subject merge relation. |
+| Structural conflict | `MC-CONFLICT-001` duplicate structural owner; `002` project/area overlap lacks Exception-To; `003` invalid exception scope/target; `004` inconsistent reconciliation; `005` concurrent Subject identity collision or invalid Subject reference; `006` invalid exception/reconciliation operand; `007` invalid Entry schema or identity; `008` invalid relation/reconciliation identity; `009` overlapping matched areas; `010` invalid Subject registry. `MC-CONFLICT-000` is the informational clear result. |
+| Entry/evidence/relation | `MC-ENTRY-001` malformed or ambiguous canonical Entry; `002` active legacy Entry; `MC-EVIDENCE-001` missing/admission-invalid Evidence; `002` malformed or unavailable Evidence; `MC-RELATION-001` missing/invalid relation target; `002` missing reciprocal lifecycle relation; `003` relation cycle. |
+| Transaction/migration/local | `MC-TRANSACTION-001` unfinished or cleanup-pending journal; `002` malformed/unsupported journal; `003` orphan private transaction state; `004` unsafe recovery state. `MC-MIGRATION-001` canonicalization blocker; `002` migration/source binding drift. `MC-LOCAL-001` unbound or wrong-root overlay; `002` overlay cannot safely join a schema transition. |
+| Budget/privacy/security | `MC-BUDGET-001` budget is near or over its limit; `MC-PRIVACY-001` machine-specific or personal-data pattern; `MC-SECURITY-001` credential-like or security-sensitive pattern. These scanners are bounded diagnostics, not complete detection. |
+| Erasure/history | `MC-ERASURE-001` output claims broader erasure than performed; `002` history inspection unavailable; `003` reachable historical copy detected; `004` bounded inspection found no reachable copy (INFO only and not proof of absence); `005` forgotten topic leaked into semantic metadata, generated names, public JSON, or public errors; `006` local-reset scope exceeds the current project/machine overlay; `007` sensitive repository memory should be minimized or moved to a controlled source. |
+
+The implementation also exposes these stable compatibility diagnostics:
+`MC-FRESH-001` unsafe/missing Evidence source, `002` revision drift,
+`003` Git freshness unavailable, `004` invalid lifecycle/identity relation,
+`005` Subject registry/reference freshness, and `006` reconciliation
+freshness; `MC-MERGE-001` through `006` deterministic merge conflicts and
+`MC-MERGE-REVIEW-001` through `006` unresolved semantic-review cases;
+`MC-INVOCATION-001` invalid command input, `MC-OUTPUT-001`/`002` output
+compatibility diagnostics, `MC-PLAN-001`/`002` plan blocker/warning, and
+`MC-RUNTIME-001` fatal runtime blocker. These codes remain findings or
+diagnostic text only; they do not change the core severity mapping above.
+
 Also run the focused Protocol 0.8 checks:
 
 ```bash

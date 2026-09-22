@@ -62,6 +62,70 @@
         "regex": "^- entry_schema_version: ([0-9]+)"
       }
     ],
+    "subject_schema_version": [
+      {
+        "path": "cli/memory_custodian/__init__.py",
+        "regex": "^__subject_schema_version__ = \\\"([^\\\"]+)\\\""
+      },
+      {
+        "path": "templates/minimal/manifest.md",
+        "regex": "^- subject_schema_version: ([0-9]+)"
+      },
+      {
+        "path": "docs/memory/manifest.md",
+        "regex": "^- subject_schema_version: ([0-9]+)"
+      },
+      {
+        "path": "examples/nightnotes-video-demo/docs/memory/manifest.md",
+        "regex": "^- subject_schema_version: ([0-9]+)"
+      }
+    ],
+    "routing_schema_version": [
+      {
+        "path": "cli/memory_custodian/__init__.py",
+        "regex": "^__routing_schema_version__ = \\\"([^\\\"]+)\\\""
+      },
+      {
+        "path": "templates/minimal/manifest.md",
+        "regex": "^- routing_schema_version: ([0-9]+)"
+      },
+      {
+        "path": "docs/memory/manifest.md",
+        "regex": "^- routing_schema_version: ([0-9]+)"
+      },
+      {
+        "path": "examples/nightnotes-video-demo/docs/memory/manifest.md",
+        "regex": "^- routing_schema_version: ([0-9]+)"
+      }
+    ],
+    "conflict_schema_version": [
+      {
+        "path": "cli/memory_custodian/__init__.py",
+        "regex": "^__conflict_schema_version__ = \\\"([^\\\"]+)\\\""
+      },
+      {
+        "path": "templates/minimal/manifest.md",
+        "regex": "^- conflict_schema_version: ([0-9]+)"
+      },
+      {
+        "path": "docs/memory/manifest.md",
+        "regex": "^- conflict_schema_version: ([0-9]+)"
+      },
+      {
+        "path": "examples/nightnotes-video-demo/docs/memory/manifest.md",
+        "regex": "^- conflict_schema_version: ([0-9]+)"
+      }
+    ],
+    "local_overlay_schema_version": [
+      {
+        "path": "cli/memory_custodian/__init__.py",
+        "regex": "^__local_overlay_schema_version__ = \\\"([^\\\"]+)\\\""
+      },
+      {
+        "path": "cli/memory_custodian/local_overlay.py",
+        "regex": "^LOCAL_SCHEMA_VERSION = \\\"([^\\\"]+)\\\""
+      }
+    ],
     "transaction_schema_version": [
       {
         "path": "cli/memory_custodian/__init__.py",

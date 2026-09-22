@@ -471,6 +471,19 @@ def run_promote(args) -> int:
             "dependency_sha256": hashlib.sha256(plan_seed).hexdigest(),
         },
         project_root=project_root,
+        dependency_paths=tuple(dict.fromkeys((
+            memory_dir / "manifest.md",
+            memory_dir / "subjects.md",
+            *(item.path for item in snapshot.files),
+        ))),
+        private_dependency_paths=tuple(dict.fromkeys(
+            item.path
+            for item in (
+                ()
+                if overlay is None or overlay.snapshot is None
+                else overlay.snapshot.files
+            )
+        )),
     )
     print(f"Plan ID: {plan.plan_id}")
     if not args.apply:

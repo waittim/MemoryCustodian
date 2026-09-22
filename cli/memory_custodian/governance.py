@@ -203,6 +203,9 @@ def _exception_add(args) -> int:
             "dependency_sha256": _plan_id("exception-add", project.project_id, payload),
         },
         project_root=project.project_root,
+        dependency_paths=tuple(dict.fromkeys((
+            memory_dir / "manifest.md", subjects_path, area.path, baseline.path,
+        ))),
     )
     print(f"Plan ID: {plan.plan_id}")
     if not args.apply:
@@ -282,6 +285,10 @@ def _exception_remove(args) -> int:
             "dependency_sha256": _plan_id("exception-remove", project.project_id, payload),
         },
         project_root=project.project_root,
+        dependency_paths=tuple(dict.fromkeys((
+            memory_dir / "manifest.md", subjects_path, area.path,
+            *(entry.path for entry in targets),
+        ))),
     )
     print(f"Plan ID: {plan.plan_id}")
     if not args.apply:
@@ -401,6 +408,12 @@ def _reconcile_preview(args) -> int:
             "dependency_sha256": _plan_id("reconcile", project.project_id, payload),
         },
         project_root=project.project_root,
+        dependency_paths=tuple(dict.fromkeys((
+            memory_dir / "manifest.md",
+            memory_dir / "subjects.md",
+            path,
+            *(entry.path for entry in entries),
+        ))),
     )
     print(f"Plan ID: {plan.plan_id}")
     if not args.apply:

@@ -1,6 +1,25 @@
 {
   "fixture_schema_version": 1,
   "agents": ["codex", "claude-code", "gemini", "generic"],
+  "setup": {
+    "initializer": "memory-custodian init --extended",
+    "local_mode": "disabled",
+    "project_files": [
+      "docs/memory/manifest.md",
+      "docs/memory/subjects.md",
+      "docs/memory/brief.md",
+      "docs/memory/constraints.md",
+      "docs/memory/decisions.md",
+      "docs/memory/do-not-use.md",
+      "docs/memory/inbox.md",
+      "docs/memory/preferences.md",
+      "docs/memory/changelog.md",
+      "docs/memory/rules/README.md",
+      "docs/memory/profiles/README.md",
+      "docs/memory/archive/README.md"
+    ],
+    "generated_project_id": true
+  },
   "input": {
     "task": "implementation",
     "paths": ["cli/memory_custodian/read.py"],
@@ -18,11 +37,12 @@
     "routing_completeness": "COMPLETE",
     "reason_codes": ["MC-ROUTE-ALWAYS", "MC-ROUTE-TASK"],
     "warnings": [],
+    "context_sha256": "5e6f14fe990c050847e6c67504a69ae0650152bb10658a34091f9817ca314554",
     "context_sha256_field": "data.context_sha256",
     "subject_ids_field": "data.subject_ids",
     "conflict_status": "CLEAR",
     "conflict_findings": [],
     "reconciliation_findings": [],
-    "erasure_scope_field": "data.erasure_scope"
+    "erasure_scope_field": "not-applicable-for-read"
   }
 }

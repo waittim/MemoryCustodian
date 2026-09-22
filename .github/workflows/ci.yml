@@ -4,6 +4,13 @@ on:
   pull_request:
   push:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: memory-custodian-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   checks:
     runs-on: ubuntu-latest
@@ -41,9 +48,13 @@ jobs:
       - run: python scripts/check-skill-evals.py
         env:
           PYTHONPATH: cli
+      - run: python scripts/check-adapter-contracts.py
+      - run: python scripts/check-erasure-language.py
+      - run: python scripts/check-version.py
       - run: python -m unittest tests.test_protocol_08 tests.test_transactions_08
         env:
           PYTHONPATH: cli
       - run: python -m memory_custodian.main check
         env:
           PYTHONPATH: cli
+      - run: git diff --check

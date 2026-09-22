@@ -26,8 +26,8 @@ from . import subject as subject_cmd
 from .routes import TASK_INPUTS
 from .mutations import PartialMutationError
 from .templates import DEFAULT_MEMORY_DIR
-from .output import envelope, print_json
-from .protocol import CURRENT_PROTOCOL_VERSION
+from .output import envelope, print_json, structured_command_data, structured_findings
+from .protocol import CURRENT_PROTOCOL_VERSION, resolve_memory_dir, resolve_project_root
 
 
 def _add_common(parser: argparse.ArgumentParser) -> None:
@@ -84,7 +84,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     add_parser = sub.add_parser("add", help="Add a memory entry.")
     _add_common(add_parser)
-    add_parser.add_argument("message", help="Memory text to add.")
+    add_parser.add_argument("message", nargs="?", help="Memory text to add; omitted with --from-legacy.")
     add_parser.add_argument(
         "--type",
         choices=("decision", "constraint", "preference", "tombstone", "do-not-use", "rule", "profile", "area", "inbox"),
@@ -92,6 +92,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Memory type.",
     )
     add_parser.add_argument("--name", help="Name for rule, profile, or area memory.")
+    add_parser.add_argument(
+        "--from-legacy",
+        metavar="FILE:UNIT_INDEX",
+        help="Replace one explicitly selected legacy H2 unit in place (zero-based index).",
+    )
+    add_parser.add_argument("--title", help="Explicit canonical title required by --from-legacy.")
+    add_parser.add_argument("--scope", help="Explicit canonical Scope required by --from-legacy.")
     add_parser.add_argument(
         "--area",
         help="Store a scoped decision, constraint, preference, tombstone, or do-not-use entry in areas/<name>.md.",
@@ -211,6 +218,29 @@ def build_parser() -> argparse.ArgumentParser:
     migrate_stage.add_argument("--finalize", action="store_true", help="Finalize a prepared migration after audit blockers are cleared.")
     migrate_parser.add_argument("--apply", action="store_true", help="Write migration changes. Default is dry run.")
     migrate_parser.add_argument("--confirm-plan", help="Plan ID printed by the matching preview.")
+    migrate_parser.add_argument(
+        "--from-legacy",
+        metavar="FILE:UNIT_INDEX",
+        help="Explicitly canonicalize one legacy H2 unit (zero-based index).",
+    )
+    migrate_parser.add_argument(
+        "--type",
+        choices=("decision", "constraint", "preference", "tombstone", "do-not-use", "rule", "profile", "area"),
+        help="Explicit semantic type required with --from-legacy.",
+    )
+    migrate_parser.add_argument("--title", help="Explicit canonical title for --from-legacy.")
+    migrate_parser.add_argument("--scope", help="Explicit canonical Scope for --from-legacy.")
+    migrate_parser.add_argument("--subject", help="Explicit Subject ID for --from-legacy.")
+    migrate_parser.add_argument("--facet", help="Explicit controlled Facet for --from-legacy.")
+    migrate_parser.add_argument(
+        "--evidence", action="append", default=[],
+        help="Explicit Evidence value for --from-legacy; repeatable.",
+    )
+    migrate_parser.add_argument("--reason", help="Optional explicit Reason for --from-legacy.")
+    migrate_parser.add_argument(
+        "--allow-missing-evidence", action="store_true",
+        help="Allow explicit evidence paths that do not currently exist.",
+    )
     migrate_parser.add_argument("--lock-timeout", type=float, default=10.0)
     migrate_parser.add_argument("--break-stale-lock", action="store_true")
     migrate_parser.set_defaults(func=migrate_cmd.run)
@@ -351,6 +381,41 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     json_mode = getattr(args, "format", "text") == "json"
+    if json_mode and args.command in {"audit", "check", "status"}:
+        module = {
+            "audit": audit_cmd,
+            "check": check_cmd,
+            "status": status_cmd,
+        }[args.command]
+        try:
+            result = module.collect(args)
+        except ValueError as exc:
+            print_json(envelope(
+                command=args.command,
+                protocol_version=None,
+                return_code=1,
+                rendered_text="",
+                findings=[{
+                    "code": "MC-INVOCATION-001", "severity": "ERROR", "path": "",
+                    "entry_id": None, "message": str(exc),
+                    "remediation": "Correct the invocation or project state and retry.",
+                }],
+            ))
+            return 1
+        root = resolve_project_root(args.project_root)
+        memory = resolve_memory_dir(root, args.memory_dir)
+        print_json(envelope(
+            command=args.command,
+            protocol_version=result.protocol_version,
+            return_code=result.return_code,
+            rendered_text=result.rendered_text,
+            data=dict(result.data),
+            findings=[item.canonical() for item in result.ordered_findings],
+            disclaimers=list(result.disclaimers),
+            project_root=root,
+            memory_dir=memory,
+        ))
+        return result.return_code
     if json_mode and args.command != "audit":
         stream = StringIO()
         try:
@@ -380,7 +445,29 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         print_json(envelope(
             command=args.command, protocol_version=CURRENT_PROTOCOL_VERSION,
-            return_code=code, rendered_text=stream.getvalue(),
+            return_code=code,
+            rendered_text=stream.getvalue(),
+            data=structured_command_data(
+                args.command,
+                stream.getvalue(),
+                project_root=resolve_project_root(args.project_root),
+                memory_dir=resolve_memory_dir(
+                    resolve_project_root(args.project_root), args.memory_dir,
+                ),
+                args=args,
+            ),
+            findings=structured_findings(
+                args.command,
+                stream.getvalue(),
+                project_root=resolve_project_root(args.project_root),
+                memory_dir=resolve_memory_dir(
+                    resolve_project_root(args.project_root), args.memory_dir,
+                ),
+            ),
+            project_root=resolve_project_root(args.project_root),
+            memory_dir=resolve_memory_dir(
+                resolve_project_root(args.project_root), args.memory_dir,
+            ),
         ))
         return code
     try:

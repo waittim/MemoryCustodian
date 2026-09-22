@@ -75,6 +75,19 @@
 - Protocol 0.8 is not a 1.0 release candidate and makes no long-term 1.x
   compatibility promise.
 
+### Release evidence
+
+- The checked-in CI workflow defines Ubuntu and Windows Python 3.10–3.14
+  matrices, including the Windows private-state/path and public-JSON smoke
+  tests, repository contract checks, and whitespace verification.
+- The cross-agent fixture is executable offline: the static checker runs the
+  same canonical JSON routing command once for each named adapter and compares
+  the expected fields and payload stability. This validates the shared CLI
+  contract only; it is not evidence that four external agent runtimes were
+  launched or that semantic correctness was benchmarked.
+- A live evaluation remains an explicit, append-only procedure and is not
+  silently substituted by the static checker.
+
 ## v0.11.0 - 2026-08-29
 
 ### Protocol 0.7 Entry schema 1 to 2 compatibility boundary

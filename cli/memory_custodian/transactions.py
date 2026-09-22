@@ -65,6 +65,17 @@ class RecoveryRecord:
     issues: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class TransactionInventory:
+    """Redacted classification of one private transaction-state entry."""
+
+    directory: Path
+    kind: str
+    transaction_id: str | None
+    phase: str | None
+    detail: str
+
+
 def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
@@ -193,7 +204,15 @@ def _matches(path: Path, exists: bool, digest: str | None, mode: str | None) -> 
     )
 
 
-def _same_filesystem_replace(path: Path, data: bytes, mode: int) -> None:
+def _same_filesystem_replace(
+    path: Path,
+    data: bytes,
+    mode: int,
+    *,
+    trusted_root: Path | None = None,
+) -> None:
+    if trusted_root is not None:
+        _validate_target_for_root(trusted_root, path)
     _validate_write_target(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary: Path | None = None
@@ -207,7 +226,10 @@ def _same_filesystem_replace(path: Path, data: bytes, mode: int) -> None:
             except OSError:
                 pass
         os.chmod(temporary, mode)
-        _validate_write_target(path)
+        if trusted_root is not None:
+            _validate_target_for_root(trusted_root, path)
+        else:
+            _validate_write_target(path)
         os.replace(temporary, path)
         temporary = None
         _fsync_directory(path.parent)
@@ -217,6 +239,114 @@ def _same_filesystem_replace(path: Path, data: bytes, mode: int) -> None:
                 temporary.unlink()
             except FileNotFoundError:
                 pass
+
+
+def _trusted_root_contains(root: Path, path: Path) -> bool:
+    """Check lexical and existing-realpath containment beneath ``root``."""
+
+    try:
+        root_absolute = root.expanduser().absolute()
+        candidate = path.expanduser().absolute()
+        candidate.relative_to(root_absolute)
+        root_real = root_absolute.resolve(strict=False)
+        parent_real = candidate.parent.resolve(strict=False)
+        parent_real.relative_to(root_real)
+    except (OSError, RuntimeError, ValueError):
+        return False
+    return True
+
+
+def _validate_target_for_root(root: Path, path: Path) -> None:
+    """Revalidate a target and every ancestor immediately before mutation."""
+
+    if not _trusted_root_contains(root, path):
+        raise TransactionError("Transaction target is outside its trusted root.")
+    try:
+        _validate_write_target(path)
+    except (OSError, ValueError) as exc:
+        raise TransactionError("Transaction target has an unsafe ancestor.") from exc
+
+
+def _validate_directory_for_root(root: Path, path: Path) -> None:
+    """Revalidate a planned directory and its ancestors without creating it."""
+
+    if not _trusted_root_contains(root, path):
+        raise TransactionError("Planned directory is outside its trusted root.")
+    try:
+        # Validate the directory itself as an ancestor of a non-existent
+        # probe target; unlike _validate_write_target(path), this accepts a
+        # real directory as the target under inspection.
+        _validate_write_target(path / ".memory-custodian-directory-check")
+    except (OSError, ValueError) as exc:
+        raise TransactionError("Planned directory has an unsafe ancestor.") from exc
+
+
+def _unlink_in_trusted_parent(root: Path, path: Path) -> None:
+    """Unlink through a verified parent directory handle when supported."""
+
+    _validate_target_for_root(root, path)
+    parent = path.parent
+    directory_fd: int | None = None
+    try:
+        directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        if os.name != "nt":
+            try:
+                directory_fd = os.open(parent, directory_flags)
+                os.unlink(path.name, dir_fd=directory_fd)
+            except TypeError:
+                # A platform may expose open() but not unlink(dir_fd=...).
+                path.unlink()
+            except OSError as exc:
+                raise TransactionError("Transaction target parent became unsafe.") from exc
+        else:
+            # Windows and platforms without unlink(dir_fd=...) still receive
+            # the immediate ancestor/scope revalidation above.
+            path.unlink()
+    finally:
+        if directory_fd is not None:
+            os.close(directory_fd)
+
+
+def _directory_identity(path: Path) -> dict[str, int]:
+    metadata = path.lstat()
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+        raise TransactionError("Planned directory is not a real directory.")
+    return {"st_dev": int(metadata.st_dev), "st_ino": int(metadata.st_ino)}
+
+
+def _directory_identity_matches(path: Path, identity: object) -> bool:
+    if not isinstance(identity, dict):
+        return False
+    if not all(key in identity for key in ("st_dev", "st_ino")):
+        return False
+    try:
+        observed = _directory_identity(path)
+        expected = {
+            "st_dev": int(identity["st_dev"]),
+            "st_ino": int(identity["st_ino"]),
+        }
+    except (OSError, TransactionError, TypeError, ValueError, KeyError):
+        return False
+    return observed == expected
+
+
+def _safe_private_relative(value: object) -> bool:
+    if not isinstance(value, str) or not value or value.startswith(("/", "\\")):
+        return False
+    parts = value.replace("\\", "/").split("/")
+    return all(part not in {"", ".", ".."} for part in parts)
+
+
+def _private_artifact_matches(
+    path: Path,
+    expected_digest: object,
+) -> bool:
+    try:
+        if path.is_symlink() or not path.is_file():
+            return False
+        return _sha256(_read_private_bytes(path)) == expected_digest
+    except (OSError, ValueError):
+        return False
 
 
 def _safe_relative(root: Path, path: Path) -> str:
@@ -250,29 +380,119 @@ def _mode_value(value: object, default: int = 0o644) -> int:
     return int(value, 8)
 
 
-def unfinished_transaction_directories(binding: Path) -> tuple[Path, ...]:
+def _classify_journal(
+    directory: Path,
+    journal: object,
+) -> tuple[str, str, str | None, str | None]:
+    if not isinstance(journal, dict):
+        return "malformed", "journal is not an object", None, None
+    transaction_id = journal.get("transaction_id")
+    phase = journal.get("phase")
+    if journal.get("transaction_schema_version") != TRANSACTION_SCHEMA_VERSION:
+        return "unsupported", "journal schema is unsupported", (
+            str(transaction_id) if transaction_id is not None else None
+        ), str(phase) if phase is not None else None
+    if transaction_id != directory.name or not isinstance(journal.get("targets"), list):
+        return "malformed", "journal identity or targets are malformed", (
+            str(transaction_id) if transaction_id is not None else None
+        ), str(phase) if phase is not None else None
+    if not isinstance(phase, str) or phase not in UNFINISHED_PHASES | {"committed", "rolled-back"}:
+        return "malformed", "journal phase is invalid", directory.name, str(phase)
+    allowed_roots = {"shared", "local-overlay", "migration-state"}
+    allowed_operations = {"create", "replace", "delete"}
+    for target in journal["targets"]:
+        if not isinstance(target, dict):
+            return "malformed", "journal target is not an object", directory.name, str(phase)
+        if not isinstance(target.get("root_kind"), str) or target.get("root_kind") not in allowed_roots:
+            return "malformed", "journal target root is invalid", directory.name, str(phase)
+        if not _safe_private_relative(target.get("path")):
+            return "unsafe", "journal target locator is unsafe", directory.name, str(phase)
+        if not isinstance(target.get("operation"), str) or target.get("operation") not in allowed_operations:
+            return "malformed", "journal target operation is invalid", directory.name, str(phase)
+        for locator_key in ("backup_path", "prepared_path"):
+            locator = target.get(locator_key)
+            if locator is not None and not _safe_private_relative(locator):
+                return "unsafe", "journal artifact locator is unsafe", directory.name, str(phase)
+    directories = journal.get("created_directories", [])
+    if not isinstance(directories, list):
+        return "malformed", "created directory inventory is malformed", directory.name, str(phase)
+    for item in directories:
+        if (
+            not isinstance(item, dict)
+            or not isinstance(item.get("root_kind"), str)
+            or item.get("root_kind") not in allowed_roots
+        ):
+            return "malformed", "created directory inventory is malformed", directory.name, str(phase)
+        if not _safe_private_relative(item.get("path")):
+            return "unsafe", "created directory locator is unsafe", directory.name, str(phase)
+        if not isinstance(item.get("created"), bool):
+            return "malformed", "created directory progress is malformed", directory.name, str(phase)
+        if item.get("created") and not isinstance(item.get("identity"), dict):
+            return "unsafe", "created directory identity is missing", directory.name, str(phase)
+
+    targets_directory = directory / "targets"
+    if targets_directory.is_symlink():
+        return "unsafe", "transaction target state is symlinked", directory.name, str(phase)
+    try:
+        unexpected = [
+            child for child in directory.iterdir()
+            if child.name not in {"journal.json", "targets"}
+        ]
+    except OSError:
+        return "unsafe", "transaction state directory cannot be inspected", directory.name, str(phase)
+    if unexpected:
+        return "orphan", "unexpected transaction state artifact remains", directory.name, str(phase)
+    if targets_directory.exists() and not targets_directory.is_dir():
+        return "unsafe", "transaction target state is not a directory", directory.name, str(phase)
+    try:
+        target_children = tuple(targets_directory.iterdir()) if targets_directory.exists() else ()
+    except OSError:
+        return "unsafe", "transaction target state cannot be inspected", directory.name, str(phase)
+    if any(child.is_symlink() or not child.is_file() for child in target_children):
+        return "unsafe", "transaction target artifact is unsafe", directory.name, str(phase)
+    has_artifacts = bool(target_children)
+    if phase in {"committed", "rolled-back"}:
+        if has_artifacts:
+            return "committed-cleanup" if phase == "committed" else "orphan", (
+                "committed cleanup is pending" if phase == "committed" else "rolled-back artifacts remain"
+            ), directory.name, str(phase)
+        return "clean", "", directory.name, str(phase)
+    return "unfinished", "recovery is required", directory.name, str(phase)
+
+
+def transaction_inventory(binding: Path) -> tuple[TransactionInventory, ...]:
     if not binding.exists():
         return ()
-    found: list[Path] = []
+    found: list[TransactionInventory] = []
     for directory in sorted(binding.iterdir(), key=lambda item: item.name):
-        if not directory.is_dir() or directory.is_symlink():
+        if directory.is_symlink():
+            found.append(TransactionInventory(directory, "symlink", directory.name, None, "transaction entry is symlinked"))
+            continue
+        if not directory.is_dir():
+            found.append(TransactionInventory(directory, "orphan", None, None, "transaction entry is not a directory"))
             continue
         journal_path = directory / "journal.json"
+        if journal_path.is_symlink():
+            found.append(TransactionInventory(directory, "unsafe", directory.name, None, "journal is symlinked"))
+            continue
         if not journal_path.exists():
-            if any(directory.iterdir()):
-                found.append(directory)
+            found.append(TransactionInventory(directory, "orphan", directory.name, None, "transaction journal is missing"))
             continue
         try:
             journal = json.loads(read_private_file(journal_path))
-            phase = journal.get("phase") if isinstance(journal, dict) else None
-        except (OSError, json.JSONDecodeError):
-            found.append(directory)
+        except json.JSONDecodeError:
+            found.append(TransactionInventory(directory, "malformed", directory.name, None, "transaction journal is malformed"))
             continue
-        if phase != "committed" and phase != "rolled-back":
-            found.append(directory)
-        elif any((directory / "targets").glob("*")) if (directory / "targets").exists() else False:
-            found.append(directory)
-    return tuple(found)
+        except OSError:
+            found.append(TransactionInventory(directory, "unsafe", directory.name, None, "transaction journal is unsafe"))
+            continue
+        kind, detail, transaction_id, phase = _classify_journal(directory, journal)
+        found.append(TransactionInventory(directory, kind, transaction_id, phase, detail))
+    return tuple(item for item in found if item.kind != "clean")
+
+
+def unfinished_transaction_directories(binding: Path) -> tuple[Path, ...]:
+    return tuple(item.directory for item in transaction_inventory(binding))
 
 
 def ensure_no_unfinished(binding: Path) -> None:
@@ -345,6 +565,13 @@ def apply_transaction(
         if directory_path.exists() and (not directory_path.is_dir() or directory_path.is_symlink()):
             raise ValueError("Transaction directory target is not a real directory.")
 
+    for item in shared_mutations:
+        _safe_relative(roots["shared"].root, item.path)
+    for item in (*private_mutations, *private_deletions):
+        _safe_relative(roots["local-overlay"].root, item.path)
+    for item in (*migration_mutations, *migration_deletions):
+        _safe_relative(roots["migration-state"].root, item.path)
+
     binding = binding_directory(project_root, memory_root, project_id)
     ensure_no_unfinished(binding)
 
@@ -358,9 +585,16 @@ def apply_transaction(
             else migration_deletions[0]
         )
         if isinstance(item, PrivateDeleteMutation):
+            if private_deletions:
+                trusted_root = roots["local-overlay"].root
+            elif migration_deletions:
+                trusted_root = roots["migration-state"].root
+            else:
+                trusted_root = roots["shared"].root
+            _validate_target_for_root(trusted_root, item.path)
             exists, _data, _mode = _read_regular_bytes(item.path)
             if exists:
-                item.path.unlink()
+                _unlink_in_trusted_parent(trusted_root, item.path)
                 _fsync_directory(item.path.parent)
             return (item.path,)
         data = item.text.encode("utf-8")
@@ -368,7 +602,18 @@ def apply_transaction(
             data += b"\n"
         exists, _base, mode = _read_regular_bytes(item.path)
         is_private = bool(private_mutations or migration_mutations)
-        _same_filesystem_replace(item.path, data, int(mode, 8) if exists and mode else (0o600 if is_private else 0o644))
+        if private_mutations:
+            trusted_root = roots["local-overlay"].root
+        elif migration_mutations:
+            trusted_root = roots["migration-state"].root
+        else:
+            trusted_root = roots["shared"].root
+        _same_filesystem_replace(
+            item.path,
+            data,
+            int(mode, 8) if exists and mode else (0o600 if is_private else 0o644),
+            trusted_root=trusted_root,
+        )
         return (item.path,)
 
     transaction_id = uuid.uuid4().hex
@@ -438,6 +683,7 @@ def apply_transaction(
                 "mode": "0700" if root_kind != "shared" else "0755",
                 "base_exists": False,
                 "created": False,
+                "identity": None,
             })
     for directory_path in private_directories:
         root = roots["local-overlay"].root
@@ -458,6 +704,7 @@ def apply_transaction(
                 "mode": "0700",
                 "base_exists": False,
                 "created": False,
+                "identity": None,
             })
 
     journal: dict[str, object] = {
@@ -500,13 +747,19 @@ def apply_transaction(
     for directory_record in journal["created_directories"]:
         root = roots[str(directory_record["root_kind"])].root
         path = root / str(directory_record["path"])
+        _validate_directory_for_root(root, path)
         if path.exists():
             if not path.is_dir() or path.is_symlink():
                 raise TransactionError("Planned parent directory became unsafe.")
+            # The directory appeared after planning.  It was not created by
+            # this transaction and must never be removed on rollback.
+            directory_record["created"] = False
+            directory_record["identity"] = None
         else:
             path.mkdir(mode=_mode_value(directory_record.get("mode")), exist_ok=False)
             _fsync_directory(path.parent)
-        directory_record["created"] = True
+            directory_record["created"] = True
+            directory_record["identity"] = _directory_identity(path)
         _atomic_journal(journal_path, journal)
 
     order = sorted(range(len(targets)), key=lambda index: (
@@ -518,16 +771,22 @@ def apply_transaction(
         for ordinal, index in enumerate(order):
             target = targets[index]
             path = _target_path(roots, target)
+            _validate_target_for_root(roots[str(target["root_kind"])].root, path)
             if not _matches(path, bool(target["base_exists"]), target.get("base_sha256"), target.get("base_mode")):
                 raise TransactionError(f"Transaction target changed before commit: {target['target_id']}")
             if target["operation"] == "delete":
-                path.unlink()
+                _unlink_in_trusted_parent(roots[str(target["root_kind"])].root, path)
                 _fsync_directory(path.parent)
             else:
                 prepared = _read_private_bytes(directory / str(target["prepared_path"]))
                 if _sha256(prepared) != target["output_sha256"]:
                     raise TransactionError(f"Prepared transaction output is invalid: {target['target_id']}")
-                _same_filesystem_replace(path, prepared, _mode_value(target.get("output_mode")))
+                _same_filesystem_replace(
+                    path,
+                    prepared,
+                    _mode_value(target.get("output_mode")),
+                    trusted_root=roots[str(target["root_kind"])].root,
+                )
             target["replaced"] = True
             if ordinal == 0:
                 _failpoint("after-first-replace")
@@ -536,6 +795,7 @@ def apply_transaction(
         _failpoint("before-committed")
         for target in targets:
             path = _target_path(roots, target)
+            _validate_target_for_root(roots[str(target["root_kind"])].root, path)
             if not _matches(path, bool(target["output_exists"]), target.get("output_sha256"), target.get("output_mode")):
                 raise TransactionError(f"Committed transaction output failed verification: {target['target_id']}")
         journal["phase"] = "committed"
@@ -610,19 +870,28 @@ def _cleanup_transaction(directory: Path, *, keep_record: bool) -> None:
 
 
 def load_journal(directory: Path) -> dict[str, object]:
+    if directory.is_symlink() or not directory.is_dir():
+        raise RecoveryRequiredError("Transaction state directory is unsafe.")
     path = directory / "journal.json"
+    if path.is_symlink():
+        raise RecoveryRequiredError("Transaction journal is unsafe.")
     if not path.exists():
         raise RecoveryRequiredError("Orphan transaction state lacks a journal.")
     try:
         journal = json.loads(read_private_file(path))
     except json.JSONDecodeError as exc:
         raise RecoveryRequiredError("Transaction journal is malformed.") from exc
+    except OSError as exc:
+        raise RecoveryRequiredError("Transaction journal is unsafe.") from exc
     if not isinstance(journal, dict):
         raise RecoveryRequiredError("Transaction journal is malformed.")
     if journal.get("transaction_schema_version") != TRANSACTION_SCHEMA_VERSION:
         raise RecoveryRequiredError("Transaction journal schema is unsupported.")
     if journal.get("transaction_id") != directory.name or not isinstance(journal.get("targets"), list):
         raise RecoveryRequiredError("Transaction journal identity is malformed.")
+    kind, detail, _transaction_id, _phase = _classify_journal(directory, journal)
+    if kind in {"malformed", "unsupported", "unsafe", "orphan"}:
+        raise RecoveryRequiredError(detail.capitalize() + ".")
     return journal
 
 
@@ -634,6 +903,7 @@ def analyze_transaction(directory: Path, roots: dict[str, RootBinding]) -> Recov
     issues: list[str] = []
     safe_complete = True
     safe_rollback = True
+    phase = str(journal.get("phase", "invalid"))
     for raw in journal["targets"]:
         if not isinstance(raw, dict):
             issues.append("Malformed target record.")
@@ -645,26 +915,49 @@ def analyze_transaction(directory: Path, roots: dict[str, RootBinding]) -> Recov
             issues.append(f"Target {raw.get('target_id', 'unknown')} cannot be resolved safely.")
             safe_complete = safe_rollback = False
             continue
+        try:
+            _validate_target_for_root(roots[str(raw.get("root_kind"))].root, path)
+        except (KeyError, TransactionError):
+            issues.append(f"Target {raw.get('target_id', 'unknown')} has an unsafe ancestor.")
+            safe_complete = safe_rollback = False
+            continue
         is_base = _matches(path, bool(raw.get("base_exists")), raw.get("base_sha256"), raw.get("base_mode"))
         is_output = _matches(path, bool(raw.get("output_exists")), raw.get("output_sha256"), raw.get("output_mode"))
         prepared_value = raw.get("prepared_path")
         prepared_ok = raw.get("operation") == "delete"
         if prepared_value:
             prepared = directory / str(prepared_value)
-            prepared_ok = prepared.exists() and _sha256(_read_private_bytes(prepared)) == raw.get("output_sha256")
+            prepared_ok = _private_artifact_matches(prepared, raw.get("output_sha256"))
         backup_value = raw.get("backup_path")
         backup_ok = not raw.get("base_exists")
         if backup_value:
             backup = directory / str(backup_value)
-            backup_ok = backup.exists() and _sha256(_read_private_bytes(backup)) == raw.get("base_sha256")
+            backup_ok = _private_artifact_matches(backup, raw.get("base_sha256"))
         if not ((is_base and prepared_ok) or is_output):
             safe_complete = False
             issues.append(f"Target {raw.get('target_id')} is not safely completable.")
         if not ((is_output and backup_ok) or is_base):
             safe_rollback = False
             issues.append(f"Target {raw.get('target_id')} is not safely rollbackable.")
+    for raw_directory in journal.get("created_directories", []):
+        if not isinstance(raw_directory, dict) or not raw_directory.get("created"):
+            continue
+        try:
+            root = roots[str(raw_directory["root_kind"])].root
+            path = root / str(raw_directory["path"])
+            _safe_relative(root, path)
+        except (KeyError, TypeError, ValueError):
+            safe_complete = safe_rollback = False
+            issues.append("Created directory inventory cannot be resolved safely.")
+            continue
+        if path.is_symlink() or (path.exists() and not _directory_identity_matches(path, raw_directory.get("identity"))):
+            safe_rollback = False
+            issues.append("Created directory identity changed during recovery.")
+    if phase == "committed":
+        safe_rollback = False
+        issues.append("Committed transaction can only be completed, not rolled back.")
     return RecoveryRecord(
-        str(journal["transaction_id"]), str(journal.get("phase", "invalid")),
+        str(journal["transaction_id"]), phase,
         str(journal.get("command", "unknown")), directory,
         safe_complete, safe_rollback, tuple(sorted(set(issues))),
     )
@@ -679,6 +972,10 @@ def recover_transaction(
     if action not in {"complete", "rollback"}:
         raise ValueError("Recovery action must be complete or rollback.")
     record = analyze_transaction(directory, roots)
+    if action == "rollback" and record.phase == "committed":
+        raise RecoveryRequiredError(
+            "Committed transaction cleanup can only be completed, not rolled back."
+        )
     allowed = record.safe_complete if action == "complete" else record.safe_rollback
     if not allowed:
         raise RecoveryRequiredError("Automatic recovery is unsafe; manual recovery is required.")
@@ -691,26 +988,41 @@ def recover_transaction(
         for directory_record in journal.get("created_directories", []):
             root = roots[str(directory_record["root_kind"])].root
             path = root / str(directory_record["path"])
+            _validate_directory_for_root(root, path)
             if not path.exists():
                 path.mkdir(mode=_mode_value(directory_record.get("mode")), exist_ok=False)
                 _fsync_directory(path.parent)
-            directory_record["created"] = True
+                directory_record["created"] = True
+                directory_record["identity"] = _directory_identity(path)
+                _atomic_journal(directory / "journal.json", journal)
+            elif path.is_symlink() or not path.is_dir():
+                raise RecoveryRequiredError("Planned parent directory became unsafe during recovery.")
+            elif directory_record.get("created") and not _directory_identity_matches(
+                path, directory_record.get("identity")
+            ):
+                raise RecoveryRequiredError("Planned parent directory identity changed during recovery.")
         order = sorted(targets, key=lambda target: (
             int(target.get("commit_order", 0)),
             str(target.get("root_kind")), str(target.get("path")),
         ))
         for target in order:
             path = _target_path(roots, target)
+            _validate_target_for_root(roots[str(target["root_kind"])].root, path)
             if _matches(path, bool(target.get("output_exists")), target.get("output_sha256"), target.get("output_mode")):
                 continue
             if not _matches(path, bool(target.get("base_exists")), target.get("base_sha256"), target.get("base_mode")):
                 raise RecoveryRequiredError("Target changed during recovery.")
             if target.get("operation") == "delete":
-                path.unlink()
+                _unlink_in_trusted_parent(roots[str(target["root_kind"])].root, path)
                 _fsync_directory(path.parent)
             else:
                 prepared = _read_private_bytes(directory / str(target["prepared_path"]))
-                _same_filesystem_replace(path, prepared, _mode_value(target.get("output_mode")))
+                _same_filesystem_replace(
+                    path,
+                    prepared,
+                    _mode_value(target.get("output_mode")),
+                    trusted_root=roots[str(target["root_kind"])].root,
+                )
         journal["phase"] = "committed"
     else:
         order = sorted(targets, key=lambda target: (
@@ -719,16 +1031,21 @@ def recover_transaction(
         ))
         for target in order:
             path = _target_path(roots, target)
+            _validate_target_for_root(roots[str(target["root_kind"])].root, path)
             if _matches(path, bool(target.get("base_exists")), target.get("base_sha256"), target.get("base_mode")):
                 continue
             if not _matches(path, bool(target.get("output_exists")), target.get("output_sha256"), target.get("output_mode")):
                 raise RecoveryRequiredError("Target changed during recovery.")
             if target.get("base_exists"):
                 backup = _read_private_bytes(directory / str(target["backup_path"]))
-                _same_filesystem_replace(path, backup, _mode_value(target.get("base_mode")))
+                _same_filesystem_replace(
+                    path,
+                    backup,
+                    _mode_value(target.get("base_mode")),
+                    trusted_root=roots[str(target["root_kind"])].root,
+                )
             else:
-                _validate_write_target(path)
-                path.unlink()
+                _unlink_in_trusted_parent(roots[str(target["root_kind"])].root, path)
                 _fsync_directory(path.parent)
         for directory_record in sorted(
             journal.get("created_directories", []),
@@ -740,6 +1057,9 @@ def recover_transaction(
             root = roots[str(directory_record["root_kind"])].root
             path = root / str(directory_record["path"])
             try:
+                _validate_directory_for_root(root, path)
+                if path.is_symlink() or (path.exists() and not _directory_identity_matches(path, directory_record.get("identity"))):
+                    raise RecoveryRequiredError("Created directory identity changed during recovery.")
                 if path.is_dir() and not path.is_symlink() and not any(path.iterdir()):
                     path.rmdir()
                     _fsync_directory(path.parent)
