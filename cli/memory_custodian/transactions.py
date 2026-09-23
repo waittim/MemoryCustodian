@@ -22,6 +22,7 @@ import uuid
 from .locking import (
     create_private_file,
     ensure_private_directory,
+    existing_private_state_directory,
     private_state_directory,
     read_private_file,
     validate_private_file,
@@ -146,11 +147,15 @@ def _read_private_bytes(path: Path) -> bytes:
         os.close(descriptor)
 
 
-def _salt() -> bytes:
-    root = private_state_directory("transactions")
+def _binding_salt(root: Path, *, create: bool) -> bytes | None:
     path = root / ".binding-salt"
-    if not path.exists():
+    if create:
         create_private_file(path, secrets.token_hex(32) + "\n")
+    else:
+        try:
+            path.lstat()
+        except FileNotFoundError:
+            return None
     raw = read_private_file(path).strip()
     try:
         value = bytes.fromhex(raw)
@@ -161,18 +166,75 @@ def _salt() -> bytes:
     return value
 
 
-def bootstrap_binding_id(project_root: Path, memory_root: Path) -> str:
+def _bootstrap_binding_id(project_root: Path, memory_root: Path, salt: bytes) -> str:
     normalized = "\0".join(
         (os.path.normcase(str(project_root.resolve())), os.path.normcase(str(memory_root.absolute())))
     ).encode("utf-8")
-    return hmac.new(_salt(), normalized, hashlib.sha256).hexdigest()
+    return hmac.new(salt, normalized, hashlib.sha256).hexdigest()
+
+
+def bootstrap_binding_id(project_root: Path, memory_root: Path) -> str:
+    root = private_state_directory("transactions")
+    salt = _binding_salt(root, create=True)
+    assert salt is not None
+    return _bootstrap_binding_id(project_root, memory_root, salt)
 
 
 def binding_directory(project_root: Path, memory_root: Path, project_id: str | None) -> Path:
     root = private_state_directory("transactions")
     if project_id:
         return ensure_private_directory(root / "project-id" / project_id)
-    return ensure_private_directory(root / "bootstrap" / bootstrap_binding_id(project_root, memory_root))
+    salt = _binding_salt(root, create=True)
+    assert salt is not None
+    return ensure_private_directory(
+        root / "bootstrap" / _bootstrap_binding_id(project_root, memory_root, salt)
+    )
+
+
+def _existing_private_directory(path: Path) -> Path | None:
+    """Validate and return one existing private directory without creating it."""
+
+    try:
+        path.lstat()
+    except FileNotFoundError:
+        return None
+    return ensure_private_directory(path)
+
+
+def existing_binding_directories(
+    project_root: Path,
+    memory_root: Path,
+    project_ids: tuple[str, ...] = (),
+) -> tuple[Path, ...]:
+    """Return existing transaction bindings relevant to one project.
+
+    Bootstrap state is root/memory-path scoped, while permanent state is
+    selected only by the supplied project identities.  The lookup never
+    creates a binding, salt, or transaction-state root.
+    """
+
+    root = existing_private_state_directory("transactions")
+    if _existing_private_directory(root) is None:
+        return ()
+
+    bindings: list[Path] = []
+    bootstrap_root = _existing_private_directory(root / "bootstrap")
+    if bootstrap_root is not None:
+        salt = _binding_salt(root, create=False)
+        if salt is not None:
+            bootstrap = _existing_private_directory(
+                bootstrap_root / _bootstrap_binding_id(project_root, memory_root, salt)
+            )
+            if bootstrap is not None:
+                bindings.append(bootstrap)
+
+    project_id_root = _existing_private_directory(root / "project-id")
+    if project_id_root is not None:
+        for project_id in dict.fromkeys(item for item in project_ids if item):
+            binding = _existing_private_directory(project_id_root / project_id)
+            if binding is not None:
+                bindings.append(binding)
+    return tuple(dict.fromkeys(bindings))
 
 
 def _atomic_journal(path: Path, journal: dict[str, object]) -> None:
@@ -504,6 +566,69 @@ def ensure_no_unfinished(binding: Path) -> None:
         )
 
 
+def ensure_no_unfinished_for_project(
+    project_root: Path,
+    memory_root: Path,
+    project_ids: tuple[str, ...] = (),
+) -> None:
+    """Reject recovery state in this project's bootstrap/permanent bindings."""
+
+    unfinished = tuple(
+        directory
+        for binding in existing_binding_directories(
+            project_root, memory_root, project_ids
+        )
+        for directory in unfinished_transaction_directories(binding)
+    )
+    if unfinished:
+        ids = ", ".join(path.name for path in unfinished)
+        raise RecoveryRequiredError(
+            f"Unfinished transaction state requires recovery before mutation: {ids}"
+        )
+
+
+def _manifest_project_id(text: str) -> str | None:
+    """Best-effort identity discovery for transaction binding handoffs."""
+
+    from .protocol import project_id_from_manifest
+
+    try:
+        return project_id_from_manifest(text, required=False)
+    except ValueError:
+        # The command-specific preflight remains authoritative for malformed
+        # legacy/repair input. An invalid value cannot name a safe binding.
+        return None
+
+
+def _related_project_ids(
+    memory_root: Path,
+    project_id: str | None,
+    shared_mutations: tuple[TextMutation, ...],
+) -> tuple[str, ...]:
+    """Collect current, target, and selected transaction project identities."""
+
+    values: list[str] = []
+    if project_id:
+        values.append(project_id)
+    manifest_path = memory_root / "manifest.md"
+    exists, current, _mode = _read_regular_bytes(manifest_path)
+    if exists:
+        try:
+            current_id = _manifest_project_id(current.decode("utf-8"))
+        except UnicodeDecodeError:
+            current_id = None
+        if current_id:
+            values.append(current_id)
+    manifest_absolute = manifest_path.absolute()
+    for mutation in shared_mutations:
+        if mutation.path.absolute() != manifest_absolute:
+            continue
+        target_id = _manifest_project_id(mutation.text)
+        if target_id:
+            values.append(target_id)
+    return tuple(dict.fromkeys(values))
+
+
 def apply_transaction(
     *,
     project_root: Path,
@@ -572,8 +697,11 @@ def apply_transaction(
     for item in (*migration_mutations, *migration_deletions):
         _safe_relative(roots["migration-state"].root, item.path)
 
-    binding = binding_directory(project_root, memory_root, project_id)
-    ensure_no_unfinished(binding)
+    ensure_no_unfinished_for_project(
+        project_root,
+        memory_root,
+        _related_project_ids(memory_root, project_id, shared_mutations),
+    )
 
     # A true single-file replacement retains the established atomic writer.
     if len(paths) == 1 and not force_journal:
@@ -616,6 +744,7 @@ def apply_transaction(
         )
         return (item.path,)
 
+    binding = binding_directory(project_root, memory_root, project_id)
     transaction_id = uuid.uuid4().hex
     directory = ensure_private_directory(binding / transaction_id)
     target_directory = ensure_private_directory(directory / "targets")

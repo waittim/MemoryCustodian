@@ -31,7 +31,7 @@ from .protocol import (
 from .results import CommandResult, Finding, make_finding, unique_findings
 from .snapshot import build_snapshot
 from .subjects import FACETS
-from .transactions import binding_directory, transaction_inventory
+from .transactions import existing_binding_directories, transaction_inventory
 
 
 AUDIT_SCHEMA_VERSION = 1
@@ -344,9 +344,11 @@ def collect(args) -> CommandResult:
     if run_all or selectors["local"]:
         findings.extend(_local_findings(snapshot, project_root, memory_dir))
 
-    bindings = [binding_directory(project_root, memory_dir, None)]
-    if project_id:
-        bindings.append(binding_directory(project_root, memory_dir, project_id))
+    bindings = existing_binding_directories(
+        project_root,
+        memory_dir,
+        (project_id,) if project_id else (),
+    )
     inventory = tuple(
         item
         for binding in bindings

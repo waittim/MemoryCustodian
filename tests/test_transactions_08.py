@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import uuid
 from unittest import mock
 
 from memory_custodian.locking import ensure_private_directory, write_private_file
@@ -85,6 +86,159 @@ class TransactionProtocol08Tests(unittest.TestCase):
                 self.assertEqual(first.read_bytes(), b"new-one\n")
                 self.assertEqual(second.read_bytes(), b"new-two\n")
                 self.assertFalse(directory.exists())
+
+    def test_bootstrap_recovery_blocks_project_id_write_until_complete(self):
+        temporary, state, project, memory = self._fixture()
+        self.addCleanup(temporary.cleanup)
+        project_id = str(uuid.uuid4())
+        manifest = memory / "manifest.md"
+        brief = memory / "brief.md"
+        later = memory / "inbox.md"
+        manifest_text = (
+            "# Memory Manifest\n\n"
+            "## MemoryCustodian Protocol\n"
+            f"- project_id: {project_id}\n"
+        )
+        with mock.patch.dict(os.environ, {
+            "XDG_STATE_HOME": str(state),
+            "MEMORY_CUSTODIAN_FAILPOINT": "before-committed",
+        }):
+            with self.assertRaises(TransactionFailpoint):
+                apply_transaction(
+                    project_root=project,
+                    memory_root=memory,
+                    project_id=None,
+                    command="init",
+                    plan_id="bootstrap-authority-plan",
+                    shared_mutations=(
+                        TextMutation(brief, "brief"),
+                        TextMutation(manifest, manifest_text),
+                    ),
+                    force_journal=True,
+                )
+            bootstrap = binding_directory(project, memory, None)
+            directories = unfinished_transaction_directories(bootstrap)
+            self.assertEqual(len(directories), 1)
+            project_binding = bootstrap.parents[1] / "project-id" / project_id
+            self.assertFalse(project_binding.exists())
+
+            with mock.patch.dict(
+                os.environ, {"MEMORY_CUSTODIAN_FAILPOINT": ""}, clear=False
+            ):
+                with self.assertRaises(RecoveryRequiredError):
+                    apply_transaction(
+                        project_root=project,
+                        memory_root=memory,
+                        project_id=project_id,
+                        command="add",
+                        plan_id="ordinary-project-write",
+                        shared_mutations=(TextMutation(later, "blocked"),),
+                    )
+                self.assertFalse(later.exists())
+                self.assertFalse(project_binding.exists())
+
+                roots = {"shared": RootBinding("shared", project, "shared")}
+                record = analyze_transaction(directories[0], roots)
+                self.assertEqual(record.phase, "failed")
+                self.assertTrue(record.safe_complete)
+                recover_transaction(directories[0], roots, action="complete")
+
+                completed = apply_transaction(
+                    project_root=project,
+                    memory_root=memory,
+                    project_id=project_id,
+                    command="add",
+                    plan_id="ordinary-project-write",
+                    shared_mutations=(TextMutation(later, "allowed"),),
+                )
+            self.assertEqual(completed, (later,))
+            self.assertEqual(later.read_text(encoding="utf-8"), "allowed\n")
+            self.assertFalse(project_binding.exists())
+
+    def test_bootstrap_recovery_state_does_not_block_another_project(self):
+        temporary, state, project, memory = self._fixture()
+        self.addCleanup(temporary.cleanup)
+        first, second = memory / "first.md", memory / "second.md"
+        with mock.patch.dict(os.environ, {
+            "XDG_STATE_HOME": str(state),
+            "MEMORY_CUSTODIAN_FAILPOINT": "after-first-replace",
+        }):
+            with self.assertRaises(TransactionFailpoint):
+                apply_transaction(
+                    project_root=project,
+                    memory_root=memory,
+                    project_id=None,
+                    command="init",
+                    plan_id="first-project-plan",
+                    shared_mutations=(
+                        TextMutation(first, "first"),
+                        TextMutation(second, "second"),
+                    ),
+                )
+
+            other_project = Path(temporary.name) / "other-project"
+            other_memory = other_project / "docs" / "memory"
+            other_memory.mkdir(parents=True)
+            other_target = other_memory / "inbox.md"
+            with mock.patch.dict(
+                os.environ, {"MEMORY_CUSTODIAN_FAILPOINT": ""}, clear=False
+            ):
+                completed = apply_transaction(
+                    project_root=other_project,
+                    memory_root=other_memory,
+                    project_id=str(uuid.uuid4()),
+                    command="add",
+                    plan_id="other-project-plan",
+                    shared_mutations=(TextMutation(other_target, "allowed"),),
+                )
+        self.assertEqual(completed, (other_target,))
+        self.assertEqual(other_target.read_text(encoding="utf-8"), "allowed\n")
+
+    def test_bootstrap_writer_checks_planned_project_identity_binding(self):
+        temporary, state, project, memory = self._fixture()
+        self.addCleanup(temporary.cleanup)
+        project_id = str(uuid.uuid4())
+        first, second = memory / "first.md", memory / "second.md"
+        manifest = memory / "manifest.md"
+        with mock.patch.dict(os.environ, {
+            "XDG_STATE_HOME": str(state),
+            "MEMORY_CUSTODIAN_FAILPOINT": "after-first-replace",
+        }):
+            with self.assertRaises(TransactionFailpoint):
+                apply_transaction(
+                    project_root=project,
+                    memory_root=memory,
+                    project_id=project_id,
+                    command="existing-project-write",
+                    plan_id="project-id-plan",
+                    shared_mutations=(
+                        TextMutation(first, "first"),
+                        TextMutation(second, "second"),
+                    ),
+                )
+
+            target_manifest = (
+                "# Memory Manifest\n\n"
+                "## MemoryCustodian Protocol\n"
+                f"- project_id: {project_id}\n"
+            )
+            with mock.patch.dict(
+                os.environ, {"MEMORY_CUSTODIAN_FAILPOINT": ""}, clear=False
+            ):
+                with self.assertRaises(RecoveryRequiredError):
+                    apply_transaction(
+                        project_root=project,
+                        memory_root=memory,
+                        project_id=None,
+                        command="init repair",
+                        plan_id="bootstrap-plan",
+                        shared_mutations=(
+                            TextMutation(manifest, target_manifest),
+                            TextMutation(memory / "brief.md", "brief"),
+                        ),
+                        force_journal=True,
+                    )
+        self.assertFalse(manifest.exists())
 
     def test_delete_rollback_restores_exact_bytes_and_mode(self):
         temporary, state, project, memory = self._fixture()

@@ -35,7 +35,7 @@ from .protocol import (
 )
 from .snapshot import build_snapshot
 from .mutations import PrivateDeleteMutation, PrivateTextMutation
-from .transactions import apply_transaction, binding_directory, ensure_no_unfinished
+from .transactions import apply_transaction, ensure_no_unfinished_for_project
 
 
 def _reset_inventory(
@@ -332,7 +332,9 @@ def run(args) -> int:
             raise ValueError("Project manifest changed while acquiring the mutation lock.")
         # Even single-file local mutations must not race an interrupted
         # shared/local transaction for the same project identity.
-        ensure_no_unfinished(binding_directory(project_root, memory_dir, locked_project_id))
+        ensure_no_unfinished_for_project(
+            project_root, memory_dir, (locked_project_id,)
+        )
         shared_ids = {
             entry.entry_id for entry in locked_snapshot.relation_entries
         }

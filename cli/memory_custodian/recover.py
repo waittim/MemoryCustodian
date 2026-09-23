@@ -16,7 +16,7 @@ from .protocol import (
 from .transactions import (
     RootBinding,
     analyze_transaction,
-    binding_directory,
+    existing_binding_directories,
     load_journal,
     recover_transaction,
     unfinished_transaction_directories,
@@ -24,10 +24,11 @@ from .transactions import (
 
 
 def _bindings(project_root: Path, memory_dir: Path, project_id: str | None) -> tuple[Path, ...]:
-    values = [binding_directory(project_root, memory_dir, None)]
-    if project_id:
-        values.append(binding_directory(project_root, memory_dir, project_id))
-    return tuple(dict.fromkeys(values))
+    return existing_binding_directories(
+        project_root,
+        memory_dir,
+        (project_id,) if project_id else (),
+    )
 
 
 def _roots(project_root: Path, project_id: str | None) -> dict[str, RootBinding]:

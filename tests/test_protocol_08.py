@@ -16,7 +16,7 @@ from memory_custodian.entries import parse_structured_entries, render_active_ent
 from memory_custodian.main import main
 from memory_custodian.migrate import _source_binding
 from memory_custodian.mutations import TextMutation
-from memory_custodian.protocol import parse_markdown_units
+from memory_custodian.protocol import parse_markdown_units, project_id_from_manifest
 from memory_custodian.local_overlay import LocalStatus
 from memory_custodian.transactions import (
     RootBinding,
@@ -87,6 +87,65 @@ class Protocol08Tests(unittest.TestCase):
                     recover_transaction(directories[0], roots, action="rollback")
             self.assertEqual(first.read_bytes(), b"old\r\nno-newline")
             self.assertEqual(second.read_bytes(), b"")
+
+    def test_init_authority_crash_blocks_add_until_recovery(self):
+        with tempfile.TemporaryDirectory() as temporary, tempfile.TemporaryDirectory() as state:
+            root = Path(temporary).resolve()
+            memory = root / "docs" / "memory"
+            with mock.patch.dict(os.environ, {
+                "XDG_STATE_HOME": state,
+                "MEMORY_CUSTODIAN_FAILPOINT": "before-committed",
+            }):
+                code, _output, error = self._capture([
+                    "init", "--project-root", str(root),
+                ])
+            self.assertEqual(code, 1)
+            self.assertIn("before-committed", error)
+
+            manifest = memory / "manifest.md"
+            project_id = project_id_from_manifest(
+                manifest.read_text(encoding="utf-8")
+            )
+            self.assertIsNotNone(project_id)
+            inbox = memory / "inbox.md"
+            before = inbox.read_text(encoding="utf-8")
+            add = [
+                "add", "Crash boundary candidate.",
+                "--type", "inbox",
+                "--candidate",
+                "--evidence", "conversation-unconfirmed",
+                "--project-root", str(root),
+            ]
+            with mock.patch.dict(os.environ, {
+                "XDG_STATE_HOME": state,
+                "MEMORY_CUSTODIAN_FAILPOINT": "",
+            }, clear=False):
+                bootstrap = binding_directory(root, memory, None)
+                directories = unfinished_transaction_directories(bootstrap)
+                self.assertEqual(len(directories), 1)
+                project_binding = bootstrap.parents[1] / "project-id" / project_id
+                self.assertFalse(project_binding.exists())
+
+                code, _output, error = self._capture(add)
+                self.assertEqual(code, 1)
+                self.assertIn("requires recovery before mutation", error)
+                self.assertEqual(inbox.read_text(encoding="utf-8"), before)
+                self.assertFalse(project_binding.exists())
+
+                code, output, error = self._capture([
+                    "recover",
+                    "--transaction-id", directories[0].name,
+                    "--complete",
+                    "--project-root", str(root),
+                ])
+                self.assertEqual(code, 0, output + error)
+                self.assertIn("committed", output)
+
+                code, output, error = self._capture(add)
+                self.assertEqual(code, 0, output + error)
+            self.assertIn(
+                "Crash boundary candidate.", inbox.read_text(encoding="utf-8")
+            )
 
     def test_json_envelope_and_audit_child_schema(self):
         with tempfile.TemporaryDirectory() as temporary:

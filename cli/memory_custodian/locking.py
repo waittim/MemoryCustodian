@@ -99,13 +99,19 @@ def existing_private_state_directory(name: str) -> Path:
         raise ValueError(f"Invalid private state directory name: {name!r}")
     primary = state_root() / name
     fallback = _fallback_state_root() / name
-    if primary.exists():
-        ensure_private_directory(primary)
-        return primary
+    missing = primary
+    try:
+        if primary.exists():
+            return ensure_private_directory(primary)
+    except UnsafePrivateStateError:
+        raise
+    except OSError:
+        # Match private_state_directory(): an unavailable primary root may
+        # already have caused earlier writes to use the private fallback.
+        missing = fallback
     if fallback.exists():
-        ensure_private_directory(fallback)
-        return fallback
-    return primary
+        return ensure_private_directory(fallback)
+    return missing
 
 
 def _fallback_private_directory(name: str) -> Path:
