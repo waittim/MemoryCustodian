@@ -999,6 +999,23 @@ def add_local_preference(
 
 
 def render_overlay_status(overlay: LocalOverlay) -> None:
+    # Import lazily to keep the local-state model independent from the CLI
+    # renderer during module initialization.
+    from .output import publish_data, publish_finding
+    from .results import make_finding
+
+    publish_data(local_overlay_status=overlay.status.value)
+    warnings = list(overlay.warnings)
+    if overlay.status in {LocalStatus.UNBOUND, LocalStatus.REVIEW} and not warnings:
+        warnings.append(f"Local overlay status is {overlay.status.value}.")
+    for warning in warnings:
+        publish_finding(make_finding(
+            "MC-LOCAL-001",
+            "WARNING",
+            warning,
+            path="local/",
+            remediation="Review and explicitly link or repair the local overlay.",
+        ))
     print(f"Local overlay status: {overlay.status.value}")
     for warning in overlay.warnings:
         print(f"- {warning}")

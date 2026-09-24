@@ -7,6 +7,7 @@ from pathlib import Path
 from .erasure import ErasureScope, render_scope
 from .local_overlay import overlay_directory
 from .locking import private_state_directory, project_mutation_guard
+from .output import publish_data
 from .protocol import (
     project_id_from_manifest,
     read_managed_text,
@@ -71,6 +72,7 @@ def run(args) -> int:
             for directory in unfinished_transaction_directories(binding)
         )
         if not directories:
+            publish_data(recovery_status="clean", transactions=[])
             print("Transactions: clean")
             return 0
         if args.transaction_id:
@@ -99,6 +101,14 @@ def run(args) -> int:
             journal = load_journal(selected[0])
             stored_scope = journal.get("erasure_scope")
             record = recover_transaction(selected[0], roots, action=action)
+            publish_data(
+                recovery_status=record.phase,
+                transactions=[{
+                    "transaction_id": record.transaction_id,
+                    "phase": record.phase,
+                    "operation": record.command,
+                }],
+            )
             print(f"Transaction {record.transaction_id}: {record.phase}")
             if isinstance(stored_scope, dict):
                 restored = action == "rollback"
@@ -125,6 +135,17 @@ def run(args) -> int:
                 print("Managed content was restored from protected recovery state.")
             return 0
 
+        publish_data(
+            recovery_status="recovery-required",
+            transactions=[{
+                "transaction_id": record.transaction_id,
+                "phase": record.phase,
+                "operation": record.command,
+                "complete_safe": record.safe_complete,
+                "rollback_safe": record.safe_rollback,
+                "issues": list(record.issues),
+            } for record in records],
+        )
         print("Transactions: recovery required")
         for record in records:
             print(f"- {record.transaction_id}")

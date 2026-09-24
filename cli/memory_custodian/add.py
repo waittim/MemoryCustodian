@@ -31,6 +31,8 @@ from .locking import (
 )
 from .mutations import TextMutation, apply_mutations
 from .plans import MutationPlan, digest_path, pending_plan_directory, print_plan
+from .output import publish_data, publish_finding
+from .results import make_finding, stable_path
 from .transactions import apply_plan_transaction
 from .protocol import (
     CURRENT_ENTRY_SCHEMA_VERSION,
@@ -285,12 +287,25 @@ def _target(args) -> tuple[str, str]:
     return TARGETS[kind], "project"
 
 
-def _report_budget(memory_dir: Path, path: Path, target: str) -> None:
+def _report_budget(
+    project_root: Path,
+    memory_dir: Path,
+    path: Path,
+    target: str,
+) -> None:
     budget = budget_for(target)
     if budget is None:
         return
     tokens = estimate_tokens(read_managed_text(memory_dir, path))
     state = budget_state(tokens, budget)
+    publish_data(budget_result={
+        "path": stable_path(
+            target, project_root=project_root, memory_dir=memory_dir,
+        ),
+        "tokens": tokens,
+        "limit": budget,
+        "state": state,
+    })
     print(f"Budget: {target} {tokens}/{budget} tokens")
     print(f"State: {state}")
     if state == "OK":
@@ -311,9 +326,28 @@ def _report_budget(memory_dir: Path, path: Path, target: str) -> None:
         print("- Review duplicates, obsolete detail, and content that belongs in a scoped module.")
     print(f"Run: memory-custodian compact --target {target}")
     if state == "OVER BUDGET":
+        publish_finding(make_finding(
+            "MC-BUDGET-001",
+            "WARNING",
+            f"{target} is over its context budget.",
+            path=target,
+            remediation=f"Run `memory-custodian compact --target {target}`.",
+            project_root=project_root,
+            memory_dir=memory_dir,
+        ))
         print(f"Warning: {target} is over its context budget.")
         if target == "decisions.md":
             print("Next: consolidate or relocate scoped decisions before considering age-based archival.")
+    else:
+        publish_finding(make_finding(
+            "MC-BUDGET-001",
+            "WARNING",
+            f"{target} is near its context budget.",
+            path=target,
+            remediation=f"Run `memory-custodian compact --target {target}`.",
+            project_root=project_root,
+            memory_dir=memory_dir,
+        ))
 
 
 def _find_entry(
@@ -1044,7 +1078,7 @@ def run(args) -> int:
             print("Written files:")
             for mutation in current_mutations:
                 print(f"- {mutation.path}")
-            _report_budget(memory_dir, memory_dir / target, target)
+            _report_budget(project_root, memory_dir, memory_dir / target, target)
             return 0
         with project_mutation_guard(
             project_root,
@@ -1076,6 +1110,15 @@ def run(args) -> int:
     if args.type == "decision" and args.allow_long and estimate_tokens(
         read_managed_text(memory_dir, memory_dir / target)
     ) > DECISION_ENTRY_BUDGET:
+        publish_finding(make_finding(
+            "MC-BUDGET-002",
+            "WARNING",
+            "An explicitly allowed long decision entry was added.",
+            path=target,
+            remediation="Review and shorten the decision during the next maintenance pass.",
+            project_root=project_root,
+            memory_dir=memory_dir,
+        ))
         print("Warning: adding an explicitly allowed long decision entry.")
-    _report_budget(memory_dir, memory_dir / target, target)
+    _report_budget(project_root, memory_dir, memory_dir / target, target)
     return 0

@@ -43,7 +43,15 @@ class Finding:
 
 @dataclass(frozen=True)
 class CommandResult:
-    """Immutable result model used by all read-only and preview commands."""
+    """Immutable source of truth for one command outcome.
+
+    Process exit status is deliberately *not* accepted as an independent
+    input.  It is derived from the same findings that produce ``status`` and
+    ``exit_class`` so public machine state cannot contradict the process
+    state.  ``fatal`` distinguishes an invocation/environment failure from a
+    project blocker; both return 2, but only the former uses the ``fatal``
+    exit class.
+    """
 
     command: str
     protocol_version: str | None
@@ -51,9 +59,19 @@ class CommandResult:
     findings: tuple[Finding, ...] = ()
     rendered_text: str = ""
     disclaimers: tuple[str, ...] = ()
-    # A command may provide an explicit non-zero code for invocation/runtime
-    # failures.  Normal PASS/REVIEW/FAIL codes are derived from findings.
-    explicit_return_code: int | None = None
+    fatal: bool = False
+
+    def __post_init__(self) -> None:
+        invalid = sorted({item.severity for item in self.findings} - set(SEVERITIES))
+        if invalid:
+            raise ValueError(
+                "CommandResult contains unsupported finding severity: "
+                + ", ".join(invalid)
+            )
+        if self.fatal and not any(
+            item.severity in {"ERROR", "BLOCKER"} for item in self.findings
+        ):
+            raise ValueError("A fatal CommandResult must contain an ERROR or BLOCKER finding.")
 
     @property
     def ordered_findings(self) -> tuple[Finding, ...]:
@@ -70,8 +88,8 @@ class CommandResult:
 
     @property
     def return_code(self) -> int:
-        if self.explicit_return_code is not None:
-            return self.explicit_return_code
+        if self.fatal:
+            return 2
         if any(item.severity == "BLOCKER" for item in self.findings):
             return 2
         if any(item.severity == "ERROR" for item in self.findings):
@@ -88,14 +106,33 @@ class CommandResult:
 
     @property
     def exit_class(self) -> str:
-        code = self.return_code
-        if code == 2:
+        if self.fatal:
+            return "fatal"
+        if any(item.severity == "BLOCKER" for item in self.findings):
             return "blocker"
-        if code == 1:
+        if any(item.severity == "ERROR" for item in self.findings):
             return "domain-failure"
         return "success-with-review" if self.status == "REVIEW" else "success"
 
+    def validate(self) -> None:
+        """Fail closed if a future edit breaks the public outcome matrix."""
+
+        expected = {
+            "success": ("PASS", 0),
+            "success-with-review": ("REVIEW", 0),
+            "domain-failure": ("FAIL", 1),
+            "blocker": ("FAIL", 2),
+            "fatal": ("FAIL", 2),
+        }[self.exit_class]
+        actual = (self.status, self.return_code)
+        if actual != expected:
+            raise ValueError(
+                "Inconsistent command result: "
+                f"exit_class={self.exit_class!r} requires {expected!r}, got {actual!r}."
+            )
+
     def payload(self, *, output_schema_version: int = 1) -> dict[str, Any]:
+        self.validate()
         data = dict(self.data)
         data.setdefault("rendered_text", self.rendered_text)
         return {

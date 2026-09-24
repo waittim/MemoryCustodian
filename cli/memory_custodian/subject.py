@@ -25,6 +25,7 @@ from .plans import (
     digest_text,
     pending_plan_directory,
     print_plan,
+    publish_plan,
 )
 from .transactions import apply_plan_transaction
 from .protocol import (
@@ -672,7 +673,8 @@ def _merge(args) -> int:
             *(entry.path for entry in canonical_entries(memory_dir, include_archive=True)),
         ))),
     )
-    print(f"Plan ID: {plan.plan_id}")
+    public_plan = publish_plan(plan)
+    print(f"Plan ID: {public_plan['plan_id']}")
     print("Future semantics: current active/candidate references mutate; source gains Merged-Into; historical entries retain their original Subject ID.")
     if not args.apply:
         print("Dry run only. Re-run with --apply --confirm-plan <PLAN_ID>.")

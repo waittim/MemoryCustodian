@@ -49,6 +49,7 @@ from .plans import (
     pending_entry_suffixes,
     print_plan,
 )
+from .output import PUBLIC_PLAN_SCHEMA_VERSION, publish_data
 from .transactions import apply_plan_transaction
 from .transactions import apply_transaction, bootstrap_binding_id
 from .protocol import (
@@ -1323,6 +1324,15 @@ def _prepare(args, project_root: Path, memory_dir: Path) -> int:
         print("MemoryCustodian migration prepare: project is already Protocol 0.8 / Entry schema 3.")
         return 0
     plan_id = _stage_plan_id("prepare", payload)
+    publish_data(plan={
+        "public_plan_schema_version": PUBLIC_PLAN_SCHEMA_VERSION,
+        "plan_id": plan_id,
+        "readiness": "ready",
+        "targets": [{"path": "private/migrations", "operation": "write"}],
+        "blockers": [],
+        "warnings": [],
+        "budget_results": [],
+    })
     print("MemoryCustodian migration prepare:")
     print(f"- Source protocol: {payload['source_protocol_version']}")
     print(f"- Source Entry schema: {payload['source_entry_schema_version']}")
@@ -1440,6 +1450,18 @@ def _canonicalize(args, project_root: Path, memory_dir: Path) -> int:
         "target_only_metadata": target_only_metadata,
     }
     plan_id = _stage_plan_id("canonicalize", payload)
+    publish_data(plan={
+        "public_plan_schema_version": PUBLIC_PLAN_SCHEMA_VERSION,
+        "plan_id": plan_id,
+        "readiness": "blocked" if plan.blockers else "ready",
+        "targets": [
+            {"path": item["path"], "operation": "replace"}
+            for item in mutation_digest
+        ] + [{"path": "private/migrations", "operation": "write"}],
+        "blockers": list(plan.blockers),
+        "warnings": [],
+        "budget_results": [],
+    })
     print("MemoryCustodian migration canonicalization checklist:")
     for change in changes or ["No mechanical source rewrite is currently available."]:
         print(f"- {change}")

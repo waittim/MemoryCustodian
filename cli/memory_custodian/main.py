@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import argparse
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 import sys
 
@@ -26,8 +26,17 @@ from . import subject as subject_cmd
 from .routes import TASK_INPUTS
 from .mutations import PartialMutationError
 from .templates import DEFAULT_MEMORY_DIR
-from .output import envelope, print_json, structured_command_data, structured_findings
-from .protocol import CURRENT_PROTOCOL_VERSION, resolve_memory_dir, resolve_project_root
+from .output import (
+    ResultContractError,
+    collect_command_metadata,
+    command_result,
+    domain_failure_result,
+    fatal_failure_result,
+    print_json,
+    project_protocol_version,
+    public_payload,
+)
+from .protocol import resolve_memory_dir, resolve_project_root
 
 
 def _add_common(parser: argparse.ArgumentParser) -> None:
@@ -381,95 +390,82 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     json_mode = getattr(args, "format", "text") == "json"
-    if json_mode and args.command in {"audit", "check", "status"}:
-        module = {
-            "audit": audit_cmd,
-            "check": check_cmd,
-            "status": status_cmd,
-        }[args.command]
+    if json_mode:
+        project_root = None
+        memory_dir = None
         try:
-            result = module.collect(args)
+            project_root = resolve_project_root(args.project_root)
+            memory_value = args.memory_dir
+            if args.command == "init" and getattr(args, "path", None):
+                memory_value = args.path
+            memory_dir = resolve_memory_dir(project_root, memory_value)
+        except (OSError, ValueError):
+            # The handler below owns the public diagnostic.  These optional
+            # roots are only for path sanitization and must never pre-empt it.
+            pass
+        try:
+            if args.command in {"audit", "check", "status"}:
+                module = {
+                    "audit": audit_cmd,
+                    "check": check_cmd,
+                    "status": status_cmd,
+                }[args.command]
+                result = module.collect(args)
+            else:
+                stdout = StringIO()
+                stderr = StringIO()
+                with collect_command_metadata() as metadata:
+                    with redirect_stdout(stdout), redirect_stderr(stderr):
+                        handler_code = args.func(args)
+                result = command_result(
+                    command=args.command,
+                    protocol_version=project_protocol_version(args),
+                    handler_return_code=handler_code,
+                    rendered_text=stdout.getvalue(),
+                    stderr_text=stderr.getvalue(),
+                    metadata=metadata,
+                    project_root=project_root,
+                    memory_dir=memory_dir,
+                )
         except ValueError as exc:
-            print_json(envelope(
+            result = domain_failure_result(
                 command=args.command,
-                protocol_version=None,
-                return_code=1,
-                rendered_text="",
-                findings=[{
-                    "code": "MC-INVOCATION-001", "severity": "ERROR", "path": "",
-                    "entry_id": None, "message": str(exc),
-                    "remediation": "Correct the invocation or project state and retry.",
-                }],
-            ))
-            return 1
-        root = resolve_project_root(args.project_root)
-        memory = resolve_memory_dir(root, args.memory_dir)
-        print_json(envelope(
-            command=args.command,
-            protocol_version=result.protocol_version,
-            return_code=result.return_code,
-            rendered_text=result.rendered_text,
-            data=dict(result.data),
-            findings=[item.canonical() for item in result.ordered_findings],
-            disclaimers=list(result.disclaimers),
-            project_root=root,
-            memory_dir=memory,
+                protocol_version=project_protocol_version(args),
+                message=str(exc),
+                project_root=project_root,
+                memory_dir=memory_dir,
+            )
+        except PartialMutationError as exc:
+            result = fatal_failure_result(
+                command=args.command,
+                protocol_version=project_protocol_version(args),
+                message=f"I/O error while writing {exc.failed}: {exc}",
+                project_root=project_root,
+                memory_dir=memory_dir,
+            )
+            print(result.findings[0].message, file=sys.stderr)
+        except OSError as exc:
+            result = fatal_failure_result(
+                command=args.command,
+                protocol_version=project_protocol_version(args),
+                message=f"I/O error: {exc}",
+                project_root=project_root,
+                memory_dir=memory_dir,
+            )
+            print(result.findings[0].message, file=sys.stderr)
+        except ResultContractError as exc:
+            result = fatal_failure_result(
+                command=args.command,
+                protocol_version=project_protocol_version(args),
+                message=f"Internal output contract error: {exc}",
+                project_root=project_root,
+                memory_dir=memory_dir,
+            )
+            print(result.findings[0].message, file=sys.stderr)
+        print_json(public_payload(
+            result, project_root=project_root, memory_dir=memory_dir,
         ))
         return result.return_code
-    if json_mode and args.command != "audit":
-        stream = StringIO()
-        try:
-            with redirect_stdout(stream):
-                code = args.func(args)
-        except ValueError as exc:
-            print_json(envelope(
-                command=args.command, protocol_version=CURRENT_PROTOCOL_VERSION,
-                return_code=1, rendered_text="",
-                findings=[{
-                    "code": "MC-INVOCATION-001", "severity": "ERROR", "path": "",
-                    "entry_id": None, "message": str(exc),
-                    "remediation": "Correct the invocation or project state and retry.",
-                }],
-            ))
-            return 1
-        except OSError as exc:
-            print_json(envelope(
-                command=args.command, protocol_version=CURRENT_PROTOCOL_VERSION,
-                return_code=2, rendered_text="",
-                findings=[{
-                    "code": "MC-RUNTIME-001", "severity": "BLOCKER", "path": "",
-                    "entry_id": None, "message": str(exc),
-                    "remediation": "Resolve the filesystem or recovery blocker and retry.",
-                }],
-            ))
-            return 2
-        print_json(envelope(
-            command=args.command, protocol_version=CURRENT_PROTOCOL_VERSION,
-            return_code=code,
-            rendered_text=stream.getvalue(),
-            data=structured_command_data(
-                args.command,
-                stream.getvalue(),
-                project_root=resolve_project_root(args.project_root),
-                memory_dir=resolve_memory_dir(
-                    resolve_project_root(args.project_root), args.memory_dir,
-                ),
-                args=args,
-            ),
-            findings=structured_findings(
-                args.command,
-                stream.getvalue(),
-                project_root=resolve_project_root(args.project_root),
-                memory_dir=resolve_memory_dir(
-                    resolve_project_root(args.project_root), args.memory_dir,
-                ),
-            ),
-            project_root=resolve_project_root(args.project_root),
-            memory_dir=resolve_memory_dir(
-                resolve_project_root(args.project_root), args.memory_dir,
-            ),
-        ))
-        return code
     try:
         return args.func(args)
     except ValueError as exc:

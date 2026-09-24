@@ -39,7 +39,9 @@ from .protocol import (
 )
 from .snapshot import build_snapshot
 from .subjects import load_subjects, validate_subject_registry
-from .plans import MutationPlan, digest_text
+from .plans import MutationPlan, digest_text, publish_plan
+from .output import publish_data
+from .results import stable_path
 from .transactions import apply_plan_transaction
 from .structural import (
     active_structural_operand_issues,
@@ -186,6 +188,14 @@ def run_list(args) -> int:
         if (not args.status or item.status == args.status)
         and (not args.scope or item.scope == args.scope)
     )
+    publish_data(entries=[{
+        "entry_id": record.entry_id,
+        "status": record.status,
+        "scope": record.scope,
+        "source": stable_path(
+            record.source, project_root=project_root, memory_dir=memory_dir,
+        ),
+    } for record in records])
     print("Canonical memory entries:")
     for record in records:
         print(f"- {record.entry_id} [{record.status}; {record.scope}] {record.source}")
@@ -202,24 +212,42 @@ def run_show(args) -> int:
         include_archive=args.include_archive,
         include_local=args.local,
     ), args.entry_id)
-    print(f"Source: {record.source}")
-    if record.structured:
-        subject_id = record.structured.fields.get("Subject") or record.structured.fields.get("Provisional-Subject")
-        if subject_id:
-            subjects = {item.subject_id.casefold(): item for item in load_subjects(memory_dir)}
-            subject = subjects.get(subject_id.casefold())
-            current = subject_id
-            if subject and subject.status == "merged" and subject.merged_into:
-                current = subject.merged_into
-            print(f"Historical Subject ID: {subject_id}")
-            print(f"Current canonical Subject ID: {current}")
-    # The parser owns the body envelope boundary.  Show its semantic source,
-    # not the explicit serialization wrapper; user-authored ``&#8283;`` text
-    # remains untouched because it has no protocol meaning.
-    print(
+    display_text = (
         (record.structured.display_text or record.text)
         if record.structured else record.text
     )
+    subject_id = None
+    current_subject_id = None
+    if record.structured:
+        subject_id = record.structured.fields.get("Subject") or record.structured.fields.get("Provisional-Subject")
+        current_subject_id = subject_id
+        if subject_id:
+            subjects = {item.subject_id.casefold(): item for item in load_subjects(memory_dir)}
+            subject = subjects.get(subject_id.casefold())
+            if subject and subject.status == "merged" and subject.merged_into:
+                current_subject_id = subject.merged_into
+    publish_data(
+        source=stable_path(
+            record.source, project_root=project_root, memory_dir=memory_dir,
+        ),
+        entry={
+            "entry_id": record.entry_id,
+            "status": record.status,
+            "scope": record.scope,
+            "text": display_text,
+            "historical_subject_id": subject_id,
+            "current_subject_id": current_subject_id,
+        },
+    )
+    print(f"Source: {record.source}")
+    if record.structured:
+        if subject_id:
+            print(f"Historical Subject ID: {subject_id}")
+            print(f"Current canonical Subject ID: {current_subject_id}")
+    # The parser owns the body envelope boundary.  Show its semantic source,
+    # not the explicit serialization wrapper; user-authored ``&#8283;`` text
+    # remains untouched because it has no protocol meaning.
+    print(display_text)
     return 0
 
 
@@ -485,7 +513,8 @@ def run_promote(args) -> int:
             )
         )),
     )
-    print(f"Plan ID: {plan.plan_id}")
+    public_plan = publish_plan(plan)
+    print(f"Plan ID: {public_plan['plan_id']}")
     if not args.apply:
         print("Dry run only. Re-run with --apply --confirm-plan <PLAN_ID>.")
         return 0

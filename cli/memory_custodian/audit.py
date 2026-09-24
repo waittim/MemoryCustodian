@@ -18,7 +18,7 @@ from .conflicts import ConflictStatus, analyze_snapshot
 from .erasure import scope_for_forget
 from .forget import _history_check
 from .local_overlay import LocalStatus, inspect_overlay
-from .output import envelope, print_json
+from .output import print_json, public_payload
 from .protocol import (
     CURRENT_PROTOCOL_VERSION,
     budget_for,
@@ -482,17 +482,7 @@ def run(args) -> int:
     if args.format == "json":
         root = resolve_project_root(args.project_root)
         memory = resolve_memory_dir(root, args.memory_dir)
-        print_json(envelope(
-            command="audit",
-            protocol_version=result.protocol_version,
-            return_code=result.return_code,
-            rendered_text="",
-            data=dict(result.data),
-            findings=[item.canonical() for item in result.ordered_findings],
-            disclaimers=list(result.disclaimers),
-            project_root=root,
-            memory_dir=memory,
-        ))
+        print_json(public_payload(result, project_root=root, memory_dir=memory))
     else:
         _render_text(result)
     return result.return_code

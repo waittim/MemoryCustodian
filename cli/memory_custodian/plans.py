@@ -20,6 +20,8 @@ from .locking import (
 )
 from .mutations import PrivateTextMutation, TextMutation
 from .mutations import _validate_write_target
+from .output import PUBLIC_PLAN_SCHEMA_VERSION, publish_data, publish_finding
+from .results import make_finding
 
 
 def digest_text(text: str) -> str:
@@ -513,11 +515,46 @@ class MutationPlan:
         return self.private_plan_id[:16]
 
 
-def print_plan(plan: MutationPlan) -> None:
+def publish_plan(plan: MutationPlan) -> dict[str, object]:
+    """Publish the bounded public view of an internal execution plan."""
+
     canonical = plan.canonical()
-    print(f"Plan ID: {plan.plan_id}")
+    public = {
+        "public_plan_schema_version": PUBLIC_PLAN_SCHEMA_VERSION,
+        "plan_id": plan.plan_id,
+        "readiness": "blocked" if canonical["blockers"] else "ready",
+        "targets": [
+            {
+                key: value
+                for key, value in operation.items()
+                if key in {
+                    "path", "operation", "base_sha256", "expected_output_sha256",
+                    "digests",
+                }
+            }
+            for operation in canonical["operations"]
+        ],
+        "blockers": list(canonical["blockers"]),
+        "warnings": list(canonical["warnings"]),
+        "budget_results": list(canonical["budget_results"]),
+    }
+    publish_data(plan=public)
+    for warning in canonical["warnings"]:
+        publish_finding(make_finding(
+            "MC-PLAN-002",
+            "WARNING",
+            str(warning),
+            path="docs/memory",
+            remediation="Review the preview warning before applying the plan.",
+        ))
+    return public
+
+
+def print_plan(plan: MutationPlan) -> None:
+    public = publish_plan(plan)
+    print(f"Plan ID: {public['plan_id']}")
     print("Target files:")
-    for operation in canonical["operations"]:
+    for operation in public["targets"]:
         print(f"- {operation['path']}")
         print(f"  Operation: {operation['operation']}")
         if "base_sha256" in operation:
@@ -526,18 +563,18 @@ def print_plan(plan: MutationPlan) -> None:
         else:
             print("  Digests: redacted for sensitive operation")
     print("Blockers:")
-    for blocker in canonical["blockers"]:
+    for blocker in public["blockers"]:
         print(f"- {blocker}")
-    if not canonical["blockers"]:
+    if not public["blockers"]:
         print("- none")
     print("Warnings:")
-    for warning in canonical["warnings"]:
+    for warning in public["warnings"]:
         print(f"- {warning}")
-    if not canonical["warnings"]:
+    if not public["warnings"]:
         print("- none")
     print("Estimated budget result:")
-    if canonical["budget_results"]:
-        for result in canonical["budget_results"]:
+    if public["budget_results"]:
+        for result in public["budget_results"]:
             print(
                 f"- {result['path']}: {result['before']} -> {result['after']} tokens "
                 f"(limit {result['limit']}, state {result['state']})"

@@ -11,7 +11,9 @@ from .conflicts import canonical_entries
 from .entries import ENTRY_ID_RE, StructuredEntry, validate_evidence
 from .locking import project_mutation_guard
 from .mutations import TextMutation
-from .plans import MutationPlan, digest_text
+from .plans import MutationPlan, digest_text, publish_plan
+from .output import publish_finding
+from .results import make_finding
 from .transactions import apply_plan_transaction
 from .protocol import (
     CURRENT_PROTOCOL_VERSION,
@@ -207,7 +209,8 @@ def _exception_add(args) -> int:
             memory_dir / "manifest.md", subjects_path, area.path, baseline.path,
         ))),
     )
-    print(f"Plan ID: {plan.plan_id}")
+    public_plan = publish_plan(plan)
+    print(f"Plan ID: {public_plan['plan_id']}")
     if not args.apply:
         print("Dry run only. Re-run with --apply --confirm-plan <PLAN_ID>.")
         return 0
@@ -248,6 +251,17 @@ def _exception_remove(args) -> int:
     blockers = list(dict.fromkeys(blockers))
     target_label = current or "none"
     resulting_review = len(targets) == 1 and not blockers
+    if resulting_review:
+        publish_finding(make_finding(
+            "MC-CONFLICT-002",
+            "WARNING",
+            "Removing Exception-To leaves project/area overlap requiring review.",
+            path=area.path.relative_to(memory_dir).as_posix(),
+            entry_id=area.entry_id,
+            remediation="Reconcile the remaining project/area overlap explicitly.",
+            project_root=project.project_root,
+            memory_dir=memory_dir,
+        ))
     payload = {
         "source": area.entry_id,
         "current_target": current,
@@ -290,7 +304,8 @@ def _exception_remove(args) -> int:
             *(entry.path for entry in targets),
         ))),
     )
-    print(f"Plan ID: {plan.plan_id}")
+    public_plan = publish_plan(plan)
+    print(f"Plan ID: {public_plan['plan_id']}")
     if not args.apply:
         print("Dry run only. Re-run with --apply --confirm-plan <PLAN_ID>.")
         return 0
@@ -415,7 +430,8 @@ def _reconcile_preview(args) -> int:
             *(entry.path for entry in entries),
         ))),
     )
-    print(f"Plan ID: {plan.plan_id}")
+    public_plan = publish_plan(plan)
+    print(f"Plan ID: {public_plan['plan_id']}")
     if not args.apply:
         print("Dry run only. Re-run with --apply --confirm-plan <PLAN_ID>.")
         return 0

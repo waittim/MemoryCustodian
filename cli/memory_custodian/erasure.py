@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 
+from .output import publish_data, publish_finding
+from .results import make_finding
+
 ERASURE_SCOPE_SCHEMA_VERSION = 1
 
 
@@ -58,6 +61,23 @@ def scope_for_forget(
 
 
 def render_scope(scope: ErasureScope) -> None:
+    publish_data(erasure_scope=scope.canonical())
+    if scope.history_check_status == "unavailable":
+        publish_finding(make_finding(
+            "MC-ERASURE-002",
+            "WARNING",
+            "Git history inspection was unavailable.",
+            path="private/history",
+            remediation="Review repository history manually if historical exposure matters.",
+        ))
+    elif scope.history_check_status == "reachable-copy-detected":
+        publish_finding(make_finding(
+            "MC-ERASURE-003",
+            "WARNING",
+            "A reachable historical copy was detected in the inspected repository.",
+            path="private/history",
+            remediation="Treat Git history and distributed copies as outside managed-memory erasure.",
+        ))
     print("Removal scope:")
     print(f"- Schema: {scope.erasure_scope_schema_version}")
     print(f"- Operation phase: {scope.operation_phase}")

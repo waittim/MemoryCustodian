@@ -24,6 +24,8 @@ from .locking import (
     ensure_private_directory,
     project_mutation_guard,
 )
+from .output import PUBLIC_PLAN_SCHEMA_VERSION, publish_data, publish_finding
+from .results import make_finding
 from .protocol import (
     ENTRY_SCHEMA_MIGRATION_MESSAGE,
     entry_schema_version_for_manifest,
@@ -183,6 +185,13 @@ def run(args) -> int:
     if allow_legacy_entry_schema and entry_schema_migration_available(
         protocol_metadata(manifest_text)
     ):
+        publish_finding(make_finding(
+            "MC-MIGRATION-001",
+            "WARNING",
+            ENTRY_SCHEMA_MIGRATION_MESSAGE,
+            path="docs/memory/manifest.md",
+            remediation="Run the staged migration after reviewing its preview.",
+        ))
         print(ENTRY_SCHEMA_MIGRATION_MESSAGE)
     if command == "status":
         shared_ids = memory_entry_ids(memory_dir)
@@ -222,6 +231,15 @@ def run(args) -> int:
         if overlay.status in {LocalStatus.UNBOUND, LocalStatus.REVIEW}:
             blockers.extend(overlay.warnings)
         plan_id = _reset_plan_id(project_id, overlay.status, dependencies, blockers)
+        publish_data(plan={
+            "public_plan_schema_version": PUBLIC_PLAN_SCHEMA_VERSION,
+            "plan_id": plan_id,
+            "readiness": "blocked" if blockers else "ready",
+            "targets": [{"path": "local/", "operation": "delete"}],
+            "blockers": list(blockers),
+            "warnings": [],
+            "budget_results": [],
+        })
         print(f"Plan ID: {plan_id}")
         print("Blockers:")
         for blocker in blockers or ["none"]:
@@ -451,6 +469,13 @@ def run(args) -> int:
                 )
             print("Local overlay linked to this normalized project root.")
             if len(roots) > 1:
+                publish_finding(make_finding(
+                    "MC-LOCAL-001",
+                    "WARNING",
+                    "The same project_id is explicitly bound to multiple roots.",
+                    path="local/",
+                    remediation="Review and remove obsolete explicit root bindings.",
+                ))
                 print("Local overlay status: REVIEW")
                 print("The same project_id is explicitly bound to multiple roots.")
             return 0
