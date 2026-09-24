@@ -14,6 +14,7 @@ import hmac
 import json
 import os
 from pathlib import Path
+import re
 import secrets
 import stat
 import tempfile
@@ -34,6 +35,53 @@ from .mutations import PrivateDeleteMutation, PrivateTextMutation, TextMutation,
 TRANSACTION_SCHEMA_VERSION = 1
 UNFINISHED_PHASES = frozenset({"planned", "prepared", "committing", "recovering", "failed"})
 FAILPOINT_ENV = "MEMORY_CUSTODIAN_FAILPOINT"
+
+_ALL_PHASES = UNFINISHED_PHASES | {"committed", "rolled-back"}
+_TRANSACTION_ID_RE = re.compile(r"[0-9a-f]{32}")
+_SHA256_RE = re.compile(r"[0-9a-f]{64}")
+_MODE_RE = re.compile(r"[0-7]{4}")
+_PLAN_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
+_CREATED_AT_RE = re.compile(
+    r"[0-9]{4}-[0-9]{2}-[0-9]{2}T"
+    r"[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]+)?(?:Z|\+00:00)"
+)
+_REQUIRED_JOURNAL_FIELDS = frozenset({
+    "transaction_schema_version",
+    "transaction_id",
+    "project_binding",
+    "command",
+    "plan_id",
+    "phase",
+    "created_at",
+    "targets",
+    "created_directories",
+})
+_REQUIRED_TARGET_FIELDS = frozenset({
+    "target_id",
+    "root_kind",
+    "path",
+    "operation",
+    "commit_group",
+    "commit_order",
+    "base_exists",
+    "base_sha256",
+    "mode_semantics",
+    "base_mode",
+    "output_exists",
+    "output_sha256",
+    "output_mode",
+    "backup_path",
+    "prepared_path",
+    "replaced",
+})
+_REQUIRED_DIRECTORY_FIELDS = frozenset({
+    "root_kind",
+    "path",
+    "mode",
+    "base_exists",
+    "created",
+    "identity",
+})
 
 
 class TransactionError(OSError):
@@ -393,9 +441,16 @@ def _directory_identity_matches(path: Path, identity: object) -> bool:
 
 
 def _safe_private_relative(value: object) -> bool:
-    if not isinstance(value, str) or not value or value.startswith(("/", "\\")):
+    if (
+        not isinstance(value, str)
+        or not value
+        or value.startswith(("/", "\\"))
+        or "\\" in value
+        or not value.isprintable()
+        or (len(value) >= 2 and value[0].isalpha() and value[1] == ":")
+    ):
         return False
-    parts = value.replace("\\", "/").split("/")
+    parts = value.split("/")
     return all(part not in {"", ".", ".."} for part in parts)
 
 
@@ -442,84 +497,276 @@ def _mode_value(value: object, default: int = 0o644) -> int:
     return int(value, 8)
 
 
+def _exact_int(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _valid_target_id(value: object) -> bool:
+    if not isinstance(value, str) or not re.fullmatch(r"[0-9]{4,}", value):
+        return False
+    number = int(value)
+    return number > 0 and value == f"{number:04d}"
+
+
+def _valid_created_at(value: object) -> bool:
+    if not isinstance(value, str) or _CREATED_AT_RE.fullmatch(value) is None:
+        return False
+    try:
+        datetime.strptime(value[:19], "%Y-%m-%dT%H:%M:%S")
+    except ValueError:
+        return False
+    return True
+
+
+def _valid_command(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and 0 < len(value) <= 128
+        and value == value.strip()
+        and value.isprintable()
+    )
+
+
+def _valid_project_binding(value: object, directory: Path) -> bool:
+    if not isinstance(value, dict) or set(value) != {"kind", "id"}:
+        return False
+    kind = value.get("kind")
+    binding_id = value.get("id")
+    if not isinstance(kind, str) or not isinstance(binding_id, str):
+        return False
+    if kind == "project-id":
+        try:
+            parsed = uuid.UUID(binding_id)
+        except ValueError:
+            return False
+        if parsed.version != 4 or str(parsed) != binding_id:
+            return False
+    elif kind == "bootstrap":
+        if _SHA256_RE.fullmatch(binding_id) is None:
+            return False
+    else:
+        return False
+    return directory.parent.name == binding_id and directory.parent.parent.name == kind
+
+
+def _valid_directory_identity(value: object) -> bool:
+    if not isinstance(value, dict) or set(value) != {"st_dev", "st_ino"}:
+        return False
+    return all(_exact_int(value[key]) and value[key] >= 0 for key in ("st_dev", "st_ino"))
+
+
+def _safe_transaction_id(directory: Path) -> str | None:
+    return directory.name if _TRANSACTION_ID_RE.fullmatch(directory.name) else None
+
+
+def _platform_mode_semantics() -> str:
+    return "windows-basic" if os.name == "nt" else "posix"
+
+
 def _classify_journal(
     directory: Path,
     journal: object,
 ) -> tuple[str, str, str | None, str | None]:
     if not isinstance(journal, dict):
         return "malformed", "journal is not an object", None, None
-    transaction_id = journal.get("transaction_id")
-    phase = journal.get("phase")
-    if journal.get("transaction_schema_version") != TRANSACTION_SCHEMA_VERSION:
-        return "unsupported", "journal schema is unsupported", (
-            str(transaction_id) if transaction_id is not None else None
-        ), str(phase) if phase is not None else None
-    if transaction_id != directory.name or not isinstance(journal.get("targets"), list):
-        return "malformed", "journal identity or targets are malformed", (
-            str(transaction_id) if transaction_id is not None else None
-        ), str(phase) if phase is not None else None
-    if not isinstance(phase, str) or phase not in UNFINISHED_PHASES | {"committed", "rolled-back"}:
-        return "malformed", "journal phase is invalid", directory.name, str(phase)
+
+    safe_transaction_id = _safe_transaction_id(directory)
+    raw_phase = journal.get("phase")
+    safe_phase = raw_phase if isinstance(raw_phase, str) and raw_phase in _ALL_PHASES else None
+
+    schema_version = journal.get("transaction_schema_version")
+    if not _exact_int(schema_version):
+        return "malformed", "journal schema field is malformed", safe_transaction_id, safe_phase
+    if schema_version != TRANSACTION_SCHEMA_VERSION:
+        return "unsupported", "journal schema is unsupported", safe_transaction_id, safe_phase
+    if not _REQUIRED_JOURNAL_FIELDS.issubset(journal):
+        return "malformed", "journal required fields are missing", safe_transaction_id, safe_phase
+
+    transaction_id = journal["transaction_id"]
+    phase = journal["phase"]
+    if (
+        safe_transaction_id is None
+        or not isinstance(transaction_id, str)
+        or transaction_id != directory.name
+    ):
+        return "malformed", "journal identity is malformed", safe_transaction_id, safe_phase
+    if not isinstance(phase, str) or phase not in _ALL_PHASES:
+        return "malformed", "journal phase is invalid", safe_transaction_id, None
+    if not _valid_project_binding(journal["project_binding"], directory):
+        return "malformed", "journal project binding is malformed", safe_transaction_id, phase
+    if not _valid_command(journal["command"]):
+        return "malformed", "journal command is malformed", safe_transaction_id, phase
+    if not isinstance(journal["plan_id"], str) or _PLAN_ID_RE.fullmatch(journal["plan_id"]) is None:
+        return "malformed", "journal plan identity is malformed", safe_transaction_id, phase
+    if not _valid_created_at(journal["created_at"]):
+        return "malformed", "journal creation time is malformed", safe_transaction_id, phase
+    if not isinstance(journal["targets"], list):
+        return "malformed", "journal targets are malformed", safe_transaction_id, phase
+    if not isinstance(journal["created_directories"], list):
+        return "malformed", "created directory inventory is malformed", safe_transaction_id, phase
+
     allowed_roots = {"shared", "local-overlay", "migration-state"}
-    allowed_operations = {"create", "replace", "delete"}
+    operation_existence = {
+        "create": (False, True),
+        "replace": (True, True),
+        "delete": (True, False),
+    }
+    expected_mode_semantics = _platform_mode_semantics()
+    target_ids: set[str] = set()
+    target_paths: set[tuple[str, str]] = set()
+    expected_artifacts: dict[str, str] = {}
     for target in journal["targets"]:
-        if not isinstance(target, dict):
-            return "malformed", "journal target is not an object", directory.name, str(phase)
-        if not isinstance(target.get("root_kind"), str) or target.get("root_kind") not in allowed_roots:
-            return "malformed", "journal target root is invalid", directory.name, str(phase)
-        if not _safe_private_relative(target.get("path")):
-            return "unsafe", "journal target locator is unsafe", directory.name, str(phase)
-        if not isinstance(target.get("operation"), str) or target.get("operation") not in allowed_operations:
-            return "malformed", "journal target operation is invalid", directory.name, str(phase)
-        for locator_key in ("backup_path", "prepared_path"):
-            locator = target.get(locator_key)
-            if locator is not None and not _safe_private_relative(locator):
-                return "unsafe", "journal artifact locator is unsafe", directory.name, str(phase)
-    directories = journal.get("created_directories", [])
-    if not isinstance(directories, list):
-        return "malformed", "created directory inventory is malformed", directory.name, str(phase)
-    for item in directories:
-        if (
-            not isinstance(item, dict)
-            or not isinstance(item.get("root_kind"), str)
-            or item.get("root_kind") not in allowed_roots
+        if not isinstance(target, dict) or set(target) != _REQUIRED_TARGET_FIELDS:
+            return "malformed", "journal target fields are malformed", safe_transaction_id, phase
+
+        target_id = target["target_id"]
+        if not _valid_target_id(target_id) or target_id in target_ids:
+            return "malformed", "journal target identity is malformed", safe_transaction_id, phase
+        target_ids.add(target_id)
+
+        root_kind = target["root_kind"]
+        relative = target["path"]
+        if not isinstance(root_kind, str) or root_kind not in allowed_roots:
+            return "malformed", "journal target root is invalid", safe_transaction_id, phase
+        if not _safe_private_relative(relative):
+            return "unsafe", "journal target locator is unsafe", safe_transaction_id, phase
+        target_key = (root_kind, relative)
+        if target_key in target_paths:
+            return "malformed", "journal target inventory is duplicated", safe_transaction_id, phase
+        target_paths.add(target_key)
+
+        operation = target["operation"]
+        if not isinstance(operation, str) or operation not in operation_existence:
+            return "malformed", "journal target operation is invalid", safe_transaction_id, phase
+        base_exists = target["base_exists"]
+        output_exists = target["output_exists"]
+        if not isinstance(base_exists, bool) or not isinstance(output_exists, bool):
+            return "malformed", "journal target existence is malformed", safe_transaction_id, phase
+        if (base_exists, output_exists) != operation_existence[operation]:
+            return "malformed", "journal target operation is inconsistent", safe_transaction_id, phase
+
+        base_digest = target["base_sha256"]
+        output_digest = target["output_sha256"]
+        if (base_exists and (not isinstance(base_digest, str) or _SHA256_RE.fullmatch(base_digest) is None)) or (
+            not base_exists and base_digest is not None
         ):
-            return "malformed", "created directory inventory is malformed", directory.name, str(phase)
-        if not _safe_private_relative(item.get("path")):
-            return "unsafe", "created directory locator is unsafe", directory.name, str(phase)
-        if not isinstance(item.get("created"), bool):
-            return "malformed", "created directory progress is malformed", directory.name, str(phase)
-        if item.get("created") and not isinstance(item.get("identity"), dict):
-            return "unsafe", "created directory identity is missing", directory.name, str(phase)
+            return "malformed", "journal target base digest is malformed", safe_transaction_id, phase
+        if (output_exists and (not isinstance(output_digest, str) or _SHA256_RE.fullmatch(output_digest) is None)) or (
+            not output_exists and output_digest is not None
+        ):
+            return "malformed", "journal target output digest is malformed", safe_transaction_id, phase
+
+        mode_semantics = target["mode_semantics"]
+        if not isinstance(mode_semantics, str) or mode_semantics not in {"posix", "windows-basic"}:
+            return "malformed", "journal target mode semantics are malformed", safe_transaction_id, phase
+        if mode_semantics != expected_mode_semantics:
+            return "unsafe", "journal target mode semantics are incompatible", safe_transaction_id, phase
+        base_mode = target["base_mode"]
+        output_mode = target["output_mode"]
+        if (base_exists and (not isinstance(base_mode, str) or _MODE_RE.fullmatch(base_mode) is None)) or (
+            not base_exists and base_mode is not None
+        ):
+            return "malformed", "journal target base mode is malformed", safe_transaction_id, phase
+        if (output_exists and (not isinstance(output_mode, str) or _MODE_RE.fullmatch(output_mode) is None)) or (
+            not output_exists and output_mode is not None
+        ):
+            return "malformed", "journal target output mode is malformed", safe_transaction_id, phase
+        commit_group = target["commit_group"]
+        commit_order = target["commit_order"]
+        if not isinstance(commit_group, str) or commit_group not in {"content", "authority"}:
+            return "malformed", "journal target commit group is invalid", safe_transaction_id, phase
+        if not _exact_int(commit_order) or commit_order < 0:
+            return "malformed", "journal target commit order is invalid", safe_transaction_id, phase
+        if (commit_group == "content" and commit_order != 0) or (
+            commit_group == "authority" and commit_order == 0
+        ):
+            return "malformed", "journal target commit ordering is inconsistent", safe_transaction_id, phase
+        if not isinstance(target["replaced"], bool):
+            return "malformed", "journal target progress is malformed", safe_transaction_id, phase
+        if phase in {"planned", "prepared"} and target["replaced"]:
+            return "malformed", "journal target progress is inconsistent", safe_transaction_id, phase
+
+        expected_backup = f"targets/{target_id}.backup" if base_exists else None
+        expected_prepared = f"targets/{target_id}.prepared" if output_exists else None
+        if target["backup_path"] != expected_backup or target["prepared_path"] != expected_prepared:
+            return "malformed", "journal target artifact inventory is malformed", safe_transaction_id, phase
+        if expected_backup is not None:
+            expected_artifacts[expected_backup] = base_digest
+        if expected_prepared is not None:
+            expected_artifacts[expected_prepared] = output_digest
+
+    directories = journal["created_directories"]
+    directory_keys: list[tuple[str, str]] = []
+    seen_directories: set[tuple[str, str]] = set()
+    for item in directories:
+        if not isinstance(item, dict) or set(item) != _REQUIRED_DIRECTORY_FIELDS:
+            return "malformed", "created directory fields are malformed", safe_transaction_id, phase
+        root_kind = item["root_kind"]
+        relative = item["path"]
+        if not isinstance(root_kind, str) or root_kind not in allowed_roots:
+            return "malformed", "created directory root is malformed", safe_transaction_id, phase
+        if not _safe_private_relative(relative):
+            return "unsafe", "created directory locator is unsafe", safe_transaction_id, phase
+        directory_key = (root_kind, relative)
+        if directory_key in seen_directories or directory_key in target_paths:
+            return "malformed", "created directory inventory is duplicated", safe_transaction_id, phase
+        seen_directories.add(directory_key)
+        directory_keys.append(directory_key)
+        expected_directory_mode = "0755" if root_kind == "shared" else "0700"
+        if item["mode"] != expected_directory_mode:
+            return "malformed", "created directory mode is malformed", safe_transaction_id, phase
+        if item["base_exists"] is not False or not isinstance(item["created"], bool):
+            return "malformed", "created directory state is malformed", safe_transaction_id, phase
+        if item["created"]:
+            if phase in {"planned", "prepared"} or not _valid_directory_identity(item["identity"]):
+                return "malformed", "created directory progress is malformed", safe_transaction_id, phase
+        elif item["identity"] is not None:
+            return "malformed", "created directory identity is malformed", safe_transaction_id, phase
+    if directory_keys != sorted(directory_keys):
+        return "malformed", "created directory inventory is not canonical", safe_transaction_id, phase
+    if not journal["targets"] and not directories:
+        return "malformed", "journal operation inventory is empty", safe_transaction_id, phase
 
     targets_directory = directory / "targets"
     if targets_directory.is_symlink():
-        return "unsafe", "transaction target state is symlinked", directory.name, str(phase)
+        return "unsafe", "transaction target state is symlinked", safe_transaction_id, phase
     try:
         unexpected = [
             child for child in directory.iterdir()
             if child.name not in {"journal.json", "targets"}
         ]
     except OSError:
-        return "unsafe", "transaction state directory cannot be inspected", directory.name, str(phase)
+        return "unsafe", "transaction state directory cannot be inspected", safe_transaction_id, phase
     if unexpected:
-        return "orphan", "unexpected transaction state artifact remains", directory.name, str(phase)
+        return "orphan", "unexpected transaction state artifact remains", safe_transaction_id, phase
     if targets_directory.exists() and not targets_directory.is_dir():
-        return "unsafe", "transaction target state is not a directory", directory.name, str(phase)
+        return "unsafe", "transaction target state is not a directory", safe_transaction_id, phase
+    if not targets_directory.exists() and phase not in {"committed", "rolled-back"}:
+        return "unsafe", "transaction target state is missing", safe_transaction_id, phase
     try:
         target_children = tuple(targets_directory.iterdir()) if targets_directory.exists() else ()
     except OSError:
-        return "unsafe", "transaction target state cannot be inspected", directory.name, str(phase)
+        return "unsafe", "transaction target state cannot be inspected", safe_transaction_id, phase
     if any(child.is_symlink() or not child.is_file() for child in target_children):
-        return "unsafe", "transaction target artifact is unsafe", directory.name, str(phase)
+        return "unsafe", "transaction target artifact is unsafe", safe_transaction_id, phase
+    observed_artifacts = {f"targets/{child.name}": child for child in target_children}
+    if any(locator not in expected_artifacts for locator in observed_artifacts):
+        return "orphan", "unexpected transaction target artifact remains", safe_transaction_id, phase
+    if any(
+        not _private_artifact_matches(path, expected_artifacts[locator])
+        for locator, path in observed_artifacts.items()
+    ):
+        return "unsafe", "transaction target artifact is invalid", safe_transaction_id, phase
+    if phase in {"prepared", "committing", "failed"} and set(observed_artifacts) != set(expected_artifacts):
+        return "unsafe", "transaction target artifact inventory is incomplete", safe_transaction_id, phase
     has_artifacts = bool(target_children)
     if phase in {"committed", "rolled-back"}:
         if has_artifacts:
             return "committed-cleanup" if phase == "committed" else "orphan", (
                 "committed cleanup is pending" if phase == "committed" else "rolled-back artifacts remain"
-            ), directory.name, str(phase)
-        return "clean", "", directory.name, str(phase)
-    return "unfinished", "recovery is required", directory.name, str(phase)
+            ), safe_transaction_id, phase
+        return "clean", "", safe_transaction_id, phase
+    return "unfinished", "recovery is required", safe_transaction_id, phase
 
 
 def transaction_inventory(binding: Path) -> tuple[TransactionInventory, ...]:
@@ -527,29 +774,30 @@ def transaction_inventory(binding: Path) -> tuple[TransactionInventory, ...]:
         return ()
     found: list[TransactionInventory] = []
     for directory in sorted(binding.iterdir(), key=lambda item: item.name):
+        public_id = _safe_transaction_id(directory) or "unknown"
         if directory.is_symlink():
-            found.append(TransactionInventory(directory, "symlink", directory.name, None, "transaction entry is symlinked"))
+            found.append(TransactionInventory(directory, "symlink", public_id, None, "transaction entry is symlinked"))
             continue
         if not directory.is_dir():
-            found.append(TransactionInventory(directory, "orphan", None, None, "transaction entry is not a directory"))
+            found.append(TransactionInventory(directory, "orphan", public_id, None, "transaction entry is not a directory"))
             continue
         journal_path = directory / "journal.json"
         if journal_path.is_symlink():
-            found.append(TransactionInventory(directory, "unsafe", directory.name, None, "journal is symlinked"))
+            found.append(TransactionInventory(directory, "unsafe", public_id, None, "journal is symlinked"))
             continue
         if not journal_path.exists():
-            found.append(TransactionInventory(directory, "orphan", directory.name, None, "transaction journal is missing"))
+            found.append(TransactionInventory(directory, "orphan", public_id, None, "transaction journal is missing"))
             continue
         try:
             journal = json.loads(read_private_file(journal_path))
         except json.JSONDecodeError:
-            found.append(TransactionInventory(directory, "malformed", directory.name, None, "transaction journal is malformed"))
+            found.append(TransactionInventory(directory, "malformed", public_id, None, "transaction journal is malformed"))
             continue
         except OSError:
-            found.append(TransactionInventory(directory, "unsafe", directory.name, None, "transaction journal is unsafe"))
+            found.append(TransactionInventory(directory, "unsafe", public_id, None, "transaction journal is unsafe"))
             continue
         kind, detail, transaction_id, phase = _classify_journal(directory, journal)
-        found.append(TransactionInventory(directory, kind, transaction_id, phase, detail))
+        found.append(TransactionInventory(directory, kind, transaction_id or "unknown", phase, detail))
     return tuple(item for item in found if item.kind != "clean")
 
 
@@ -560,7 +808,7 @@ def unfinished_transaction_directories(binding: Path) -> tuple[Path, ...]:
 def ensure_no_unfinished(binding: Path) -> None:
     unfinished = unfinished_transaction_directories(binding)
     if unfinished:
-        ids = ", ".join(path.name for path in unfinished)
+        ids = ", ".join(_safe_transaction_id(path) or "unknown" for path in unfinished)
         raise RecoveryRequiredError(
             f"Unfinished transaction state requires recovery before mutation: {ids}"
         )
@@ -581,7 +829,7 @@ def ensure_no_unfinished_for_project(
         for directory in unfinished_transaction_directories(binding)
     )
     if unfinished:
-        ids = ", ".join(path.name for path in unfinished)
+        ids = ", ".join(_safe_transaction_id(path) or "unknown" for path in unfinished)
         raise RecoveryRequiredError(
             f"Unfinished transaction state requires recovery before mutation: {ids}"
         )
@@ -780,7 +1028,7 @@ def apply_transaction(
             ),
             "base_exists": exists,
             "base_sha256": _sha256(before) if exists else None,
-            "mode_semantics": "windows-basic" if os.name == "nt" else "posix",
+            "mode_semantics": _platform_mode_semantics(),
             "base_mode": base_mode,
             "output_exists": not deleting,
             "output_sha256": None if deleting else _sha256(output),
@@ -1014,10 +1262,6 @@ def load_journal(directory: Path) -> dict[str, object]:
         raise RecoveryRequiredError("Transaction journal is unsafe.") from exc
     if not isinstance(journal, dict):
         raise RecoveryRequiredError("Transaction journal is malformed.")
-    if journal.get("transaction_schema_version") != TRANSACTION_SCHEMA_VERSION:
-        raise RecoveryRequiredError("Transaction journal schema is unsupported.")
-    if journal.get("transaction_id") != directory.name or not isinstance(journal.get("targets"), list):
-        raise RecoveryRequiredError("Transaction journal identity is malformed.")
     kind, detail, _transaction_id, _phase = _classify_journal(directory, journal)
     if kind in {"malformed", "unsupported", "unsafe", "orphan"}:
         raise RecoveryRequiredError(detail.capitalize() + ".")
@@ -1028,66 +1272,71 @@ def analyze_transaction(directory: Path, roots: dict[str, RootBinding]) -> Recov
     try:
         journal = load_journal(directory)
     except RecoveryRequiredError as exc:
-        return RecoveryRecord(directory.name, "invalid", "unknown", directory, False, False, (str(exc),))
+        return RecoveryRecord(
+            _safe_transaction_id(directory) or "unknown",
+            "invalid",
+            "unknown",
+            directory,
+            False,
+            False,
+            (str(exc),),
+        )
     issues: list[str] = []
     safe_complete = True
     safe_rollback = True
-    phase = str(journal.get("phase", "invalid"))
+    phase = journal["phase"]
     for raw in journal["targets"]:
-        if not isinstance(raw, dict):
-            issues.append("Malformed target record.")
-            safe_complete = safe_rollback = False
-            continue
         try:
             path = _target_path(roots, raw)
         except ValueError:
-            issues.append(f"Target {raw.get('target_id', 'unknown')} cannot be resolved safely.")
+            issues.append(f"Target {raw['target_id']} cannot be resolved safely.")
             safe_complete = safe_rollback = False
             continue
         try:
-            _validate_target_for_root(roots[str(raw.get("root_kind"))].root, path)
+            _validate_target_for_root(roots[raw["root_kind"]].root, path)
         except (KeyError, TransactionError):
-            issues.append(f"Target {raw.get('target_id', 'unknown')} has an unsafe ancestor.")
+            issues.append(f"Target {raw['target_id']} has an unsafe ancestor.")
             safe_complete = safe_rollback = False
             continue
-        is_base = _matches(path, bool(raw.get("base_exists")), raw.get("base_sha256"), raw.get("base_mode"))
-        is_output = _matches(path, bool(raw.get("output_exists")), raw.get("output_sha256"), raw.get("output_mode"))
-        prepared_value = raw.get("prepared_path")
-        prepared_ok = raw.get("operation") == "delete"
-        if prepared_value:
-            prepared = directory / str(prepared_value)
-            prepared_ok = _private_artifact_matches(prepared, raw.get("output_sha256"))
-        backup_value = raw.get("backup_path")
-        backup_ok = not raw.get("base_exists")
-        if backup_value:
-            backup = directory / str(backup_value)
-            backup_ok = _private_artifact_matches(backup, raw.get("base_sha256"))
+        is_base = _matches(path, raw["base_exists"], raw["base_sha256"], raw["base_mode"])
+        is_output = _matches(path, raw["output_exists"], raw["output_sha256"], raw["output_mode"])
+        prepared_value = raw["prepared_path"]
+        prepared_ok = raw["operation"] == "delete"
+        if prepared_value is not None:
+            prepared = directory / prepared_value
+            prepared_ok = _private_artifact_matches(prepared, raw["output_sha256"])
+        backup_value = raw["backup_path"]
+        backup_ok = not raw["base_exists"]
+        if backup_value is not None:
+            backup = directory / backup_value
+            backup_ok = _private_artifact_matches(backup, raw["base_sha256"])
         if not ((is_base and prepared_ok) or is_output):
             safe_complete = False
-            issues.append(f"Target {raw.get('target_id')} is not safely completable.")
+            issues.append(f"Target {raw['target_id']} is not safely completable.")
         if not ((is_output and backup_ok) or is_base):
             safe_rollback = False
-            issues.append(f"Target {raw.get('target_id')} is not safely rollbackable.")
-    for raw_directory in journal.get("created_directories", []):
-        if not isinstance(raw_directory, dict) or not raw_directory.get("created"):
-            continue
+            issues.append(f"Target {raw['target_id']} is not safely rollbackable.")
+    for raw_directory in journal["created_directories"]:
         try:
-            root = roots[str(raw_directory["root_kind"])].root
-            path = root / str(raw_directory["path"])
+            root = roots[raw_directory["root_kind"]].root
+            path = root / raw_directory["path"]
             _safe_relative(root, path)
-        except (KeyError, TypeError, ValueError):
+            _validate_directory_for_root(root, path)
+        except (KeyError, TypeError, ValueError, TransactionError):
             safe_complete = safe_rollback = False
             issues.append("Created directory inventory cannot be resolved safely.")
             continue
+        if not raw_directory["created"]:
+            continue
         if path.is_symlink() or (path.exists() and not _directory_identity_matches(path, raw_directory.get("identity"))):
-            safe_rollback = False
+            safe_complete = safe_rollback = False
             issues.append("Created directory identity changed during recovery.")
     if phase == "committed":
         safe_rollback = False
         issues.append("Committed transaction can only be completed, not rolled back.")
     return RecoveryRecord(
-        str(journal["transaction_id"]), phase,
-        str(journal.get("command", "unknown")), directory,
+        journal["transaction_id"], phase,
+        journal["command"], directory,
         safe_complete, safe_rollback, tuple(sorted(set(issues))),
     )
 
@@ -1114,80 +1363,82 @@ def recover_transaction(
     _failpoint("while-recovering")
     targets = list(journal["targets"])
     if action == "complete":
-        for directory_record in journal.get("created_directories", []):
-            root = roots[str(directory_record["root_kind"])].root
-            path = root / str(directory_record["path"])
+        for directory_record in journal["created_directories"]:
+            root = roots[directory_record["root_kind"]].root
+            path = root / directory_record["path"]
             _validate_directory_for_root(root, path)
             if not path.exists():
-                path.mkdir(mode=_mode_value(directory_record.get("mode")), exist_ok=False)
+                path.mkdir(mode=_mode_value(directory_record["mode"]), exist_ok=False)
                 _fsync_directory(path.parent)
                 directory_record["created"] = True
                 directory_record["identity"] = _directory_identity(path)
                 _atomic_journal(directory / "journal.json", journal)
             elif path.is_symlink() or not path.is_dir():
                 raise RecoveryRequiredError("Planned parent directory became unsafe during recovery.")
-            elif directory_record.get("created") and not _directory_identity_matches(
-                path, directory_record.get("identity")
+            elif directory_record["created"] and not _directory_identity_matches(
+                path, directory_record["identity"]
             ):
                 raise RecoveryRequiredError("Planned parent directory identity changed during recovery.")
         order = sorted(targets, key=lambda target: (
-            int(target.get("commit_order", 0)),
-            str(target.get("root_kind")), str(target.get("path")),
+            target["commit_order"],
+            target["root_kind"], target["path"],
         ))
         for target in order:
             path = _target_path(roots, target)
-            _validate_target_for_root(roots[str(target["root_kind"])].root, path)
-            if _matches(path, bool(target.get("output_exists")), target.get("output_sha256"), target.get("output_mode")):
+            trusted_root = roots[target["root_kind"]].root
+            _validate_target_for_root(trusted_root, path)
+            if _matches(path, target["output_exists"], target["output_sha256"], target["output_mode"]):
                 continue
-            if not _matches(path, bool(target.get("base_exists")), target.get("base_sha256"), target.get("base_mode")):
+            if not _matches(path, target["base_exists"], target["base_sha256"], target["base_mode"]):
                 raise RecoveryRequiredError("Target changed during recovery.")
-            if target.get("operation") == "delete":
-                _unlink_in_trusted_parent(roots[str(target["root_kind"])].root, path)
+            if target["operation"] == "delete":
+                _unlink_in_trusted_parent(trusted_root, path)
                 _fsync_directory(path.parent)
             else:
-                prepared = _read_private_bytes(directory / str(target["prepared_path"]))
+                prepared = _read_private_bytes(directory / target["prepared_path"])
                 _same_filesystem_replace(
                     path,
                     prepared,
-                    _mode_value(target.get("output_mode")),
-                    trusted_root=roots[str(target["root_kind"])].root,
+                    _mode_value(target["output_mode"]),
+                    trusted_root=trusted_root,
                 )
         journal["phase"] = "committed"
     else:
         order = sorted(targets, key=lambda target: (
-            -int(target.get("commit_order", 0)),
-            str(target.get("root_kind")), str(target.get("path")),
+            -target["commit_order"],
+            target["root_kind"], target["path"],
         ))
         for target in order:
             path = _target_path(roots, target)
-            _validate_target_for_root(roots[str(target["root_kind"])].root, path)
-            if _matches(path, bool(target.get("base_exists")), target.get("base_sha256"), target.get("base_mode")):
+            trusted_root = roots[target["root_kind"]].root
+            _validate_target_for_root(trusted_root, path)
+            if _matches(path, target["base_exists"], target["base_sha256"], target["base_mode"]):
                 continue
-            if not _matches(path, bool(target.get("output_exists")), target.get("output_sha256"), target.get("output_mode")):
+            if not _matches(path, target["output_exists"], target["output_sha256"], target["output_mode"]):
                 raise RecoveryRequiredError("Target changed during recovery.")
-            if target.get("base_exists"):
-                backup = _read_private_bytes(directory / str(target["backup_path"]))
+            if target["base_exists"]:
+                backup = _read_private_bytes(directory / target["backup_path"])
                 _same_filesystem_replace(
                     path,
                     backup,
-                    _mode_value(target.get("base_mode")),
-                    trusted_root=roots[str(target["root_kind"])].root,
+                    _mode_value(target["base_mode"]),
+                    trusted_root=trusted_root,
                 )
             else:
-                _unlink_in_trusted_parent(roots[str(target["root_kind"])].root, path)
+                _unlink_in_trusted_parent(trusted_root, path)
                 _fsync_directory(path.parent)
         for directory_record in sorted(
-            journal.get("created_directories", []),
-            key=lambda item: (str(item.get("root_kind")), str(item.get("path"))),
+            journal["created_directories"],
+            key=lambda item: (item["root_kind"], item["path"]),
             reverse=True,
         ):
-            if not directory_record.get("created"):
+            if not directory_record["created"]:
                 continue
-            root = roots[str(directory_record["root_kind"])].root
-            path = root / str(directory_record["path"])
+            root = roots[directory_record["root_kind"]].root
+            path = root / directory_record["path"]
             try:
                 _validate_directory_for_root(root, path)
-                if path.is_symlink() or (path.exists() and not _directory_identity_matches(path, directory_record.get("identity"))):
+                if path.is_symlink() or (path.exists() and not _directory_identity_matches(path, directory_record["identity"])):
                     raise RecoveryRequiredError("Created directory identity changed during recovery.")
                 if path.is_dir() and not path.is_symlink() and not any(path.iterdir()):
                     path.rmdir()

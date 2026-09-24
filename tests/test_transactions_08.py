@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import os
 from pathlib import Path
@@ -56,6 +57,70 @@ class TransactionProtocol08Tests(unittest.TestCase):
                 directories = unfinished_transaction_directories(binding)
             self.assertEqual(len(directories), 1)
             return directories[0]
+
+    def _write_journal(self, directory: Path, journal: dict[str, object]) -> None:
+        write_private_file(
+            directory / "journal.json",
+            json.dumps(journal, ensure_ascii=False, sort_keys=True) + "\n",
+        )
+
+    def _prepared_replace_fixture(self):
+        temporary, state, project, memory = self._fixture()
+        self.addCleanup(temporary.cleanup)
+        first = memory / "first.md"
+        second = memory / "second.md"
+        first.write_bytes(b"old-first\n")
+        second.write_bytes(b"old-second\n")
+        directory = self._interrupted(
+            state,
+            project,
+            memory,
+            (TextMutation(first, "new-first"), TextMutation(second, "new-second")),
+            "after-journal-prepared",
+        )
+        roots = {"shared": RootBinding("shared", project, "shared")}
+        journal = json.loads((directory / "journal.json").read_text(encoding="utf-8"))
+        return directory, roots, journal, (first, second)
+
+    def _state_snapshot(self, directory: Path) -> dict[str, bytes | None]:
+        return {
+            path.relative_to(directory).as_posix(): path.read_bytes() if path.is_file() else None
+            for path in sorted(directory.rglob("*"))
+        }
+
+    def _assert_journal_blocked(
+        self,
+        directory: Path,
+        roots: dict[str, RootBinding],
+        watched: tuple[Path, ...],
+        *,
+        expected_kind: str,
+    ) -> None:
+        private_before = self._state_snapshot(directory)
+        targets_before = {
+            path: (path.exists(), path.read_bytes() if path.exists() else None)
+            for path in watched
+        }
+        record = analyze_transaction(directory, roots)
+        self.assertEqual(record.phase, "invalid")
+        self.assertFalse(record.safe_complete)
+        self.assertFalse(record.safe_rollback)
+        inventory = {
+            item.directory: item for item in transaction_inventory(directory.parent)
+        }
+        self.assertEqual(inventory[directory].kind, expected_kind)
+        for action in ("complete", "rollback"):
+            with self.assertRaises(RecoveryRequiredError):
+                recover_transaction(directory, roots, action=action)
+            self.assertTrue(directory.exists())
+            self.assertEqual(self._state_snapshot(directory), private_before)
+            self.assertEqual(
+                {
+                    path: (path.exists(), path.read_bytes() if path.exists() else None)
+                    for path in watched
+                },
+                targets_before,
+            )
 
     def test_complete_after_first_replace_and_committed_cleanup_are_safe(self):
         for failpoint, expected_phase in (
@@ -298,6 +363,320 @@ class TransactionProtocol08Tests(unittest.TestCase):
         self.assertFalse(record.safe_complete)
         self.assertFalse(record.safe_rollback)
 
+    def test_incomplete_replace_journal_is_blocked_without_cleanup(self):
+        temporary, state, project, memory = self._fixture()
+        self.addCleanup(temporary.cleanup)
+        with mock.patch.dict(os.environ, {"XDG_STATE_HOME": str(state)}):
+            binding = binding_directory(project, memory, None)
+        directory = ensure_private_directory(binding / uuid.uuid4().hex)
+        ensure_private_directory(directory / "targets")
+        missing = project / "missing.md"
+        journal = {
+            "transaction_schema_version": 1,
+            "transaction_id": directory.name,
+            "project_binding": {"kind": "bootstrap", "id": binding.name},
+            "command": "fixture",
+            "plan_id": "fixture-plan",
+            "phase": "planned",
+            "created_at": "2026-09-23T01:02:03Z",
+            "targets": [{
+                "root_kind": "shared",
+                "path": "missing.md",
+                "operation": "replace",
+            }],
+            "created_directories": [],
+        }
+        self._write_journal(directory, journal)
+        roots = {"shared": RootBinding("shared", project, "shared")}
+
+        self._assert_journal_blocked(
+            directory, roots, (missing,), expected_kind="malformed"
+        )
+
+    def test_required_top_level_fields_types_and_formats_are_strict(self):
+        directory, roots, pristine, watched = self._prepared_replace_fixture()
+        required = (
+            "transaction_schema_version",
+            "transaction_id",
+            "project_binding",
+            "command",
+            "plan_id",
+            "phase",
+            "created_at",
+            "targets",
+            "created_directories",
+        )
+        for field in required:
+            with self.subTest(missing=field):
+                journal = copy.deepcopy(pristine)
+                del journal[field]
+                self._write_journal(directory, journal)
+                self._assert_journal_blocked(
+                    directory, roots, watched, expected_kind="malformed"
+                )
+
+        wrong_types = {
+            "transaction_schema_version": True,
+            "transaction_id": 1,
+            "project_binding": [],
+            "command": 1,
+            "plan_id": [],
+            "phase": 1,
+            "created_at": 1,
+            "targets": {},
+            "created_directories": {},
+        }
+        for field, value in wrong_types.items():
+            with self.subTest(wrong_type=field):
+                journal = copy.deepcopy(pristine)
+                journal[field] = value
+                self._write_journal(directory, journal)
+                self._assert_journal_blocked(
+                    directory, roots, watched, expected_kind="malformed"
+                )
+
+        invalid_values = (
+            ("project_binding", {"kind": "bootstrap", "id": "0" * 64}, "malformed"),
+            ("created_at", "2026-09-23T01:02:03-07:00", "malformed"),
+            ("created_at", "2026-02-30T01:02:03Z", "malformed"),
+            ("plan_id", "private topic", "malformed"),
+            ("command", "private\ntopic", "malformed"),
+            ("transaction_schema_version", 2, "unsupported"),
+        )
+        for field, value, expected_kind in invalid_values:
+            with self.subTest(invalid=field, value=value):
+                journal = copy.deepcopy(pristine)
+                journal[field] = value
+                self._write_journal(directory, journal)
+                self._assert_journal_blocked(
+                    directory, roots, watched, expected_kind=expected_kind
+                )
+
+    def test_target_fields_types_and_cross_field_invariants_are_strict(self):
+        directory, roots, pristine, watched = self._prepared_replace_fixture()
+        target_fields = tuple(pristine["targets"][0])
+        for field in target_fields:
+            with self.subTest(missing=field):
+                journal = copy.deepcopy(pristine)
+                del journal["targets"][0][field]
+                self._write_journal(directory, journal)
+                self._assert_journal_blocked(
+                    directory, roots, watched, expected_kind="malformed"
+                )
+
+        wrong_types = {
+            "target_id": 1,
+            "root_kind": [],
+            "path": [],
+            "operation": [],
+            "commit_group": [],
+            "commit_order": False,
+            "base_exists": 1,
+            "base_sha256": [],
+            "mode_semantics": [],
+            "base_mode": 0o644,
+            "output_exists": 1,
+            "output_sha256": [],
+            "output_mode": 0o644,
+            "backup_path": 1,
+            "prepared_path": 1,
+            "replaced": 0,
+        }
+        for field, value in wrong_types.items():
+            with self.subTest(wrong_type=field):
+                journal = copy.deepcopy(pristine)
+                journal["targets"][0][field] = value
+                self._write_journal(directory, journal)
+                expected_kind = "unsafe" if field == "path" else "malformed"
+                self._assert_journal_blocked(
+                    directory, roots, watched, expected_kind=expected_kind
+                )
+
+        def set_target(**updates):
+            def mutate(journal):
+                journal["targets"][0].update(updates)
+            return mutate
+
+        invalid_cases = (
+            ("short target id", set_target(target_id="1"), "malformed"),
+            ("unsafe path", set_target(path="../private-topic"), "unsafe"),
+            ("operation existence", set_target(operation="create"), "malformed"),
+            ("base existence digest", set_target(base_exists=False), "malformed"),
+            ("output existence digest", set_target(output_exists=False), "malformed"),
+            ("base digest", set_target(base_sha256="g" * 64), "malformed"),
+            ("output digest", set_target(output_sha256="0" * 63), "malformed"),
+            ("base mode", set_target(base_mode="644"), "malformed"),
+            ("output mode", set_target(output_mode="0999"), "malformed"),
+            ("mode semantics", set_target(mode_semantics="foreign"), "malformed"),
+            ("content ordering", set_target(commit_order=1), "malformed"),
+            ("group ordering", set_target(commit_group="authority"), "malformed"),
+            ("backup locator", set_target(backup_path="targets/9999.backup"), "malformed"),
+            ("prepared locator", set_target(prepared_path=None), "malformed"),
+            ("progress", set_target(replaced=1), "malformed"),
+            ("progress before commit", set_target(replaced=True), "malformed"),
+        )
+        for name, mutate, expected_kind in invalid_cases:
+            with self.subTest(case=name):
+                journal = copy.deepcopy(pristine)
+                mutate(journal)
+                self._write_journal(directory, journal)
+                self._assert_journal_blocked(
+                    directory, roots, watched, expected_kind=expected_kind
+                )
+
+        for duplicate in ("target_id", "path"):
+            with self.subTest(duplicate=duplicate):
+                journal = copy.deepcopy(pristine)
+                journal["targets"][1][duplicate] = journal["targets"][0][duplicate]
+                self._write_journal(directory, journal)
+                self._assert_journal_blocked(
+                    directory, roots, watched, expected_kind="malformed"
+                )
+
+        journal = copy.deepcopy(pristine)
+        journal["targets"][0]["unexpected"] = "private-topic"
+        self._write_journal(directory, journal)
+        self._assert_journal_blocked(
+            directory, roots, watched, expected_kind="malformed"
+        )
+
+    def test_created_directory_fields_and_invariants_are_strict(self):
+        directory, roots, pristine, watched = self._prepared_replace_fixture()
+        valid_directory = {
+            "root_kind": "shared",
+            "path": "planned-parent",
+            "mode": "0755",
+            "base_exists": False,
+            "created": False,
+            "identity": None,
+        }
+        pristine["created_directories"] = [valid_directory]
+        self._write_journal(directory, pristine)
+        self.assertNotEqual(analyze_transaction(directory, roots).phase, "invalid")
+
+        for field in tuple(valid_directory):
+            with self.subTest(missing=field):
+                journal = copy.deepcopy(pristine)
+                del journal["created_directories"][0][field]
+                self._write_journal(directory, journal)
+                self._assert_journal_blocked(
+                    directory, roots, watched, expected_kind="malformed"
+                )
+
+        invalid_cases = (
+            ("root", {"root_kind": 1}, "malformed"),
+            ("path type", {"path": []}, "unsafe"),
+            ("path traversal", {"path": "../private-topic"}, "unsafe"),
+            ("mode", {"mode": "0700"}, "malformed"),
+            ("base exists type", {"base_exists": 0}, "malformed"),
+            ("base exists", {"base_exists": True}, "malformed"),
+            ("created type", {"created": 1}, "malformed"),
+            ("identity without progress", {"identity": {"st_dev": 1, "st_ino": 2}}, "malformed"),
+            (
+                "created before committing",
+                {"created": True, "identity": {"st_dev": 1, "st_ino": 2}},
+                "malformed",
+            ),
+        )
+        for name, updates, expected_kind in invalid_cases:
+            with self.subTest(case=name):
+                journal = copy.deepcopy(pristine)
+                journal["created_directories"][0].update(updates)
+                self._write_journal(directory, journal)
+                self._assert_journal_blocked(
+                    directory, roots, watched, expected_kind=expected_kind
+                )
+
+        for name, records in (
+            ("duplicate", [valid_directory, copy.deepcopy(valid_directory)]),
+            (
+                "unsorted",
+                [
+                    {**valid_directory, "path": "z-parent"},
+                    {**valid_directory, "path": "a-parent"},
+                ],
+            ),
+        ):
+            with self.subTest(case=name):
+                journal = copy.deepcopy(pristine)
+                journal["created_directories"] = copy.deepcopy(records)
+                self._write_journal(directory, journal)
+                self._assert_journal_blocked(
+                    directory, roots, watched, expected_kind="malformed"
+                )
+
+    def test_artifact_inventory_must_be_complete_exact_and_untampered(self):
+        for case in (
+            "missing-prepared",
+            "missing-backup",
+            "extra",
+            "tampered-prepared",
+            "tampered-backup",
+        ):
+            with self.subTest(case=case):
+                directory, roots, journal, watched = self._prepared_replace_fixture()
+                prepared = directory / journal["targets"][0]["prepared_path"]
+                backup = directory / journal["targets"][0]["backup_path"]
+                if case == "missing-prepared":
+                    prepared.unlink()
+                    expected_kind = "unsafe"
+                elif case == "missing-backup":
+                    backup.unlink()
+                    expected_kind = "unsafe"
+                elif case == "extra":
+                    write_private_file(directory / "targets" / "private-topic", "opaque")
+                    expected_kind = "orphan"
+                elif case == "tampered-prepared":
+                    write_private_file(prepared, "tampered")
+                    expected_kind = "unsafe"
+                else:
+                    write_private_file(backup, "tampered")
+                    expected_kind = "unsafe"
+                self._assert_journal_blocked(
+                    directory, roots, watched, expected_kind=expected_kind
+                )
+
+        directory, roots, journal, watched = self._prepared_replace_fixture()
+        journal["phase"] = "recovering"
+        self._write_journal(directory, journal)
+        for artifact in (directory / "targets").iterdir():
+            artifact.unlink()
+        (directory / "targets").rmdir()
+        self._assert_journal_blocked(
+            directory, roots, watched, expected_kind="unsafe"
+        )
+
+    def test_valid_planned_partial_artifacts_and_windows_basic_modes_remain_supported(self):
+        temporary, state, project, memory = self._fixture()
+        self.addCleanup(temporary.cleanup)
+        first = memory / "first.md"
+        second = memory / "second.md"
+        first.write_text("old-first\n", encoding="utf-8")
+        second.write_text("old-second\n", encoding="utf-8")
+        directory = self._interrupted(
+            state,
+            project,
+            memory,
+            (TextMutation(first, "new-first"), TextMutation(second, "new-second")),
+            "after-first-backup",
+        )
+        roots = {"shared": RootBinding("shared", project, "shared")}
+        record = analyze_transaction(directory, roots)
+        self.assertEqual(record.phase, "planned")
+        self.assertTrue(record.safe_rollback)
+
+        journal = json.loads((directory / "journal.json").read_text(encoding="utf-8"))
+        journal["created_at"] = "2026-09-23T01:02:03.123456789+00:00"
+        for target in journal["targets"]:
+            target["mode_semantics"] = "windows-basic"
+        self._write_journal(directory, journal)
+        with mock.patch.object(
+            transaction_module, "_platform_mode_semantics", return_value="windows-basic"
+        ):
+            record = analyze_transaction(directory, roots)
+        self.assertEqual(record.phase, "planned")
+        self.assertTrue(record.safe_rollback)
+
     def test_created_private_directories_are_removed_on_rollback(self):
         temporary, state, project, memory = self._fixture()
         self.addCleanup(temporary.cleanup)
@@ -363,10 +742,14 @@ class TransactionProtocol08Tests(unittest.TestCase):
                 "shared": RootBinding("shared", project, "shared"),
                 "local-overlay": RootBinding("local-overlay", local_root, "local"),
             }
+            state_before = self._state_snapshot(directory)
             record = analyze_transaction(directory, roots)
+            self.assertFalse(record.safe_complete)
             self.assertFalse(record.safe_rollback)
-            with self.assertRaises(RecoveryRequiredError):
-                recover_transaction(directory, roots, action="rollback")
+            for action in ("complete", "rollback"):
+                with self.assertRaises(RecoveryRequiredError):
+                    recover_transaction(directory, roots, action=action)
+                self.assertEqual(self._state_snapshot(directory), state_before)
 
     @unittest.skipIf(os.name == "nt", "POSIX symlink semantics")
     def test_delete_revalidates_ancestor_containment(self):

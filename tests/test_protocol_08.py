@@ -13,6 +13,7 @@ import re
 from types import SimpleNamespace
 
 from memory_custodian.entries import parse_structured_entries, render_active_entry
+from memory_custodian.locking import write_private_file
 from memory_custodian.main import main
 from memory_custodian.migrate import _source_binding
 from memory_custodian.mutations import TextMutation
@@ -146,6 +147,114 @@ class Protocol08Tests(unittest.TestCase):
             self.assertIn(
                 "Crash boundary candidate.", inbox.read_text(encoding="utf-8")
             )
+
+    def test_audit_and_recover_block_malformed_journal_without_private_leak_or_cleanup(self):
+        with tempfile.TemporaryDirectory() as temporary, tempfile.TemporaryDirectory() as state:
+            root = Path(temporary).resolve()
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": state}):
+                code, output, error = self._capture(["init", "--project-root", str(root)])
+                self.assertEqual(code, 0, output + error)
+                memory = root / "docs" / "memory"
+                project_id = project_id_from_manifest(
+                    (memory / "manifest.md").read_text(encoding="utf-8")
+                )
+                first = memory / "first.md"
+                second = memory / "second.md"
+                first.write_text("old-first\n", encoding="utf-8")
+                second.write_text("old-second\n", encoding="utf-8")
+                with mock.patch.dict(
+                    os.environ,
+                    {"MEMORY_CUSTODIAN_FAILPOINT": "after-journal-prepared"},
+                    clear=False,
+                ):
+                    with self.assertRaises(TransactionFailpoint):
+                        apply_transaction(
+                            project_root=root,
+                            memory_root=memory,
+                            project_id=project_id,
+                            command="fixture",
+                            plan_id="fixture-plan",
+                            shared_mutations=(
+                                TextMutation(first, "new-first"),
+                                TextMutation(second, "new-second"),
+                            ),
+                        )
+                binding = binding_directory(root, memory, project_id)
+                directory = unfinished_transaction_directories(binding)[0]
+                journal = json.loads(
+                    (directory / "journal.json").read_text(encoding="utf-8")
+                )
+                private_marker = "private-topic-must-not-leak"
+                journal["targets"][0] = {
+                    "root_kind": "shared",
+                    "path": private_marker,
+                    "operation": "replace",
+                }
+                write_private_file(
+                    directory / "journal.json",
+                    json.dumps(journal, ensure_ascii=False, sort_keys=True) + "\n",
+                )
+                state_before = {
+                    path.relative_to(directory).as_posix(): path.read_bytes()
+                    for path in sorted(directory.rglob("*"))
+                    if path.is_file()
+                }
+
+                code, output, error = self._capture([
+                    "audit",
+                    "--transactions",
+                    "--project-root",
+                    str(root),
+                    "--format",
+                    "json",
+                ])
+                self.assertEqual(code, 2, output + error)
+                payload = json.loads(output)
+                transaction_findings = [
+                    item for item in payload["findings"]
+                    if item["code"] == "MC-TRANSACTION-002"
+                ]
+                self.assertEqual(len(transaction_findings), 1)
+                self.assertEqual(transaction_findings[0]["severity"], "BLOCKER")
+                self.assertNotIn(private_marker, output + error)
+
+                with mock.patch.dict(
+                    os.environ, {"MEMORY_CUSTODIAN_FAILPOINT": ""}, clear=False
+                ):
+                    code, output, error = self._capture([
+                        "recover",
+                        "--transaction-id",
+                        directory.name,
+                        "--project-root",
+                        str(root),
+                    ])
+                    self.assertEqual(code, 2, output + error)
+                    self.assertIn("Phase: invalid", output)
+                    self.assertNotIn(private_marker, output + error)
+
+                    code, output, error = self._capture([
+                        "recover",
+                        "--transaction-id",
+                        directory.name,
+                        "--complete",
+                        "--project-root",
+                        str(root),
+                    ])
+                    self.assertEqual(code, 1, output + error)
+                    self.assertIn("manual recovery is required", error)
+                    self.assertNotIn(private_marker, output + error)
+
+                self.assertTrue(directory.exists())
+                self.assertEqual(first.read_text(encoding="utf-8"), "old-first\n")
+                self.assertEqual(second.read_text(encoding="utf-8"), "old-second\n")
+                self.assertEqual(
+                    {
+                        path.relative_to(directory).as_posix(): path.read_bytes()
+                        for path in sorted(directory.rglob("*"))
+                        if path.is_file()
+                    },
+                    state_before,
+                )
 
     def test_json_envelope_and_audit_child_schema(self):
         with tempfile.TemporaryDirectory() as temporary:

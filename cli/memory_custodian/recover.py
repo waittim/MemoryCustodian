@@ -85,6 +85,17 @@ def run(args) -> int:
         roots = _roots(project_root, project_id)
         records = [analyze_transaction(item, roots) for item in selected]
         if action:
+            selected_record = records[0]
+            action_is_safe = (
+                selected_record.safe_complete
+                if action == "complete"
+                else selected_record.safe_rollback
+            )
+            if not action_is_safe:
+                # Keep the mutation guard and error contract centralized in
+                # recover_transaction.  In particular, do not parse optional
+                # metadata from a journal that analysis already rejected.
+                recover_transaction(selected[0], roots, action=action)
             journal = load_journal(selected[0])
             stored_scope = journal.get("erasure_scope")
             record = recover_transaction(selected[0], roots, action=action)
