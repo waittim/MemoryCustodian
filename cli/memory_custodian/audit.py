@@ -7,14 +7,17 @@ parsed back into findings.
 
 from __future__ import annotations
 
-import hashlib
-import json
 from pathlib import Path
 from types import SimpleNamespace
 
 from . import check as check_cmd
-from .context import invalid_context_result, route_context
 from .conflicts import ConflictStatus, analyze_snapshot
+from .context_result import (
+    build_context_result,
+    context_sha256,
+    module_invocation_data,
+    render_context_result,
+)
 from .erasure import scope_for_forget
 from .forget import _history_check
 from .local_overlay import LocalStatus, inspect_overlay
@@ -28,7 +31,13 @@ from .protocol import (
     resolve_memory_dir,
     resolve_project_root,
 )
-from .results import CommandResult, Finding, make_finding, unique_findings
+from .results import (
+    CommandResult,
+    Finding,
+    make_finding,
+    sanitize_text,
+    unique_findings,
+)
 from .snapshot import build_snapshot
 from .subjects import FACETS
 from .transactions import existing_binding_directories, transaction_inventory
@@ -54,8 +63,12 @@ def _check_args(args, *, focused: str | None = None):
     )
 
 
-def _quality_findings(args, focused: str) -> tuple[Finding, ...]:
-    return check_cmd.collect(_check_args(args, focused=focused)).ordered_findings
+def _quality_findings(args, focused: str, *, snapshot, overlay) -> tuple[Finding, ...]:
+    return check_cmd.collect(
+        _check_args(args, focused=focused),
+        snapshot=snapshot,
+        overlay=overlay,
+    ).ordered_findings
 
 
 def _subject_findings(snapshot, *, project_root: Path, memory_dir: Path) -> tuple[Finding, ...]:
@@ -173,23 +186,30 @@ def _budget_findings(snapshot, *, project_root: Path, memory_dir: Path) -> tuple
     return tuple(findings)
 
 
-def _local_findings(snapshot, project_root: Path, memory_dir: Path) -> tuple[Finding, ...]:
+def _local_findings(
+    snapshot,
+    project_root: Path,
+    memory_dir: Path,
+    *,
+    overlay=None,
+) -> tuple[Finding, ...]:
     metadata = snapshot.manifest_contract.as_dict()
     project_id = metadata.get("project_id")
     if not project_id or compare_versions(metadata.get("protocol_version", "0.5"), CURRENT_PROTOCOL_VERSION) != 0:
         return ()
-    try:
-        overlay = inspect_overlay(
-            project_root,
-            project_id,
-            shared_ids={entry.entry_id for entry in snapshot.relation_entries},
-            entry_schema_version=snapshot.entry_schema_version,
-        )
-    except (OSError, ValueError) as exc:
-        return (make_finding(
-            "MC-LOCAL-002", "ERROR", str(exc), path="private/local-overlay",
-            project_root=project_root, memory_dir=memory_dir,
-        ),)
+    if overlay is None:
+        try:
+            overlay = inspect_overlay(
+                project_root,
+                project_id,
+                shared_ids={entry.entry_id for entry in snapshot.relation_entries},
+                entry_schema_version=snapshot.entry_schema_version,
+            )
+        except (OSError, ValueError) as exc:
+            return (make_finding(
+                "MC-LOCAL-002", "ERROR", str(exc), path="private/local-overlay",
+                project_root=project_root, memory_dir=memory_dir,
+            ),)
     if overlay.status == LocalStatus.REVIEW:
         return (make_finding(
             "MC-LOCAL-002", "ERROR",
@@ -204,70 +224,60 @@ def _local_findings(snapshot, project_root: Path, memory_dir: Path) -> tuple[Fin
     return ()
 
 
-def _route_invocation(args, snapshot, project_root: Path, memory_dir: Path):
-    try:
-        routed = route_context(
-            project_root,
-            memory_dir,
-            supplied_task=args.task,
-            supplied_paths=args.path,
-            rules=args.rule,
-            profiles=args.profile,
-            areas=args.area,
-            snapshot=snapshot,
-        )
-    except ValueError as exc:
-        invalid = invalid_context_result(
-            supplied_task=args.task,
-            supplied_paths=args.path,
-            rules=args.rule,
-            profiles=args.profile,
-            areas=args.area,
-            error=exc,
-        )
-        return (
-            {"completeness": invalid.completeness.value, "error": str(exc), "modules": []},
-            (make_finding(
-                "MC-ROUTING-003", "ERROR", str(exc), path="docs/memory/manifest.md",
-                project_root=project_root, memory_dir=memory_dir,
-            ),),
-        )
-    modules = [
-        {
-            "module_id": item.module_id,
-            "required": item.required,
-            "loaded": item.loaded,
-            "disposition": item.disposition.value if item.disposition else None,
-            "reasons": [reason.value for reason in item.reasons],
-            "details": list(item.details),
-        }
-        for item in sorted(routed.modules, key=lambda item: item.module_id.casefold())
-    ]
-    canonical = json.dumps(
-        {
-            "task": routed.canonical_task,
-            "paths": [item.value for item in routed.paths],
-            "modules": modules,
-            "omissions": [item.unit_ref for item in routed.omissions],
-        }, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
-    ).encode("utf-8")
-    return (
-        {
-            "supplied_task": routed.supplied_task,
-            "canonical_task": routed.canonical_task,
-            "completeness": routed.completeness.value,
-            "paths": [item.value for item in routed.paths],
-            "explicit_scope": {
-                "rules": list(routed.explicit_rules),
-                "profiles": list(routed.explicit_profiles),
-                "areas": list(routed.explicit_areas),
-            },
-            "modules": modules,
-            "budget_omissions": [item.unit_ref for item in routed.omissions],
-            "warnings": list(routed.warnings),
-            "incomplete_dimensions": list(routed.incomplete_dimensions),
-            "context_sha256": hashlib.sha256(canonical).hexdigest(),
+def _route_invocation(
+    args,
+    snapshot,
+    project_root: Path,
+    memory_dir: Path,
+    *,
+    overlay=None,
+):
+    context = build_context_result(
+        project_root,
+        memory_dir,
+        supplied_task=args.task,
+        supplied_paths=args.path,
+        rules=args.rule,
+        profiles=args.profile,
+        areas=args.area,
+        strict_routing=bool(getattr(args, "strict_routing", False)),
+        no_local=bool(getattr(args, "no_local", False)),
+        snapshot=snapshot,
+        captured_overlay=overlay,
+    )
+    routed = context.routing
+    modules = module_invocation_data(context)
+    rendered = sanitize_text(
+        render_context_result(context),
+        project_root=project_root,
+        memory_dir=memory_dir,
+    )
+    invocation = {
+        "supplied_task": routed.supplied_task,
+        "canonical_task": routed.canonical_task,
+        "completeness": context.completeness.value,
+        "shared_routing_completeness": routed.completeness.value,
+        "paths": [item.value for item in routed.paths],
+        "explicit_scope": {
+            "rules": list(routed.explicit_rules),
+            "profiles": list(routed.explicit_profiles),
+            "areas": list(routed.explicit_areas),
         },
+        "modules": modules,
+        "budget_omissions": [item.unit_ref for item in routed.omissions],
+        "warnings": list(routed.warnings),
+        "incomplete_dimensions": list(dict.fromkeys((
+            *routed.incomplete_dimensions,
+            *(("local-overlay-review",) if context.overlay.status == LocalStatus.REVIEW else ()),
+            *(("invalid-local-scope",) if context.local_scope_warnings else ()),
+        ))),
+        "rendered_context": rendered,
+        "context_sha256": context_sha256(rendered),
+    }
+    if context.routing_invalid:
+        invocation["error"] = routed.warnings[0]
+    return (
+        invocation,
         tuple(
             make_finding(
                 "MC-ROUTING-003", "ERROR" if routed.completeness.value == "INVALID" else "WARNING",
@@ -310,7 +320,13 @@ def collect(args) -> CommandResult:
     project_id = metadata.get("project_id")
     findings: list[Finding] = []
 
-    baseline = check_cmd.collect(_check_args(args))
+    # Audit owns one immutable shared snapshot and one local overlay capture.
+    # Baseline/focused compatibility checks receive those captures rather
+    # than rebuilding views at different filesystem instants.
+    overlay = check_cmd.overlay_for_snapshot(snapshot, project_root)
+    baseline = check_cmd.collect(
+        _check_args(args), snapshot=snapshot, overlay=overlay,
+    )
     findings.extend(baseline.findings)
     selectors = {
         name: bool(getattr(args, name, False))
@@ -323,7 +339,9 @@ def collect(args) -> CommandResult:
     run_all = bool(getattr(args, "all", False)) or not any(selectors.values())
     for focused in ("routing", "reachability", "freshness"):
         if run_all or selectors[focused]:
-            findings.extend(_quality_findings(args, focused))
+            findings.extend(_quality_findings(
+                args, focused, snapshot=snapshot, overlay=overlay,
+            ))
     conflict_result = analyze_snapshot(snapshot)
     if run_all or selectors["subjects"]:
         findings.extend(_subject_findings(snapshot, project_root=project_root, memory_dir=memory_dir))
@@ -331,7 +349,11 @@ def collect(args) -> CommandResult:
         findings.extend(_conflict_findings(snapshot, project_root=project_root, memory_dir=memory_dir))
     merge_review_data = None
     if getattr(args, "merge_base", None):
-        merge_result = check_cmd.collect(_check_args(args, focused="conflicts"))
+        merge_result = check_cmd.collect(
+            _check_args(args, focused="conflicts"),
+            snapshot=snapshot,
+            overlay=overlay,
+        )
         findings.extend(
             item for item in merge_result.findings
             if item.details.get("merge_status") is not None
@@ -342,7 +364,12 @@ def collect(args) -> CommandResult:
     if run_all or selectors["relations"]:
         findings.extend(_relation_findings(snapshot, project_root=project_root, memory_dir=memory_dir))
     if run_all or selectors["local"]:
-        findings.extend(_local_findings(snapshot, project_root, memory_dir))
+        findings.extend(_local_findings(
+            snapshot,
+            project_root,
+            memory_dir,
+            overlay=overlay,
+        ))
 
     bindings = existing_binding_directories(
         project_root,
@@ -406,7 +433,13 @@ def collect(args) -> CommandResult:
 
     invocation = None
     if getattr(args, "routing_input", False):
-        invocation, invocation_findings = _route_invocation(args, snapshot, project_root, memory_dir)
+        invocation, invocation_findings = _route_invocation(
+            args,
+            snapshot,
+            project_root,
+            memory_dir,
+            overlay=overlay,
+        )
         findings.extend(invocation_findings)
 
     subjects = [
@@ -482,7 +515,12 @@ def run(args) -> int:
     if args.format == "json":
         root = resolve_project_root(args.project_root)
         memory = resolve_memory_dir(root, args.memory_dir)
-        print_json(public_payload(result, project_root=root, memory_dir=memory))
+        print_json(public_payload(
+            result,
+            project_root=root,
+            memory_dir=memory,
+            authoritative_protocol=True,
+        ))
     else:
         _render_text(result)
     return result.return_code

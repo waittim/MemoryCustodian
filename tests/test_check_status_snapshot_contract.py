@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
+import json
 import os
 from pathlib import Path
 import tempfile
@@ -215,6 +216,68 @@ class CheckStatusSnapshotContractTests(unittest.TestCase):
                         for item in build_snapshot(memory, Path(root)).files
                     },
                 )
+
+    def test_audit_routing_input_uses_one_snapshot_after_disk_mutation(self):
+        with tempfile.TemporaryDirectory() as root:
+            memory = self._init(root)
+            brief = memory / "brief.md"
+            from memory_custodian import snapshot as snapshot_module
+            from memory_custodian import output as output_module
+
+            real_inventory = snapshot_module.managed_markdown_files
+            real_read = snapshot_module.read_managed_text
+            real_output_read = output_module.read_managed_text
+            captured_files: list[str] = []
+
+            def capture_then_mutate(*args, **kwargs):
+                snapshot = build_snapshot(*args, **kwargs)
+                captured_files.extend(item.relative for item in snapshot.files)
+                brief.write_text(
+                    "# Project Brief\n\nPurpose:\nMUTATED_AFTER_AUDIT_SNAPSHOT\n",
+                    encoding="utf-8",
+                )
+                return snapshot
+
+            with patch(
+                "memory_custodian.audit.build_snapshot",
+                side_effect=capture_then_mutate,
+            ) as builder, patch(
+                "memory_custodian.snapshot.managed_markdown_files",
+                wraps=real_inventory,
+            ) as inventory, patch(
+                "memory_custodian.snapshot.read_managed_text",
+                wraps=real_read,
+            ) as managed_read:
+                with patch(
+                    "memory_custodian.output.read_managed_text",
+                    wraps=real_output_read,
+                ) as output_read:
+                    code, output, error = capture([
+                        "audit", "--routing-input",
+                        "--task", "implementation",
+                        "--path", "cli/example.py",
+                        "--strict-routing",
+                        "--no-local",
+                        "--format", "json",
+                        "--project-root", root,
+                    ])
+
+            self.assertEqual(code, 0, output + error)
+            self.assertEqual(builder.call_count, 1)
+            self.assertEqual(inventory.call_count, 1)
+            self.assertEqual(output_read.call_count, 0)
+            read_paths = [
+                Path(call.args[1]).resolve().relative_to(memory.resolve()).as_posix()
+                for call in managed_read.call_args_list
+            ]
+            self.assertEqual(sorted(read_paths), sorted(captured_files))
+            self.assertEqual(len(read_paths), len(set(read_paths)))
+            invocation = json.loads(output)["data"]["invocation"]
+            self.assertIn("Snapshot test project.", invocation["rendered_context"])
+            self.assertNotIn(
+                "MUTATED_AFTER_AUDIT_SNAPSHOT",
+                invocation["rendered_context"],
+            )
 
     def test_status_keeps_captured_invalid_manifest_after_later_repair(self):
         with tempfile.TemporaryDirectory() as root:

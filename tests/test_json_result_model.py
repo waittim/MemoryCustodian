@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from contextlib import redirect_stderr, redirect_stdout
 from concurrent.futures import ThreadPoolExecutor
+import hashlib
 from io import StringIO
 import json
 import os
@@ -131,6 +132,94 @@ class JsonResultModelTests(unittest.TestCase):
             item["severity"] == "BLOCKER" for item in payload["findings"]
         ))
         self.assertEqual(payload["data"]["routing_completeness"], "INVALID")
+
+    def test_invocation_audit_reuses_final_read_context_bytes_and_hash(self):
+        with tempfile.TemporaryDirectory() as root:
+            self._init(root)
+            routing = [
+                "--project-root", root,
+                "--task", "implementation",
+                "--path", "cli/example.py",
+                "--strict-routing",
+                "--no-local",
+                "--format", "json",
+            ]
+            read_code, read_payload, read_error = self._invoke([
+                "read", *routing,
+            ])
+            audit_code, audit_payload, audit_error = self._invoke([
+                "audit", "--routing-input", *routing,
+            ])
+
+        self.assertEqual((read_code, read_error), (0, ""), read_payload)
+        self.assertEqual((audit_code, audit_error), (0, ""), audit_payload)
+        rendered = read_payload["data"]["rendered_context"]
+        invocation = audit_payload["data"]["invocation"]
+        self.assertEqual(
+            invocation["completeness"],
+            read_payload["data"]["routing_completeness"],
+        )
+        self.assertEqual(
+            invocation["shared_routing_completeness"],
+            read_payload["data"]["shared_routing_completeness"],
+        )
+        self.assertEqual(invocation["rendered_context"], rendered)
+        self.assertEqual(
+            invocation["rendered_context"].encode("utf-8"),
+            rendered.encode("utf-8"),
+        )
+        self.assertEqual(
+            invocation["context_sha256"],
+            read_payload["data"]["context_sha256"],
+        )
+        self.assertEqual(
+            invocation["context_sha256"],
+            hashlib.sha256(rendered.encode("utf-8")).hexdigest(),
+        )
+
+    def test_invocation_audit_preserves_bound_local_overlay_context(self):
+        with tempfile.TemporaryDirectory() as root, tempfile.TemporaryDirectory() as state:
+            with patch.dict(os.environ, {"XDG_STATE_HOME": state}):
+                self._init(root)
+                for command in (
+                    ["local", "enable"],
+                    ["local", "link"],
+                    [
+                        "local", "add", "Audit-local preference.",
+                        "--type", "preference",
+                        "--evidence", "user-confirmed",
+                    ],
+                ):
+                    code, payload, error = self._invoke([
+                        *command, "--project-root", root, "--format", "json",
+                    ])
+                    self.assertEqual((code, error), (0, ""), payload)
+
+                routing = [
+                    "--project-root", root,
+                    "--task", "implementation",
+                    "--path", "cli/example.py",
+                    "--strict-routing",
+                    "--format", "json",
+                ]
+                read_code, read_payload, read_error = self._invoke([
+                    "read", *routing,
+                ])
+                audit_code, audit_payload, audit_error = self._invoke([
+                    "audit", "--routing-input", *routing,
+                ])
+
+        self.assertEqual((read_code, read_error), (0, ""), read_payload)
+        self.assertEqual((audit_code, audit_error), (0, ""), audit_payload)
+        rendered = read_payload["data"]["rendered_context"]
+        invocation = audit_payload["data"]["invocation"]
+        self.assertIn("Local overlay status: BOUND", rendered)
+        self.assertIn("Audit-local preference.", rendered)
+        self.assertEqual(invocation["rendered_context"], rendered)
+        self.assertEqual(
+            invocation["context_sha256"],
+            read_payload["data"]["context_sha256"],
+        )
 
     def test_blocked_forget_preview_keeps_preview_success_semantics(self):
         with tempfile.TemporaryDirectory() as root:

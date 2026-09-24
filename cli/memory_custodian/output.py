@@ -10,11 +10,11 @@ from __future__ import annotations
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-import hashlib
 import json
 from pathlib import Path
 from typing import Any, Iterator, Mapping
 
+from .context_result import context_sha256
 from .protocol import (
     parse_version,
     read_managed_text,
@@ -185,13 +185,8 @@ def command_result(
         metadata.data, project_root=project_root, memory_dir=memory_dir
     )
     if command == "read":
-        normalized = safe_text.replace("\r\n", "\n").replace("\r", "\n")
-        if normalized and not normalized.endswith("\n"):
-            normalized += "\n"
         data.setdefault("rendered_context", safe_text)
-        data["context_sha256"] = hashlib.sha256(
-            normalized.encode("utf-8")
-        ).hexdigest()
+        data["context_sha256"] = context_sha256(safe_text)
 
     findings = list(metadata.findings)
     has_error = any(item.severity == "ERROR" for item in findings)
@@ -290,12 +285,19 @@ def public_payload(
     *,
     project_root: Path | None = None,
     memory_dir: Path | None = None,
+    authoritative_protocol: bool = False,
 ) -> dict[str, object]:
     """Return one sanitized, validated public envelope."""
 
     result.validate()
     payload = result.payload(output_schema_version=OUTPUT_SCHEMA_VERSION)
-    if project_root is not None and memory_dir is not None:
+    if authoritative_protocol:
+        if (
+            result.protocol_version is not None
+            and parse_version(result.protocol_version) is None
+        ):
+            payload["protocol_version"] = None
+    elif project_root is not None and memory_dir is not None:
         payload["protocol_version"] = _protocol_version_from_project(
             project_root, memory_dir,
         )

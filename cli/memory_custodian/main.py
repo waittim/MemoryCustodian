@@ -463,7 +463,10 @@ def main(argv: list[str] | None = None) -> int:
             )
             print(result.findings[0].message, file=sys.stderr)
         print_json(public_payload(
-            result, project_root=project_root, memory_dir=memory_dir,
+            result,
+            project_root=project_root,
+            memory_dir=memory_dir,
+            authoritative_protocol=args.command in {"audit", "check", "status"},
         ))
         return result.return_code
     try:

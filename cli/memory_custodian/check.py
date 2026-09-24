@@ -41,10 +41,11 @@ from .quality import (
     routing_findings,
 )
 from .local_overlay import (
+    LocalOverlay,
     LocalStatus,
     inspect_overlay,
 )
-from .snapshot import build_snapshot
+from .snapshot import MemorySnapshot, build_snapshot
 from .results import CommandResult, Finding, make_finding, unique_findings, render_findings
 
 
@@ -297,7 +298,48 @@ def _check_protocol_metadata(
     return issues
 
 
-def collect(args) -> CommandResult:
+_OVERLAY_UNSET = object()
+
+
+def overlay_for_snapshot(
+    snapshot: MemorySnapshot,
+    project_root: Path,
+) -> LocalOverlay | None:
+    """Capture the check/audit local view once for a shared snapshot."""
+
+    metadata = snapshot.manifest_contract.as_dict()
+    project_id = (
+        metadata.get("project_id")
+        if (
+            (
+                snapshot.manifest_contract.valid
+                or snapshot.manifest_contract.migration_available
+            )
+            and metadata.get("project_id")
+            and compare_versions(
+                metadata.get("protocol_version", "0.5"),
+                CURRENT_PROTOCOL_VERSION,
+            )
+            == 0
+        )
+        else None
+    )
+    if project_id is None:
+        return None
+    return inspect_overlay(
+        project_root,
+        project_id,
+        shared_ids={entry.entry_id for entry in snapshot.relation_entries},
+        entry_schema_version=snapshot.entry_schema_version,
+    )
+
+
+def collect(
+    args,
+    *,
+    snapshot: MemorySnapshot | None = None,
+    overlay: LocalOverlay | None | object = _OVERLAY_UNSET,
+) -> CommandResult:
     project_root = resolve_project_root(args.project_root)
     memory_dir = resolve_memory_dir(project_root, args.memory_dir)
     if not memory_dir.exists():
@@ -313,7 +355,7 @@ def collect(args) -> CommandResult:
     # Capture every shared managed-memory input once.  All focused checks and
     # the ordinary diagnostics below consume this immutable view; in
     # particular, no preflight may reread manifest.md before this boundary.
-    snapshot = build_snapshot(memory_dir, project_root)
+    snapshot = snapshot or build_snapshot(memory_dir, project_root)
     if getattr(args, "conflicts", False):
         if not snapshot.manifest_contract.valid:
             return CommandResult(
@@ -489,32 +531,9 @@ def collect(args) -> CommandResult:
                 "shorten it semantically and move supporting detail outside the decision entry"
             )
 
-    metadata = snapshot.manifest_contract.as_dict()
-    overlay_project_id = (
-        metadata.get("project_id")
-        if (
-            (
-                snapshot.manifest_contract.valid
-                or snapshot.manifest_contract.migration_available
-            )
-            and metadata.get("project_id")
-        )
-        and compare_versions(
-            metadata.get("protocol_version", "0.5"),
-            CURRENT_PROTOCOL_VERSION,
-        ) == 0
-        else None
-    )
-    overlay = (
-        inspect_overlay(
-            project_root,
-            overlay_project_id,
-            shared_ids={entry.entry_id for entry in snapshot.relation_entries},
-            entry_schema_version=snapshot.entry_schema_version,
-        )
-        if overlay_project_id is not None
-        else None
-    )
+    if overlay is _OVERLAY_UNSET:
+        overlay = overlay_for_snapshot(snapshot, project_root)
+    overlay_project_id = overlay.project_id if isinstance(overlay, LocalOverlay) else None
     local_paths: set[Path] = set()
     if (
         overlay is not None
