@@ -701,29 +701,21 @@ Forgetting transaction 的 journal、prepared output、backup 与 recovery 必�
 * Backup 是 crash recovery mechanism，不是 archive；不能被 reader 或 agent context loading 使用。
 * 即使 managed transaction state 被清理，也不得声称 Git history 或 distributed copies 已被清除。
 
-### 4.4 Erasure audit findings
+### 4.4 Erasure findings and their authority
 
-统一 audit 增加：
+`MC-ERASURE-*` 是共享 finding namespace，不代表每一项都能由普通项目 audit 推断。各 finding 只能由能观察到相应证据的层产生：
 
-```text
-MC-ERASURE-001  Output claims broader erasure than performed
-MC-ERASURE-002  Git history inspection unavailable
-MC-ERASURE-003  Reachable historical copy detected
-MC-ERASURE-004  No reachable copy detected; external copies unverified
-MC-ERASURE-005  Forgotten topic leaked into semantic metadata, generated names, public JSON or error output
-MC-ERASURE-006  Local reset scope exceeds current machine/project overlay
-MC-ERASURE-007  Sensitive repo memory should be minimized or moved to a controlled source
-```
+| Finding | Authority and verification |
+| --- | --- |
+| `MC-ERASURE-001` — Output claims broader erasure than performed | Repository contract check and rendered-operation tests verify source wording and generated output. Project audit cannot infer arbitrary semantic overclaims. A detected runtime contract violation is ERROR. |
+| `MC-ERASURE-002` — Git history inspection unavailable | Invocation audit only, when `--history-exposure` has an explicit `--topic` or `--id`; WARNING/REVIEW. |
+| `MC-ERASURE-003` — Reachable historical copy detected | Invocation audit only, with the same explicit selector; WARNING/REVIEW. |
+| `MC-ERASURE-004` — No reachable copy detected; external copies unverified | Invocation audit only, with the same explicit selector; INFO and always accompanied by the external-copy disclaimer. |
+| `MC-ERASURE-005` — Forgotten topic leaked into semantic metadata, generated names, public JSON or error output | Forget-operation tests and output-boundary checks have the topic only for that operation; a confirmed leak is BLOCKER. Ordinary audit must not retain or guess forgotten topics. |
+| `MC-ERASURE-006` — Local reset scope exceeds current machine/project overlay | Local-reset plan/apply/recovery contract checks verify the operation is limited to the bound local overlay; a scope violation is BLOCKER. A project audit with no reset request cannot infer an intended target. |
+| `MC-ERASURE-007` — Sensitive repo memory should be minimized or moved to a controlled source | Project audit may report deterministic credential/privacy pattern matches. The finding must omit matched values and sensitive filenames; WARNING or ERROR follows the existing scanner severity. It cannot claim to detect every semantically sensitive fact. |
 
-Severity：
-
-* broader-erasure false claim：ERROR。
-* forgotten topic leakage：BLOCKER。
-* unsafe local reset scope：BLOCKER。
-* reachable historical copy：WARNING，因此 overall status 为 REVIEW；不阻止 managed-memory removal，但要求准确提示。
-* inspection unavailable：WARNING，因此 overall status 为 REVIEW，不能显示 PASS。
-* bounded no-match：INFO，可保持 PASS，但必须输出 external-copy disclaimer。
-* sensitive raw content finding：WARNING 或 ERROR，按 security pattern 与 project policy 决定。
+`audit --erasure` runs the existing deterministic privacy/security scan and maps any hits to a generic `MC-ERASURE-007`; a clean scan is reported as clean in `data.erasure_audit`. It does not search for a previously forgotten topic. `audit --history-exposure --topic ...` or `--id ...` remains the explicit entrypoint for findings 002–004. Repository contract and mutation-specific cases are verified by their own tests/checks, not emitted as speculative project findings.
 
 ### 4.5 Documentation language
 
@@ -811,7 +803,7 @@ transactions
 ```
 
 无 task/path 输入的 project audit 不输出某次 invocation 的 `Routing completeness`；它输出 routing configuration validity、substantial-route coverage 与 unreachable hard constraints。
-无 selector 的 `audit` 运行所有不需要外部参数的 core project checks；`--all` 也不凭空推断已遗忘 topic。
+无 selector 的 `audit` 运行所有不需要外部参数的 core project checks；`--all` 也不凭空推断已遗忘 topic。`--erasure` 复用项目 privacy/security scanner 检查有限的已知敏感模式，finding 不包含匹配内容或敏感文件名；语义层面的敏感度仍需人工判断。
 `--history-exposure` 必须由用户重新提供 topic 或稳定 Entry ID，或者引用仍有效的受保护 pending operation；CLI 不保留
 raw forgotten topic 作为未来 audit 输入。`--merge-base` 显式启用 merge-aware conflict checks。
 

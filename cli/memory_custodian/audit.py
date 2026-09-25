@@ -224,6 +224,42 @@ def _local_findings(
     return ()
 
 
+def _erasure_scan_findings(
+    findings: tuple[Finding, ...],
+    *,
+    project_root: Path,
+    memory_dir: Path,
+) -> tuple[Finding, ...]:
+    """Summarize known sensitive-content patterns without echoing their values."""
+
+    sensitive_findings = tuple(
+        item for item in findings
+        if item.code in {"MC-SECURITY-001", "MC-PRIVACY-001"}
+    )
+    if not sensitive_findings:
+        return ()
+    severity = (
+        "ERROR"
+        if any(item.severity == "ERROR" for item in sensitive_findings)
+        else "WARNING"
+    )
+    return (
+        make_finding(
+            "MC-ERASURE-007",
+            severity,
+            "MemoryCustodian-managed memory matched a known sensitive-content pattern; "
+            "review whether the content can be minimized or moved to a controlled source.",
+            path="docs/memory",
+            remediation=(
+                "Review the source locally, retain only necessary abstract constraints, "
+                "and keep sensitive source data in its controlled source."
+            ),
+            project_root=project_root,
+            memory_dir=memory_dir,
+        ),
+    )
+
+
 def _route_invocation(
     args,
     snapshot,
@@ -300,6 +336,9 @@ def _render_text(result: CommandResult) -> None:
         value = result.data.get(key)
         if isinstance(value, (str, int, bool)):
             print(f"{key.replace('_', ' ').capitalize()}: {value}")
+    erasure_audit = result.data.get("erasure_audit")
+    if isinstance(erasure_audit, dict) and erasure_audit.get("status") in {"clean", "findings"}:
+        print(f"Erasure audit: {erasure_audit['status']}")
     print("Findings:")
     if not result.ordered_findings:
         print("- none")
@@ -320,14 +359,6 @@ def collect(args) -> CommandResult:
     project_id = metadata.get("project_id")
     findings: list[Finding] = []
 
-    # Audit owns one immutable shared snapshot and one local overlay capture.
-    # Baseline/focused compatibility checks receive those captures rather
-    # than rebuilding views at different filesystem instants.
-    overlay = check_cmd.overlay_for_snapshot(snapshot, project_root)
-    baseline = check_cmd.collect(
-        _check_args(args), snapshot=snapshot, overlay=overlay,
-    )
-    findings.extend(baseline.findings)
     selectors = {
         name: bool(getattr(args, name, False))
         for name in (
@@ -337,6 +368,32 @@ def collect(args) -> CommandResult:
         )
     }
     run_all = bool(getattr(args, "all", False)) or not any(selectors.values())
+    run_erasure = run_all or selectors["erasure"]
+
+    # Audit owns one immutable shared snapshot and one local overlay capture.
+    # Baseline/focused compatibility checks receive those captures rather
+    # than rebuilding views at different filesystem instants.
+    overlay = check_cmd.overlay_for_snapshot(snapshot, project_root)
+    baseline = check_cmd.collect(
+        _check_args(args), snapshot=snapshot, overlay=overlay,
+    )
+    if run_erasure:
+        # The baseline check already ran the shared privacy/security scanner.
+        # Replace its potentially detailed scan findings with one generic
+        # erasure finding so audit never emits a matched value or its filename.
+        findings.extend(
+            item for item in baseline.findings
+            if item.code not in {"MC-SECURITY-001", "MC-PRIVACY-001"}
+        )
+        erasure_findings = _erasure_scan_findings(
+            baseline.findings,
+            project_root=project_root,
+            memory_dir=memory_dir,
+        )
+        findings.extend(erasure_findings)
+    else:
+        erasure_findings = ()
+        findings.extend(baseline.findings)
     for focused in ("routing", "reachability", "freshness"):
         if run_all or selectors[focused]:
             findings.extend(_quality_findings(
@@ -497,6 +554,8 @@ def collect(args) -> CommandResult:
             for severity in ("INFO", "WARNING", "ERROR", "BLOCKER")
         },
     }
+    if run_erasure:
+        data["erasure_audit"] = {"status": "findings" if erasure_findings else "clean"}
     if invocation is not None:
         data["invocation"] = invocation
     if merge_review_data is not None:

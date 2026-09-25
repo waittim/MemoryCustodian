@@ -277,6 +277,62 @@ class Protocol08Tests(unittest.TestCase):
             self.assertEqual(payload["data"]["audit_schema_version"], 1)
             self.assertIn(payload["status"], {"PASS", "REVIEW"})
 
+    def test_erasure_audit_reports_sensitive_patterns_without_echoing_values(self):
+        with tempfile.TemporaryDirectory() as clean_temporary:
+            clean_root = Path(clean_temporary)
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(main(["init", "--project-root", str(clean_root)]), 0)
+            clean_brief = clean_root / "docs" / "memory" / "brief.md"
+            clean_brief.write_text(
+                "# Project Brief\n\nPurpose:\nErasure audit fixture.\n\n"
+                "Current direction:\nKeep the project memory auditable.\n",
+                encoding="utf-8",
+            )
+            code, output, error = self._capture([
+                "audit", "--erasure", "--project-root", str(clean_root), "--format", "json",
+            ])
+            self.assertEqual(code, 0, output + error)
+            clean_payload = json.loads(output)
+            self.assertEqual(clean_payload["data"]["erasure_audit"], {"status": "clean"})
+            self.assertFalse(any(
+                item["code"] == "MC-ERASURE-007"
+                for item in clean_payload["findings"]
+            ))
+            code, text_output, error = self._capture([
+                "audit", "--erasure", "--project-root", str(clean_root),
+            ])
+            self.assertEqual(code, 0, text_output + error)
+            self.assertIn("Erasure audit: clean", text_output)
+
+        with tempfile.TemporaryDirectory() as sensitive_temporary:
+            sensitive_root = Path(sensitive_temporary)
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(main(["init", "--project-root", str(sensitive_root)]), 0)
+            private_marker = "erasure-audit-private-marker"
+            brief = sensitive_root / "docs" / "memory" / "brief.md"
+            brief.write_text(
+                "# Project Brief\n\nPurpose:\nErasure audit fixture.\n\n"
+                "Current direction:\nKeep the project memory auditable.\n"
+                f"\nCredential candidate: secret={private_marker}\n",
+                encoding="utf-8",
+            )
+            code, output, error = self._capture([
+                "audit", "--erasure", "--project-root", str(sensitive_root), "--format", "json",
+            ])
+            self.assertEqual(code, 0, output + error)
+            payload = json.loads(output)
+            findings = [item for item in payload["findings"] if item["code"] == "MC-ERASURE-007"]
+            self.assertEqual(len(findings), 1, payload)
+            self.assertEqual(findings[0]["severity"], "WARNING")
+            self.assertEqual(payload["data"]["erasure_audit"], {"status": "findings"})
+            self.assertNotIn(private_marker, output + error)
+            code, text_output, error = self._capture([
+                "audit", "--erasure", "--project-root", str(sensitive_root),
+            ])
+            self.assertEqual(code, 0, text_output + error)
+            self.assertIn("MC-ERASURE-007", text_output)
+            self.assertNotIn(private_marker, text_output + error)
+
     def test_staged_migration_requires_explicit_stage(self):
         stream = io.StringIO()
         with contextlib.redirect_stderr(stream):
