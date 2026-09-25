@@ -647,7 +647,11 @@ recovery of an interrupted forgetting transaction
 * `operation_phase` 固定 enum：`preview | applied | no-op | recovered-complete | recovered-rollback`。
 * `active_memory`、`managed_archive`、`local_overlay` 固定 enum：
   `not-targeted | no-match | pending-removal | removed | restored | not-applicable`。
-* `git_worktree_modified` 固定 enum：`no | on-apply | yes`；它表示 managed files 的 working-tree effect，不表示已 commit。
+* `no-match` 仅表示 selector 未命中；`pending-removal` 表示匹配内容仍存在且此操作未移除。`recovered-rollback` 时，若
+  恢复前 target 已全部处于 journaled base content，`pending-removal` 表示内容原样保留；它不代表 transaction 尚未结束或删除已排队。
+  仍需删除时必须重新 preview 并 apply。只有 rollback 将实际不同于 base 的 transaction output 内容恢复为 base 时才能使用 `restored`。
+* `git_worktree_modified` 固定 enum：`no | on-apply | yes`；它表示当前 command 对 shared managed files 的工作树改动，不表示已 commit。
+  recovery 仅清理已 committed transaction state 时为 `no`；local reset 不修改 Git worktree，也为 `no`。
 * `topic_retained_in_new_records`：soft forget 为 true；hard/purge 为 false；不涉及 topic 的 local reset 使用 false，
   并由 command/mode 说明其不适用语义。
 * `git_history_modified` 在 v0.12 所有正常 forgetting/local-reset 操作中固定为 false。

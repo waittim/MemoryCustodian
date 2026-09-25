@@ -76,6 +76,16 @@ use `not-targeted`, `no-match`, `pending-removal`, `removed`, `restored`, or
 `history_check_status` uses `not-requested`, `unavailable`,
 `reachable-copy-detected`, or `no-reachable-copy-detected`.
 
+`no-match` means the selector found no managed unit. `pending-removal` means
+matching content remains and this operation did not remove it; during
+`recovered-rollback`, it can mean every target was still at its journaled base
+content before recovery. It does not mean a transaction remains open or that
+deletion is queued. Start a new forget preview and apply if removal is still
+intended. `restored` means rollback actually returned content from a different
+transaction output to its base content. `git_worktree_modified` reports shared
+managed-file changes made by the current command: recovery that only cleans
+committed transaction state and local reset both report `no`.
+
 `git_history_modified` and `distributed_copies_revoked` are false for normal
 0.12 operations. `unavailable` is WARNING/REVIEW, not PASS. A bounded
 `no-reachable-copy-detected` result is not evidence that dangling objects,

@@ -112,6 +112,19 @@ class RecoveryRecord:
     safe_complete: bool
     safe_rollback: bool
     issues: tuple[str, ...]
+    target_states: tuple["RecoveryTargetState", ...] = ()
+
+
+@dataclass(frozen=True)
+class RecoveryTargetState:
+    """Target state captured during recovery analysis, before any writes."""
+
+    target_id: str
+    root_kind: str
+    path: str
+    state: str
+    output_differs_from_base: bool
+    content_differs_from_base: bool
 
 
 @dataclass(frozen=True)
@@ -1392,6 +1405,7 @@ def analyze_transaction(directory: Path, roots: dict[str, RootBinding]) -> Recov
             (str(exc),),
         )
     issues: list[str] = []
+    target_states: list[RecoveryTargetState] = []
     safe_complete = True
     safe_rollback = True
     phase = journal["phase"]
@@ -1410,6 +1424,23 @@ def analyze_transaction(directory: Path, roots: dict[str, RootBinding]) -> Recov
             continue
         is_base = _matches(path, raw["base_exists"], raw["base_sha256"], raw["base_mode"])
         is_output = _matches(path, raw["output_exists"], raw["output_sha256"], raw["output_mode"])
+        base_signature = (
+            raw["base_exists"], raw["base_sha256"], raw["base_mode"],
+        )
+        output_signature = (
+            raw["output_exists"], raw["output_sha256"], raw["output_mode"],
+        )
+        target_states.append(RecoveryTargetState(
+            target_id=str(raw["target_id"]),
+            root_kind=str(raw["root_kind"]),
+            path=str(raw["path"]),
+            state="base" if is_base else "output" if is_output else "unknown",
+            output_differs_from_base=base_signature != output_signature,
+            content_differs_from_base=(
+                raw["base_exists"] != raw["output_exists"]
+                or raw["base_sha256"] != raw["output_sha256"]
+            ),
+        ))
         prepared_value = raw["prepared_path"]
         prepared_ok = raw["operation"] == "delete"
         if prepared_value is not None:
@@ -1448,6 +1479,7 @@ def analyze_transaction(directory: Path, roots: dict[str, RootBinding]) -> Recov
         journal["transaction_id"], phase,
         journal["command"], directory,
         safe_complete, safe_rollback, tuple(sorted(set(issues))),
+        tuple(target_states),
     )
 
 
@@ -1564,4 +1596,7 @@ def recover_transaction(
     _atomic_journal(directory / "journal.json", journal)
     _cleanup_replacement_temporaries(journal, roots)
     _cleanup_transaction(directory, keep_record=False)
-    return RecoveryRecord(record.transaction_id, str(journal["phase"]), record.command, directory, True, True, ())
+    return RecoveryRecord(
+        record.transaction_id, str(journal["phase"]), record.command, directory,
+        True, True, (), record.target_states,
+    )
