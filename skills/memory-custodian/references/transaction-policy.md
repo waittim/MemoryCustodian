@@ -33,8 +33,8 @@ opaque transaction ID with:
 
 ```bash
 memory-custodian recover --transaction-id <OPAQUE_ID>
-memory-custodian recover --transaction-id <OPAQUE_ID> --complete --apply
-memory-custodian recover --transaction-id <OPAQUE_ID> --rollback --apply
+memory-custodian recover --transaction-id <OPAQUE_ID> --complete
+memory-custodian recover --transaction-id <OPAQUE_ID> --rollback
 ```
 
 Recovery takes the same permanent/bootstrap lock and blocks new mutations.
