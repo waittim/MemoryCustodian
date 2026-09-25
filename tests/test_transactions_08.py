@@ -14,12 +14,14 @@ from unittest import mock
 
 from memory_custodian.locking import ensure_private_directory, write_private_file
 from memory_custodian.mutations import PrivateDeleteMutation, PrivateTextMutation, TextMutation
+from memory_custodian.plans import MutationPlan
 from memory_custodian.transactions import (
     RootBinding,
     RecoveryRequiredError,
     TransactionFailpoint,
     analyze_transaction,
     apply_transaction,
+    apply_plan_transaction,
     binding_directory,
     recover_transaction,
     transaction_inventory,
@@ -151,6 +153,93 @@ class TransactionProtocol08Tests(unittest.TestCase):
                 self.assertEqual(first.read_bytes(), b"new-one\n")
                 self.assertEqual(second.read_bytes(), b"new-two\n")
                 self.assertFalse(directory.exists())
+
+    def test_sensitive_replace_temp_is_topic_free_and_recovery_cleans_only_its_artifact(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        state = root / "state"
+        project = root / "project"
+        memory = project / "docs" / "memory"
+        target = memory / "areas" / "SensitiveTopic.md"
+        target.parent.mkdir(parents=True)
+        target.write_bytes(b"pre-operation content\n")
+
+        child = r"""
+from pathlib import Path
+import os
+import sys
+from memory_custodian import transactions as transaction_module
+from memory_custodian.mutations import TextMutation
+from memory_custodian.plans import MutationPlan
+from memory_custodian.transactions import apply_plan_transaction
+
+project, memory, target = map(Path, sys.argv[1:])
+original_replace = os.replace
+def exit_before_target_replace(source, destination):
+    source = Path(source)
+    destination = Path(destination)
+    if (
+        destination == target
+        and source.parent.parent == target.parent
+        and source.parent.name.startswith(".memory-custodian-")
+        and source.name == "replacement"
+    ):
+        os._exit(73)
+    return original_replace(source, destination)
+
+transaction_module.os.replace = exit_before_target_replace
+plan = MutationPlan(
+    command="forget",
+    arguments={},
+    project_id="legacy-protocol-0.5",
+    protocol_version="0.8",
+    mutations=(TextMutation(target, "redacted"),),
+    project_root=project,
+    sensitive=True,
+    private_context={"privacy_nonce": "0123456789abcdef0123456789abcdef"},
+)
+apply_plan_transaction(plan, memory)
+"""
+        environment = dict(
+            os.environ,
+            XDG_STATE_HOME=str(state),
+            MEMORY_CUSTODIAN_FAILPOINT="",
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", child, str(project), str(memory), str(target)],
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 73, result.stderr)
+        self.assertEqual(target.read_bytes(), b"pre-operation content\n")
+
+        with mock.patch.dict(os.environ, {"XDG_STATE_HOME": str(state)}):
+            binding = binding_directory(project, memory, None)
+            inventory = transaction_inventory(binding)
+            self.assertEqual(len(inventory), 1)
+            self.assertEqual(inventory[0].kind, "unfinished")
+            transaction_id = inventory[0].transaction_id
+            residue = target.parent / f".memory-custodian-{transaction_id}-0001.txn"
+            residue_payload = residue / "replacement"
+            self.assertTrue(residue_payload.is_file())
+            self.assertNotIn("SensitiveTopic", residue.name)
+            self.assertEqual(residue_payload.read_bytes(), b"redacted\n")
+            if os.name != "nt":
+                self.assertEqual(stat.S_IMODE(residue.stat().st_mode), 0o700)
+
+            unrelated = target.parent / f".memory-custodian-{transaction_id}-other.txn"
+            unrelated.write_bytes(b"unrelated temporary file")
+            roots = {"shared": RootBinding("shared", project, "shared")}
+            directory = inventory[0].directory
+            recovered = recover_transaction(directory, roots, action="rollback")
+            self.assertEqual(recovered.phase, "rolled-back")
+            self.assertFalse(residue.exists())
+            self.assertEqual(unrelated.read_bytes(), b"unrelated temporary file")
+            self.assertEqual(target.read_bytes(), b"pre-operation content\n")
+            self.assertEqual(transaction_inventory(binding), ())
 
     def test_bootstrap_recovery_blocks_project_id_write_until_complete(self):
         temporary, state, project, memory = self._fixture()

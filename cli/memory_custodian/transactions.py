@@ -17,7 +17,6 @@ from pathlib import Path
 import re
 import secrets
 import stat
-import tempfile
 import uuid
 
 from .locking import (
@@ -38,6 +37,7 @@ FAILPOINT_ENV = "MEMORY_CUSTODIAN_FAILPOINT"
 
 _ALL_PHASES = UNFINISHED_PHASES | {"committed", "rolled-back"}
 _TRANSACTION_ID_RE = re.compile(r"[0-9a-f]{32}")
+_TARGET_TEMP_ID_RE = re.compile(r"[0-9]{4,}")
 _SHA256_RE = re.compile(r"[0-9a-f]{64}")
 _MODE_RE = re.compile(r"[0-7]{4}")
 _PLAN_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
@@ -320,35 +320,140 @@ def _same_filesystem_replace(
     mode: int,
     *,
     trusted_root: Path | None = None,
+    transaction_id: str | None = None,
+    target_id: str | None = None,
 ) -> None:
+    temporary_directory = _replacement_temporary_path(path, transaction_id, target_id)
+    temporary_file = temporary_directory / "replacement"
     if trusted_root is not None:
         _validate_target_for_root(trusted_root, path)
     _validate_write_target(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary: Path | None = None
+    if trusted_root is not None:
+        _validate_target_for_root(trusted_root, path)
+    else:
+        _validate_write_target(path)
+    active_temporary_directory: Path | None = None
+    descriptor: int | None = None
     try:
-        with tempfile.NamedTemporaryFile(mode="wb", dir=path.parent, prefix=f".{path.name}.", suffix=".txn", delete=False) as handle:
-            temporary = Path(handle.name)
-            handle.write(data)
-            handle.flush()
-            try:
-                os.fsync(handle.fileno())
-            except OSError:
-                pass
-        os.chmod(temporary, mode)
+        temporary_directory.mkdir(mode=0o700)
+        if os.name != "nt":
+            os.chmod(temporary_directory, 0o700)
+        active_temporary_directory = temporary_directory
+        descriptor = os.open(
+            temporary_file,
+            os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+        )
+        view = memoryview(data)
+        offset = 0
+        while offset < len(view):
+            written = os.write(descriptor, view[offset:])
+            if written <= 0:
+                raise OSError("Could not write the complete atomic replacement.")
+            offset += written
+        try:
+            os.fsync(descriptor)
+        except OSError:
+            pass
+        os.close(descriptor)
+        descriptor = None
+        os.chmod(temporary_file, mode)
         if trusted_root is not None:
             _validate_target_for_root(trusted_root, path)
         else:
             _validate_write_target(path)
-        os.replace(temporary, path)
-        temporary = None
+        os.replace(temporary_file, path)
         _fsync_directory(path.parent)
     finally:
-        if temporary is not None:
+        if descriptor is not None:
             try:
-                temporary.unlink()
-            except FileNotFoundError:
+                os.close(descriptor)
+            except OSError:
                 pass
+        if active_temporary_directory is not None:
+            _remove_replacement_temporary_directory(active_temporary_directory)
+
+
+def _replacement_temporary_path(
+    path: Path,
+    transaction_id: str | None,
+    target_id: str | None,
+) -> Path:
+    """Return a topic-free private directory for a same-filesystem replace.
+
+    Journaled replacements use a deterministic name scoped by their opaque
+    transaction and target IDs. Recovery can therefore remove only that
+    transaction's own possible crash residue. Standalone atomic writes use a
+    random name because they have no recovery journal to associate with it.
+    """
+
+    if transaction_id is None and target_id is None:
+        suffix = secrets.token_hex(16)
+    elif (
+        isinstance(transaction_id, str)
+        and _TRANSACTION_ID_RE.fullmatch(transaction_id)
+        and isinstance(target_id, str)
+        and _TARGET_TEMP_ID_RE.fullmatch(target_id)
+        and int(target_id) > 0
+        and target_id == f"{int(target_id):04d}"
+    ):
+        suffix = f"{transaction_id}-{target_id}"
+    else:
+        raise ValueError("Atomic replacement temporary identity is invalid.")
+    return path.parent / f".memory-custodian-{suffix}.txn"
+
+
+def _remove_replacement_temporary_directory(directory: Path) -> None:
+    """Remove only the payload in one reserved replacement directory."""
+
+    try:
+        metadata = directory.lstat()
+    except FileNotFoundError:
+        return
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+        raise RecoveryRequiredError("Transaction temporary state is unsafe.")
+    for child in directory.iterdir():
+        if child.name != "replacement":
+            raise RecoveryRequiredError("Transaction temporary state has unexpected files.")
+        try:
+            child_metadata = child.lstat()
+        except FileNotFoundError:
+            continue
+        if stat.S_ISLNK(child_metadata.st_mode) or not stat.S_ISREG(child_metadata.st_mode):
+            raise RecoveryRequiredError("Transaction temporary state is unsafe.")
+        child.unlink()
+    directory.rmdir()
+    _fsync_directory(directory.parent)
+
+
+def _cleanup_replacement_temporaries(
+    journal: dict[str, object],
+    roots: dict[str, RootBinding],
+) -> None:
+    """Remove only deterministic temporary artifacts owned by this journal."""
+
+    transaction_id = journal.get("transaction_id")
+    if not isinstance(transaction_id, str) or _TRANSACTION_ID_RE.fullmatch(transaction_id) is None:
+        raise RecoveryRequiredError("Transaction temporary identity is invalid.")
+    for target in journal.get("targets", []):
+        if target.get("operation") not in {"replace", "create"}:
+            continue
+        target_id = target.get("target_id")
+        try:
+            path = _target_path(roots, target)
+            root = roots[str(target["root_kind"])].root
+            _validate_target_for_root(root, path)
+            temporary_directory = _replacement_temporary_path(path, transaction_id, target_id)
+            temporary_directory.lstat()
+        except FileNotFoundError:
+            continue
+        except (KeyError, TypeError, ValueError, TransactionError) as exc:
+            raise RecoveryRequiredError("Transaction temporary state is unsafe.") from exc
+        try:
+            _remove_replacement_temporary_directory(temporary_directory)
+        except (OSError, RecoveryRequiredError) as exc:
+            raise RecoveryRequiredError("Transaction temporary state is unsafe.") from exc
 
 
 def _trusted_root_contains(root: Path, path: Path) -> bool:
@@ -1163,6 +1268,8 @@ def apply_transaction(
                     prepared,
                     _mode_value(target.get("output_mode")),
                     trusted_root=roots[str(target["root_kind"])].root,
+                    transaction_id=transaction_id,
+                    target_id=str(target["target_id"]),
                 )
             target["replaced"] = True
             if ordinal == 0:
@@ -1190,6 +1297,7 @@ def apply_transaction(
                 pass
         raise
 
+    _cleanup_replacement_temporaries(journal, roots)
     _cleanup_transaction(directory, keep_record=False)
     return tuple(paths[index] for index in order)
 
@@ -1213,6 +1321,8 @@ def apply_plan_transaction(
         project_id = None
     if plan.command.startswith("init") or not (memory_root / "manifest.md").exists():
         project_id = None
+    # Sensitive replacements need a journal even with one target so recovery
+    # can find and clean a same-directory temporary left by a process crash.
     return apply_transaction(
         project_root=plan.project_root,
         memory_root=memory_root,
@@ -1223,7 +1333,7 @@ def apply_plan_transaction(
         private_mutations=tuple(plan.private_mutations),
         local_root=local_root,
         erasure_scope=erasure_scope,
-        force_journal=force_journal,
+        force_journal=force_journal or bool(plan.sensitive),
     )
 
 
@@ -1361,6 +1471,7 @@ def recover_transaction(
     journal["phase"] = "recovering"
     _atomic_journal(directory / "journal.json", journal)
     _failpoint("while-recovering")
+    _cleanup_replacement_temporaries(journal, roots)
     targets = list(journal["targets"])
     if action == "complete":
         for directory_record in journal["created_directories"]:
@@ -1401,6 +1512,8 @@ def recover_transaction(
                     prepared,
                     _mode_value(target["output_mode"]),
                     trusted_root=trusted_root,
+                    transaction_id=record.transaction_id,
+                    target_id=str(target["target_id"]),
                 )
         journal["phase"] = "committed"
     else:
@@ -1423,6 +1536,8 @@ def recover_transaction(
                     backup,
                     _mode_value(target["base_mode"]),
                     trusted_root=trusted_root,
+                    transaction_id=record.transaction_id,
+                    target_id=str(target["target_id"]),
                 )
             else:
                 _unlink_in_trusted_parent(trusted_root, path)
@@ -1447,5 +1562,6 @@ def recover_transaction(
                 pass
         journal["phase"] = "rolled-back"
     _atomic_journal(directory / "journal.json", journal)
+    _cleanup_replacement_temporaries(journal, roots)
     _cleanup_transaction(directory, keep_record=False)
     return RecoveryRecord(record.transaction_id, str(journal["phase"]), record.command, directory, True, True, ())
