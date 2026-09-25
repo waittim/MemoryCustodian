@@ -766,6 +766,174 @@ apply_plan_transaction(plan, memory)
         self.assertEqual(record.phase, "planned")
         self.assertTrue(record.safe_rollback)
 
+    def test_single_file_with_existing_parent_keeps_atomic_fast_path(self):
+        temporary, state, project, memory = self._fixture()
+        self.addCleanup(temporary.cleanup)
+        local_root = ensure_private_directory(state / "local-root")
+        migration_root = ensure_private_directory(state / "migration-root")
+        project_id = str(uuid.uuid4())
+        shared = memory / "shared.md"
+        local = local_root / "local.md"
+        migration = migration_root / "migration.md"
+
+        with mock.patch.dict(os.environ, {"XDG_STATE_HOME": str(state)}):
+            # Reaching binding_directory means the atomic fast path was
+            # rejected and a journal was created.
+            with mock.patch.object(
+                transaction_module,
+                "binding_directory",
+                side_effect=AssertionError("existing parent should retain fast path"),
+            ):
+                apply_transaction(
+                    project_root=project, memory_root=memory, project_id=None,
+                    command="single-shared", plan_id="existing-parent-shared",
+                    shared_mutations=(TextMutation(shared, "shared"),),
+                )
+                apply_transaction(
+                    project_root=project, memory_root=memory, project_id=project_id,
+                    command="single-local", plan_id="existing-parent-local",
+                    private_mutations=(PrivateTextMutation(local, "local.md", "local"),),
+                    local_root=local_root,
+                )
+                apply_transaction(
+                    project_root=project, memory_root=memory, project_id=None,
+                    command="single-migration", plan_id="existing-parent-migration",
+                    migration_mutations=(PrivateTextMutation(migration, "migration.md", "migration"),),
+                    migration_root=migration_root,
+                )
+
+        self.assertEqual(shared.read_text(encoding="utf-8"), "shared\n")
+        self.assertEqual(local.read_text(encoding="utf-8"), "local")
+        self.assertEqual(migration.read_text(encoding="utf-8"), "migration")
+
+    def test_single_target_missing_parents_are_journaled_and_removed_on_rollback(self):
+        temporary, state, project, memory = self._fixture()
+        self.addCleanup(temporary.cleanup)
+        local_root = ensure_private_directory(state / "local-root")
+        migration_root = ensure_private_directory(state / "migration-root")
+        local_project_id = str(uuid.uuid4())
+        cases = (
+            (
+                "shared-bootstrap",
+                None,
+                project / "docs" / "memory" / "created" / "nested" / "target.md",
+                {"shared_mutations": (TextMutation(
+                    project / "docs" / "memory" / "created" / "nested" / "target.md",
+                    "new shared",
+                ),)},
+                {"shared": RootBinding("shared", project, "shared")},
+                "shared",
+                {"docs/memory/created", "docs/memory/created/nested"},
+            ),
+            (
+                "local-project-binding",
+                local_project_id,
+                local_root / "created" / "nested" / "target.md",
+                {"private_mutations": (PrivateTextMutation(
+                    local_root / "created" / "nested" / "target.md",
+                    "created/nested/target.md",
+                    "new local",
+                ),), "local_root": local_root},
+                {
+                    "shared": RootBinding("shared", project, "shared"),
+                    "local-overlay": RootBinding("local-overlay", local_root, "local"),
+                },
+                "local-overlay",
+                {"created", "created/nested"},
+            ),
+            (
+                "migration-bootstrap",
+                None,
+                migration_root / "created" / "nested" / "target.md",
+                {"migration_mutations": (PrivateTextMutation(
+                    migration_root / "created" / "nested" / "target.md",
+                    "created/nested/target.md",
+                    "new migration",
+                ),), "migration_root": migration_root},
+                {
+                    "shared": RootBinding("shared", project, "shared"),
+                    "migration-state": RootBinding(
+                        "migration-state", migration_root, "migration-state"
+                    ),
+                },
+                "migration-state",
+                {"created", "created/nested"},
+            ),
+        )
+
+        for (
+            name, project_id, target, mutation_kwargs, roots,
+            expected_root_kind, expected_paths,
+        ) in cases:
+            with self.subTest(case=name):
+                with mock.patch.dict(os.environ, {
+                    "XDG_STATE_HOME": str(state),
+                    "MEMORY_CUSTODIAN_FAILPOINT": "after-first-replace",
+                }):
+                    with self.assertRaises(TransactionFailpoint):
+                        apply_transaction(
+                            project_root=project,
+                            memory_root=memory,
+                            project_id=project_id,
+                            command="single-parent-recovery",
+                            plan_id="single-parent-recovery-plan",
+                            **mutation_kwargs,
+                        )
+
+                with mock.patch.dict(os.environ, {
+                    "XDG_STATE_HOME": str(state),
+                    "MEMORY_CUSTODIAN_FAILPOINT": "",
+                }):
+                    binding = binding_directory(project, memory, project_id)
+                    directories = unfinished_transaction_directories(binding)
+                    self.assertEqual(len(directories), 1)
+                    directory = directories[0]
+                    journal = json.loads(
+                        (directory / "journal.json").read_text(encoding="utf-8")
+                    )
+                    created = journal["created_directories"]
+                    self.assertEqual(
+                        {item["root_kind"] for item in created},
+                        {expected_root_kind},
+                    )
+                    self.assertEqual(
+                        {item["path"] for item in created},
+                        expected_paths,
+                    )
+                    self.assertTrue(all(item["created"] for item in created))
+                    self.assertTrue(all(item["identity"] for item in created))
+                    self.assertTrue(analyze_transaction(directory, roots).safe_rollback)
+                    recover_transaction(directory, roots, action="rollback")
+
+                self.assertFalse(target.exists())
+                self.assertFalse(target.parent.exists())
+                self.assertFalse(target.parent.parent.exists())
+
+    def test_rollback_keeps_transaction_created_parent_if_it_is_no_longer_empty(self):
+        temporary, state, project, memory = self._fixture()
+        self.addCleanup(temporary.cleanup)
+        target = memory / "created" / "target.md"
+        directory = self._interrupted(
+            state,
+            project,
+            memory,
+            (TextMutation(target, "new"),),
+            "after-first-replace",
+        )
+        unrelated = target.parent / "unrelated.txt"
+        unrelated.write_text("keep", encoding="utf-8")
+        roots = {"shared": RootBinding("shared", project, "shared")}
+
+        with mock.patch.dict(os.environ, {
+            "XDG_STATE_HOME": str(state),
+            "MEMORY_CUSTODIAN_FAILPOINT": "",
+        }):
+            recover_transaction(directory, roots, action="rollback")
+
+        self.assertFalse(target.exists())
+        self.assertEqual(unrelated.read_text(encoding="utf-8"), "keep")
+        self.assertTrue(target.parent.is_dir())
+
     def test_created_private_directories_are_removed_on_rollback(self):
         temporary, state, project, memory = self._fixture()
         self.addCleanup(temporary.cleanup)

@@ -327,6 +327,15 @@ def _matches(path: Path, exists: bool, digest: str | None, mode: str | None) -> 
     )
 
 
+def _is_existing_directory(path: Path) -> bool:
+    """Return whether ``path`` is already a real directory, without following symlinks."""
+
+    try:
+        return stat.S_ISDIR(path.lstat().st_mode)
+    except FileNotFoundError:
+        return False
+
+
 def _same_filesystem_replace(
     path: Path,
     data: bytes,
@@ -341,7 +350,8 @@ def _same_filesystem_replace(
     if trusted_root is not None:
         _validate_target_for_root(trusted_root, path)
     _validate_write_target(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    # Parent creation belongs to the transaction journal.  The single-file
+    # atomic path is eligible only when this directory already exists.
     if trusted_root is not None:
         _validate_target_for_root(trusted_root, path)
     else:
@@ -1069,15 +1079,27 @@ def apply_transaction(
         _related_project_ids(memory_root, project_id, shared_mutations),
     )
 
-    # A true single-file replacement retains the established atomic writer.
-    if len(paths) == 1 and not force_journal:
-        item = (
+    # A single-file replacement can use the atomic writer only when it has
+    # no planned directory side effect.  Missing parents are journaled so
+    # their creation and rollback are recorded with the target.
+    single_item = (
             shared_mutations[0] if shared_mutations
             else private_mutations[0] if private_mutations
             else private_deletions[0] if private_deletions
             else migration_mutations[0] if migration_mutations
             else migration_deletions[0]
-        )
+    ) if len(paths) == 1 else None
+    single_target_parent_ready = (
+        isinstance(single_item, PrivateDeleteMutation)
+        or (single_item is not None and _is_existing_directory(single_item.path.parent))
+    )
+    if (
+        len(paths) == 1
+        and not force_journal
+        and not private_directories
+        and single_target_parent_ready
+    ):
+        item = single_item
         if isinstance(item, PrivateDeleteMutation):
             if private_deletions:
                 trusted_root = roots["local-overlay"].root
