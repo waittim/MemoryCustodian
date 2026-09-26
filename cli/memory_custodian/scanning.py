@@ -37,6 +37,24 @@ PRIVACY_PATTERNS = (
     ("personal-email", "WARNING", re.compile(r"\b[A-Z0-9._%+-]+@(?!example\.com\b)[A-Z0-9.-]+\.[A-Z]{2,}\b", re.I)),
     ("phone-number", "WARNING", re.compile(r"(?<!\w)(?:\+?\d[\s().-]*){10,15}(?!\w)")),
 )
+UUID_PATTERN = re.compile(
+    r"(?<![0-9a-f])[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}(?![0-9a-f])",
+    re.I,
+)
+
+
+def _matches(line: str, kind: str, pattern: re.Pattern[str]):
+    matches = pattern.finditer(line)
+    if kind != "phone-number":
+        return matches
+    # A generated project UUID can contain 10–15 digits separated by hyphens.
+    # Ignore only phone-pattern spans inside UUIDs; keep real numbers on the
+    # same line detectable and redacted.
+    identities = tuple(match.span() for match in UUID_PATTERN.finditer(line))
+    return (
+        match for match in matches
+        if not any(match.start() < end and match.end() > start for start, end in identities)
+    )
 
 
 def _redact(line: str) -> str:
@@ -44,8 +62,8 @@ def _redact(line: str) -> str:
 
     spans = [
         (match.start(), match.end())
-        for _kind, _severity, pattern in (*SECURITY_PATTERNS, *PRIVACY_PATTERNS)
-        for match in pattern.finditer(line)
+        for kind, _severity, pattern in (*SECURITY_PATTERNS, *PRIVACY_PATTERNS)
+        for match in _matches(line, kind, pattern)
     ]
     if not spans:
         return line.strip()[:120]
@@ -69,7 +87,7 @@ def scan_text(path: Path, text: str) -> list[Finding]:
     for number, line in enumerate(text.splitlines(), start=1):
         for category, patterns in (("security", SECURITY_PATTERNS), ("privacy", PRIVACY_PATTERNS)):
             for kind, severity, pattern in patterns:
-                match = pattern.search(line)
+                match = next(iter(_matches(line, kind, pattern)), None)
                 if match:
                     findings.append(Finding(path, number, kind, severity, _redact(line), category))
     return findings

@@ -18,6 +18,7 @@ from memory_custodian.main import main
 from memory_custodian.migrate import _source_binding
 from memory_custodian.mutations import TextMutation
 from memory_custodian.protocol import parse_markdown_units, project_id_from_manifest
+from memory_custodian.scanning import scan_text
 from memory_custodian.local_overlay import LocalStatus
 from memory_custodian.transactions import (
     RootBinding,
@@ -288,6 +289,14 @@ class Protocol08Tests(unittest.TestCase):
                 "Current direction:\nKeep the project memory auditable.\n",
                 encoding="utf-8",
             )
+            manifest_path = clean_root / "docs" / "memory" / "manifest.md"
+            manifest_text = manifest_path.read_text(encoding="utf-8")
+            generated_id = re.search(r"project_id: ([0-9a-f-]+)", manifest_text).group(1)
+            # This valid UUID contains a digit run that resembles a phone number.
+            manifest_path.write_text(
+                manifest_text.replace(generated_id, "6544fe91-4f71-4011-8190-692386011675"),
+                encoding="utf-8",
+            )
             code, output, error = self._capture([
                 "audit", "--erasure", "--project-root", str(clean_root), "--format", "json",
             ])
@@ -332,6 +341,16 @@ class Protocol08Tests(unittest.TestCase):
             self.assertEqual(code, 0, text_output + error)
             self.assertIn("MC-ERASURE-007", text_output)
             self.assertNotIn(private_marker, text_output + error)
+
+    def test_uuid_phone_overlap_preserves_real_phone_detection(self):
+        project_id = "6544fe91-4f71-4011-8190-692386011675"
+        findings = scan_text(
+            Path("manifest.md"), f"project_id: {project_id}; contact: 415-555-0123"
+        )
+        phone_findings = [item for item in findings if item.kind == "phone-number"]
+        self.assertEqual(len(phone_findings), 1)
+        self.assertIn(project_id, phone_findings[0].preview)
+        self.assertNotIn("415-555-0123", phone_findings[0].preview)
 
     def test_staged_migration_requires_explicit_stage(self):
         stream = io.StringIO()
