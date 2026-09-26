@@ -14,10 +14,10 @@ Evidence:
 Supersedes: MC-DEC-20260801-07000007
 
 Decision:
-Use Protocol 0.8 transactional mutation recovery, unified audit/output contracts, staged migration, and bounded erasure semantics as the pre-1.0 reliability baseline.
+Use Protocol 0.8 for transactional recovery, unified audit/output, staged migration, and bounded erasure before 1.0.
 
 Reason:
-Provides recoverable writes and stable machine contracts without overstating erasure.
+Adds recovery without overstating erasure.
 
 ## MC-DEC-20260827-8f4c2a91 — Protocol 0.7 body fencing
 
@@ -35,25 +35,6 @@ Use `memory-custodian-body-v1`; treat legacy entities literally. Search decoded 
 Reason:
 Preserves parse/write semantics.
 
-## MC-DEC-20260801-07000007 — Protocol 0.7 governance
-
-Status: superseded
-Scope: project
-Subject: MC-SUBJ-20260729-7e5c3a91
-Facet: architecture
-Evidence:
-- user-confirmed
-- repo:cli/memory_custodian/local_overlay.py
-- test:tests/test_local_snapshot.py
-Supersedes: MC-DEC-20260729-ef44900b
-Superseded-By: MC-DEC-20260921-40000001
-
-Decision:
-Use explicit routing and review. Strict reads consume one overlay snapshot; local writes refresh IDs under lock. Defer further governance to 0.8.
-
-Reason:
-Avoids mixed-time reads/stale IDs.
-
 ## MC-DEC-20260721-3578b077 — Support Python 3.10–3.14
 
 Status: active
@@ -61,12 +42,13 @@ Scope: project
 Subject: MC-SUBJ-20260801-10000001
 Facet: version-policy
 Evidence:
-- legacy-unverified
+- repo:.github/workflows/ci.yml
 
 Decision:
-Support and test Python 3.10 through 3.14.
+Support Python 3.10–3.14.
+
 Reason:
-No newer Python feature is required.
+CI tests this range.
 
 ## MC-DEC-20260712-53d9eded — Prefer reachable memory
 
@@ -75,12 +57,13 @@ Scope: project
 Subject: MC-SUBJ-20260801-20000002
 Facet: behavior
 Evidence:
-- legacy-unverified
+- doc:README.md
 
 Decision:
-Prefer concise, reachable, scope-specific memory over chronology.
+Prefer concise, scoped memory reachable through normal task routes.
+
 Reason:
-Reachability determines utility.
+Route access gives it utility.
 
 ## MC-DEC-20260708-ab7efbab — Gemini thin-context support
 
@@ -89,12 +72,13 @@ Scope: project
 Subject: MC-SUBJ-20260801-30000003
 Facet: compatibility
 Evidence:
-- legacy-unverified
+- doc:adapters/gemini/install.md
 
 Decision:
-Support Gemini through thin `GEMINI.md`, `--with-gemini`, and `./install.sh gemini` skill linking.
+Support Gemini with a thin bootstrap, init --with-gemini, and skill install.
+
 Reason:
-Avoid eager durable-memory imports.
+Avoid eager memory imports.
 
 ## MC-DEC-20260705-00552a27 — Targeted active-memory compaction
 
@@ -103,10 +87,12 @@ Scope: project
 Subject: MC-SUBJ-20260801-40000004
 Facet: behavior
 Evidence:
-- legacy-unverified
+- test:tests/test_add_forget_compact.py
+- repo:skills/memory-custodian/references/compaction-policy.md
 
 Decision:
-Provide preview-first `compact --target <file>` with bullet dedupe, reviewed H2 archival, and `status`/`check` guidance.
+Use preview-first compact --target; review exact dedupe and H2 archival, then run status/check.
+
 Reason:
 Keep maintenance offline and reviewable.
 
@@ -117,12 +103,13 @@ Scope: project
 Subject: MC-SUBJ-20260801-50000005
 Facet: compatibility
 Evidence:
-- legacy-unverified
+- test:tests/test_plugin_package.py
 
 Decision:
-Support Claude Code through `.claude-plugin/`, shared skills/bin, `--plugin-dir` tests, and `./install.sh claude`.
+Support Claude via .claude-plugin/, shared skills/bin, and install.sh claude.
+
 Reason:
-Provide a verifiable install surface.
+Keeps install verifiable.
 
 ## MC-DEC-20260704-342e05b7 — Offline skill evals first
 
@@ -131,9 +118,10 @@ Scope: project
 Subject: MC-SUBJ-20260801-60000006
 Facet: behavior
 Evidence:
-- legacy-unverified
+- repo:scripts/check-skill-evals.py
 
 Decision:
-Maintain offline skill scenarios and a checker before live-agent evals.
+Run offline skill scenarios and a checker before live-agent evals.
+
 Reason:
-Avoid a heavyweight harness.
+Avoid heavyweight tools.

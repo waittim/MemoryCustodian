@@ -10,7 +10,7 @@ Evidence:
 - repo:pyproject.toml
 
 Constraint:
-Core memory operations must work without network access. Skill, plugin, and CLI distribution may use the network.
+Core memory operations must be network-independent; distribution may use the network.
 
 ## MC-CON-20260921-10000002 — Repo-native plain-text storage
 
@@ -22,7 +22,7 @@ Evidence:
 - user-confirmed
 
 Constraint:
-Store project memory as reviewable Markdown under `docs/`, defaulting to `docs/memory/`; do not introduce RAG, embeddings, vector databases, or cloud memory into the default architecture.
+Keep project memory as reviewable Markdown under docs/, defaulting to docs/memory/; keep RAG, embeddings, vector databases, and cloud memory out of the default architecture.
 
 ## MC-CON-20260921-10000003 — Cross-agent compatibility
 
@@ -34,7 +34,7 @@ Evidence:
 - repo:adapters
 
 Constraint:
-The protocol must remain reusable across Codex, Claude Code, Gemini, and generic agents.
+Keep the protocol reusable across Codex, Claude Code, Gemini, and generic agents.
 
 ## MC-CON-20260921-10000010 — Transactional multi-file mutation
 
@@ -46,7 +46,7 @@ Evidence:
 - repo:cli/memory_custodian/transactions.py
 
 Constraint:
-Multi-file commands must precompute and validate plans, use private crash-recovery journals, and refuse silent partial completion.
+Precompute and validate multi-file plans, keep private recovery journals, and refuse silent partial completion.
 
 ## MC-CON-20260921-10000011 — No protocol downgrade
 
@@ -58,4 +58,4 @@ Evidence:
 - repo:cli/memory_custodian/protocol.py
 
 Constraint:
-Repair and migration never downgrade a newer project protocol or accept an unparseable protocol version.
+Repair and migration never downgrade newer protocols or accept malformed versions.
