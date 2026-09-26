@@ -267,6 +267,51 @@ class RecoveryErasureScopeTests(unittest.TestCase):
         self.assertEqual(first.read_text(encoding="utf-8"), "private one\n")
         self.assertEqual(second.read_text(encoding="utf-8"), "private two\n")
 
+    def test_local_reset_completion_removes_journaled_directories(self):
+        for failpoint in (
+            "after-committed-before-cleanup",
+            "after-first-removed-directory",
+        ):
+            with self.subTest(failpoint=failpoint):
+                state, project, memory, project_id = self._fixture(with_project_id=True)
+                assert project_id is not None
+                with mock.patch.dict(os.environ, {"XDG_STATE_HOME": str(state)}, clear=False):
+                    with redirect_stdout(StringIO()):
+                        self.assertEqual(main([
+                            "local", "link", "--project-root", str(project),
+                        ]), 0)
+                    overlay = overlay_directory(project_id)
+                    self.assertTrue((overlay / "profiles").is_dir())
+                    preview = StringIO()
+                    with redirect_stdout(preview):
+                        self.assertEqual(main([
+                            "local", "reset", "--project-root", str(project),
+                            "--format", "json",
+                        ]), 0)
+                    plan_id = json.loads(preview.getvalue())["data"]["plan"]["plan_id"]
+                    with mock.patch.dict(os.environ, {"MEMORY_CUSTODIAN_FAILPOINT": failpoint}):
+                        with redirect_stdout(StringIO()):
+                            self.assertNotEqual(main([
+                                "local", "reset", "--project-root", str(project),
+                                "--apply", "--confirm-plan", plan_id,
+                            ]), 0)
+                    transaction = unfinished_transaction_directories(
+                        binding_directory(project, memory, project_id)
+                    )
+                    self.assertEqual(len(transaction), 1)
+                    payload = self._recover_json(
+                        state, project, transaction[0].name, "complete",
+                    )
+                    self.assertEqual(payload["data"]["erasure_scope"]["local_overlay"], "removed")
+                    self.assertFalse(overlay.exists())
+                    self.assertFalse((overlay.parent / "bindings.json").exists())
+                    status = StringIO()
+                    with redirect_stdout(status):
+                        self.assertEqual(main([
+                            "local", "status", "--project-root", str(project),
+                        ]), 0)
+                    self.assertIn("DISABLED", status.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()

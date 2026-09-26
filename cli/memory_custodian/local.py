@@ -292,25 +292,23 @@ def run(args) -> int:
             if locked_blockers or locked_overlay.directory is None:
                 raise ValueError("Local overlay is no longer safe to reset.")
             targets = _reset_targets(locked_overlay.directory)
+            child_directories = tuple(
+                item for item in locked_overlay.directory.rglob("*") if item.is_dir()
+            )
+            directories = tuple(
+                sorted(
+                    (locked_overlay.directory, *child_directories),
+                    key=lambda item: item.as_posix(),
+                )
+            )
             apply_transaction(
                 project_root=project_root, memory_root=memory_dir,
                 project_id=project_id, command="local-reset", plan_id=plan_id,
                 private_deletions=targets, local_root=locked_overlay.directory.parent,
+                remove_directories=directories,
                 erasure_scope=reset_scope.canonical(),
                 force_journal=True,
             )
-        for path in sorted(
-            (item for item in overlay.directory.rglob("*") if item.is_dir()),
-            key=lambda item: len(item.parts), reverse=True,
-        ):
-            try:
-                path.rmdir()
-            except OSError:
-                pass
-        try:
-            overlay.directory.rmdir()
-        except OSError:
-            pass
         render_scope(ErasureScope(
             erasure_scope_schema_version=1,
             operation_phase="applied",

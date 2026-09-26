@@ -5,7 +5,7 @@ Code, Gemini, and generic agents differ only in how their short entry file
 invokes that workflow; an adapter is not a second router, Subject registry,
 conflict engine, or erasure implementation.
 
-Every adapter must communicate the following sequence:
+Every adapter MUST communicate the following sequence:
 
 1. Locate `docs/memory/manifest.md`; read it and `brief.md` before substantial
    work. Missing manifest means incomplete setup; do not infer routes.
@@ -65,8 +65,8 @@ Keep `AGENTS.md` short and point at `docs/memory/`. Use
 ### Claude Code
 
 Keep `CLAUDE.md` short and point at `docs/memory/`. Use
-`adapters/claude-code/CLAUDE.snippet.md`; optional command files may expose
-status, compact, forget, audit, and recovery commands but must not redefine
+`adapters/claude-code/CLAUDE.snippet.md`; optional command files MAY expose
+status, compact, forget, audit, and recovery commands but MUST NOT redefine
 the protocol.
 
 ### Gemini
@@ -78,7 +78,7 @@ through the manifest at task time. Use `adapters/gemini/GEMINI.snippet.md`.
 
 Use `adapters/generic/agent-instructions.md` when no platform-specific entry
 surface exists. A missing memory directory is not an error; a memory
-directory without `manifest.md` is incomplete and must not be routed by
+directory without `manifest.md` is incomplete and MUST NOT be routed by
 filename guesses.
 
 The static adapter checker verifies this shared contract. It checks static

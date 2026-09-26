@@ -9,6 +9,7 @@ import subprocess
 from .entries import (
     StructuredEntry,
     parse_entry_inventory,
+    requires_structural_identity,
     structured_relation_issues,
 )
 from .reconciliations import (
@@ -114,12 +115,10 @@ def _entries(
     prefix = memory_relative.rstrip("/") + "/"
     for entry in result:
         relative = entry.path.as_posix().removeprefix(prefix)
-        code = entry.entry_id.split("-", 2)[1].upper()
         if (
             entry.status == "active"
-            and code in {"DEC", "CON", "DNU", "AREA"}
             and not relative.startswith("archive/")
-            and not relative.startswith(("rules/", "profiles/"))
+            and requires_structural_identity(entry, relative)
         ):
             for issue in active_structural_operand_issues(entry, subject_map):
                 if issue.field in {"Subject", "Facet"}:

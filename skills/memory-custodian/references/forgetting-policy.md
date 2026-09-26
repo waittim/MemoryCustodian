@@ -41,7 +41,7 @@ managed units and may retain a topic-bearing guard. Hard removes matching active
 in new logs or tombstones. Purge additionally searches the managed `archive/`.
 
 All modes leave Git history and reachable objects unchanged. They do not revoke existing clones, forks, backups,
-caches, or external copies, and they do not commit working-tree changes. Preview and apply output must be rendered
+caches, or external copies, and they do not commit working-tree changes. Preview and apply output MUST be rendered
 from the same `ErasureScope` result and state these boundaries explicitly.
 
 ## Preview and broad-match safety
@@ -52,7 +52,7 @@ than four non-whitespace characters, or a plan matching multiple semantic units,
 
 Matching is literal and case-insensitive. Delete whole H2 entries or top-level bullet units, never isolated matching lines.
 
-If a match occurs in a plain body or preamble, preview it as `Manual rewrite required`. `--apply` must refuse before the first write until an Agent or user rewrites that content semantically. `--allow-broad-match` does not bypass this blocker.
+If a match occurs in a plain body or preamble, preview it as `Manual rewrite required`. `--apply` MUST refuse before the first write until an Agent or user rewrites that content semantically. `--allow-broad-match` does not bypass this blocker.
 
 Treat `do-not-use.md` with tombstone-aware logic rather than as an ordinary deletion target. Hard mode upgrades matching topic-bearing tombstones to one generic guard; purge removes them.
 

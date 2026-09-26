@@ -26,14 +26,14 @@ memory-custodian migrate --finalize --apply --confirm-plan <FINALIZE_PLAN>
 Prepare records source protocol/schema, project/bootstrap identity, normalized
 root, bound local-overlay snapshot, and source digests in protected
 repo-external migration state. It leaves shared protocol metadata unchanged.
-It may perform only mechanically provable transformations and emits a
+It MAY perform only mechanically provable transformations and emits a
 per-entry checklist for Evidence, Subject, Facet, relations, and
 canonicalization blockers. It never invents Evidence, Subject equivalence,
 Facet assignments, exceptions, or reconciliations.
 
 ## Manual interval and canonicalize
 
-Canonicalize is repeatable and preview-first. It may convert an unambiguous
+Canonicalize is repeatable and preview-first. It MAY convert an unambiguous
 legacy unit but requires explicit type, title, Evidence, Scope, Subject, and
 Facet for semantic promotion. Ambiguous units remain unchanged and block
 apply. Target-only Entry schema 3 metadata is held in protected migration

@@ -441,6 +441,7 @@ def collect(args) -> CommandResult:
     transaction_codes = {
         "unfinished": ("MC-TRANSACTION-001", "Unfinished transaction requires recovery."),
         "committed-cleanup": ("MC-TRANSACTION-001", "Committed transaction cleanup is pending."),
+        "rolled-back-cleanup": ("MC-TRANSACTION-001", "Rolled-back transaction cleanup is pending."),
         "malformed": ("MC-TRANSACTION-002", "Malformed transaction journal requires manual recovery."),
         "unsupported": ("MC-TRANSACTION-002", "Unsupported transaction schema requires manual recovery."),
         "orphan": ("MC-TRANSACTION-003", "Orphan transaction state requires manual recovery."),

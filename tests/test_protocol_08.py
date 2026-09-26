@@ -61,6 +61,40 @@ class Protocol08Tests(unittest.TestCase):
         parsed = parse_structured_entries(Path("areas/backend.md"), text, entry_schema_version="3")
         self.assertEqual(parsed[0].fields["Entry-Type"], "decision")
 
+    def test_rule_and_profile_entries_are_not_structural_owners_in_audit(self):
+        with tempfile.TemporaryDirectory() as temporary, tempfile.TemporaryDirectory() as state:
+            root = Path(temporary)
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": state}):
+                code, output, error = self._capture(["init", "--project-root", str(root)])
+                self.assertEqual(code, 0, output + error)
+                memory = root / "docs" / "memory"
+                (memory / "brief.md").write_text(
+                    "# Project Brief\n\nPurpose:\nAudit workflow entries.\n\n"
+                    "Current direction:\nKeep agent instructions scoped.\n",
+                    encoding="utf-8",
+                )
+                for kind, name in (("rule", "output"), ("profile", "review")):
+                    code, output, error = self._capture([
+                        "add", "Keep the workflow concise.", "--type", kind,
+                        "--name", name, "--evidence", "user-confirmed",
+                        "--project-root", str(root),
+                    ])
+                    self.assertEqual(code, 0, output + error)
+                    entry_text = (memory / f"{kind}s" / f"{name}.md").read_text(encoding="utf-8")
+                    self.assertIn(f"Entry-Type: {kind}", entry_text)
+                    self.assertNotIn("\nSubject:", entry_text)
+                    self.assertNotIn("\nFacet:", entry_text)
+
+                for command in ("check", "audit"):
+                    args = [command, "--project-root", str(root), "--format", "json"]
+                    if command == "audit":
+                        args.append("--all")
+                    code, output, error = self._capture(args)
+                    self.assertEqual(code, 0, output + error)
+                    payload = json.loads(output)
+                    self.assertEqual(payload["status"], "PASS", payload)
+                    self.assertEqual(payload["findings"], [], payload)
+
     def test_transaction_crash_can_rollback_exact_preimages(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

@@ -21,7 +21,7 @@ neither; `exclusive-group` is an unknown key and therefore `INVALID`. `INVALID` 
 input violates the protocol.
 
 Use `--strict-routing` before substantial planning, implementation, debugging, or review. An incomplete inspection
-may show the shared safety baseline, but it is not an approved context pack.
+MAY show the shared safety baseline, but it is not an approved context pack.
 
 ## Explain
 

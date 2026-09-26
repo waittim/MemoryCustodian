@@ -43,7 +43,7 @@ distinct condition. The producer supplies the severity, so a code such as
 | Entry/evidence/relation | `MC-ENTRY-001` malformed or ambiguous canonical Entry; `002` active legacy Entry; `MC-EVIDENCE-001` missing/admission-invalid Evidence; `002` malformed or unavailable Evidence; `MC-RELATION-001` missing/invalid relation target; `002` missing reciprocal lifecycle relation; `003` relation cycle. |
 | Transaction/migration/local | `MC-TRANSACTION-001` unfinished or cleanup-pending journal; `002` malformed/unsupported journal; `003` orphan private transaction state; `004` unsafe recovery state. `MC-MIGRATION-001` canonicalization blocker; `002` migration/source binding drift. `MC-LOCAL-001` unbound or wrong-root overlay; `002` overlay cannot safely join a schema transition. |
 | Budget/privacy/security | `MC-BUDGET-001` budget is near or over its limit; `MC-PRIVACY-001` machine-specific or personal-data pattern; `MC-SECURITY-001` credential-like or security-sensitive pattern. These scanners are bounded diagnostics, not complete detection. |
-| Erasure/history | `MC-ERASURE-001` output claims broader erasure than performed; `002` history inspection unavailable; `003` reachable historical copy detected; `004` bounded inspection found no reachable copy (INFO only and not proof of absence); `005` forgotten topic leaked into semantic metadata, generated names, public JSON, or public errors; `006` local-reset scope exceeds the current project/machine overlay; `007` sensitive repository memory should be minimized or moved to a controlled source. |
+| Erasure/history | `MC-ERASURE-001` output claims broader erasure than performed; `002` history inspection unavailable; `003` reachable historical copy detected; `004` bounded inspection found no reachable copy (INFO only and not proof of absence); `005` forgotten topic leaked into semantic metadata, generated names, public JSON, or public errors; `006` local-reset scope exceeds the current project/machine overlay; `007` sensitive repository memory SHOULD be minimized or moved to a controlled source. |
 
 The implementation also exposes these stable compatibility diagnostics:
 `MC-FRESH-001` unsafe/missing Evidence source, `002` revision drift,
@@ -84,8 +84,9 @@ memory-custodian check --conflicts --merge-base origin/main  # when Git/ref is a
 ## Freshness
 
 - Merge duplicates and update or mark superseded decisions instead of appending contradictions.
-- Verify each managed active decision, constraint, rejected approach, and area entry has an active Subject and a
-  valid Facet.
+- Verify each managed active decision, constraint, rejected approach, and area hard-memory entry has an active
+  Subject and a valid Facet. Formal rule/profile workflow entries and `MC-TOMB` erasure guards MUST NOT trigger
+  missing-Subject/Facet findings or structural ownership checks.
 - Reject a second active owner for the same normalized Scope, Subject ID, and Facet.
 - Audit exact alias and canonical-reference ownership without claiming that fuzzy name similarity proves equality.
 - Refresh the brief when project direction changes or several decisions alter the system shape.
@@ -109,14 +110,14 @@ memory-custodian check --conflicts --merge-base origin/main  # when Git/ref is a
 - Require relationship reconciliation records to identify exactly two Entries. For `distinct`, require every
   referenced active Entry to have a different `Scope + Subject + Facet`; it cannot override an exact owner conflict.
 - Use one active structural-operand validator across conflict analysis, reconciliation, and governance previews:
-  each current owner must be active, have valid scope and Facet, and resolve to exactly one active Subject.
+  each current owner MUST be active, have valid scope and Facet, and resolve to exactly one active Subject.
 - Apply lifecycle-aware variants for historical relations: validate the active supersession replacement; for
   Subject merge, allow only a superseded historical source's merged Subject and validate the active target and
   matching identity. Do not treat promoted Provisional-Subject/Provisional-Facet as ordinary reconciliation input.
 - In merge review, validate reconciliation records against each branch's own Entry and Subject graph. Do not reuse
   a syntax-only or merge-base acknowledgement to suppress review of later changes, and exempt only exact validated
   Entry pairs rather than arbitrary subsets of a record.
-- Governance preview Plan IDs must bind the exact protocol/schema metadata and every manifest, Entry, Subject, path,
+- Governance preview Plan IDs MUST bind the exact protocol/schema metadata and every manifest, Entry, Subject, path,
   and reconciliation dependency used in the rendered result. Reject duplicate protocol scalar fields before Entry
   lookup instead of accepting the last value. Require exactly one normalized Protocol H2 section, and reject empty
   or malformed protocol bullets rather than skipping them. Do not claim a resulting governance state while blockers
@@ -126,14 +127,14 @@ memory-custodian check --conflicts --merge-base origin/main  # when Git/ref is a
   shared gate rather than routing either case with legacy grammar. A
   present section requires a valid version, and Protocol 0.8 requires complete schema, registry, identity, and policy
   fields. Validate recovery candidates before preview and again before apply; reject ambiguous sections for manual
-  repair. Exercise a manifest-state by public-entrypoint matrix: preview and local commands must reject before Plan
-  IDs or seeds, while status and every focused check must report the same invalid contract.
+  repair. Exercise a manifest-state by public-entrypoint matrix: preview and local commands MUST reject before Plan
+  IDs or seeds, while status and every focused check MUST report the same invalid contract.
   Include unsafe routes, fenced and indented heading lookalikes, a genuinely bound local overlay, valid operand IDs,
   structural operand corruption, Plan dependency mutations, recovery failures after legacy-entry discovery, and all
   disabled/unbound/bound/multi-root local-reset states.
 - Exercise Markdown-equivalent boundaries: Setext and attached-hash Protocol lookalikes are invalid, fenced and HTML
   comment examples are inert, protocol metadata cannot be indented code, task H3 routes require exactly one canonical
-  parent, and duplicate Optional module indexes fail closed. Private-state tests must include symlinks and non-UTF-8
+  parent, and duplicate Optional module indexes fail closed. Private-state tests MUST include symlinks and non-UTF-8
   files, while recovery tests assert that operand failures precede all pending seed creation.
 - Include code-span comment markers, backtick and tilde fence-info asymmetry, unknown task H3s, repeated optional
   subsections, sentinel/declaration conflicts, and declarations before a canonical subsection. Assert migration reads
@@ -158,7 +159,7 @@ memory-custodian check --conflicts --merge-base origin/main  # when Git/ref is a
   candidates, and Protocol 0.5 multiline bullet writes. Fail before shared mutation or private seed creation, and
   require ambiguous migration units to remain unchanged with an apply blocker.
 - Test mixed H2/legacy-bullet ordering through forget, compaction, indexing, and budget packing; protocol list bullets
-  must stay attached to their H2 owner. Assert newest-first insertion ahead of legacy bullets.
+  MUST stay attached to their H2 owner. Assert newest-first insertion ahead of legacy bullets.
 - Inject valid colliding pending Subject, hard-Tombstone, and migration suffix seeds, including two IDs created by one
   migration plan. Test case-only soft-forget repeats, duplicate owners outside do-not-use.md, explicit zero-write
   output, and blank or duplicate Promotion-Requirement fields.

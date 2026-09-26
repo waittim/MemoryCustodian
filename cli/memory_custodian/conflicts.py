@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
-from .entries import StructuredEntry
+from .entries import StructuredEntry, requires_structural_identity
 from .structural import active_structural_operand_issues, subject_index
 from .snapshot import MemorySnapshot, build_snapshot
 
@@ -161,7 +161,12 @@ def analyze_snapshot(
     by_subject_facet: dict[tuple[str, str], list[StructuredEntry]] = {}
 
     for entry in entries:
-        if entry.status == "active" and entry.fields.get("Subject"):
+        relative = entry.path.relative_to(memory_dir).as_posix()
+        if (
+            entry.status == "active"
+            and entry.fields.get("Subject")
+            and requires_structural_identity(entry, relative)
+        ):
             operand_issues = active_structural_operand_issues(entry, structural_subjects)
             if operand_issues:
                 for issue in operand_issues:
@@ -176,16 +181,12 @@ def analyze_snapshot(
                     ))
         if entry.status != "active":
             continue
-        code = entry.entry_id.split("-", 2)[1].upper()
         # MC-TOMB is a content-minimized erasure guard, not a structural
         # invariant owner. Requiring it to retain a Subject would defeat hard
         # forgetting; ordinary DNU entries remain governed owners.
-        if code not in {"DEC", "CON", "DNU", "AREA"}:
+        if not requires_structural_identity(entry, relative):
             continue
-        relative = entry.path.relative_to(memory_dir).as_posix()
         if selected_modules is not None and relative not in selected_modules:
-            continue
-        if relative.startswith(("rules/", "profiles/")):
             continue
         subject_id = entry.fields.get("Subject", "")
         facet = entry.fields.get("Facet", "")

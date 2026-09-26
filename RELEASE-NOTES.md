@@ -16,6 +16,11 @@ _Candidate for package version 0.12.0; release date TBD. This is a working draft
   `MC-TOMB` remains an erasure guard rather than a Subject/Facet structural
   owner. `subjects.md` and on-demand `reconciliations.md` remain authorities
   for identity and governance without entering ordinary context packs.
+- Formal `rule` and `profile` workflow entries are excluded from
+  Subject/Facet ownership diagnostics. A clean project containing entries
+  created by these commands now passes project audit without a legacy-entry
+  warning; the protocol references use explicit conformance language for
+  this boundary.
 
 ### Crash recovery and mutation safety
 
@@ -29,6 +34,11 @@ _Candidate for package version 0.12.0; release date TBD. This is a working draft
   reports unfinished, malformed, or orphaned state; safe complete/rollback
   never overwrites an external edit and protected pre-state bytes stay out of
   reader context, audit payloads, public JSON, and errors.
+- Journaled local-reset directory cleanup now resumes after an interrupted
+  commit and refuses new external children. Interrupted rollback cleanup also
+  remains recoverable; the chosen recovery action is durable and cannot be
+  reversed on retry. Terminal cleanup rechecks the final target and directory
+  state before deleting protected recovery artifacts.
 - This is crash recovery, not database ACID semantics, semantic conflict
   resolution, or a guarantee about arbitrary filesystem races.
 

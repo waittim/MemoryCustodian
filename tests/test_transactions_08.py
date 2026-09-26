@@ -23,6 +23,7 @@ from memory_custodian.transactions import (
     apply_transaction,
     apply_plan_transaction,
     binding_directory,
+    ensure_no_unfinished,
     recover_transaction,
     transaction_inventory,
     unfinished_transaction_directories,
@@ -148,6 +149,27 @@ class TransactionProtocol08Tests(unittest.TestCase):
         ):
             self.assertFalse(transaction_module._modes_match("0666", "0644"))
 
+    def test_local_reset_directory_mode_uses_windows_basic_semantics(self):
+        temporary, state, project, memory = self._fixture()
+        self.addCleanup(temporary.cleanup)
+        local_root = ensure_private_directory(state / "local-root")
+        overlay = ensure_private_directory(local_root / "local")
+        overlay.chmod(0o755)
+        target = overlay / "preferences.md"
+        target.write_bytes(b"private preference\n")
+        with mock.patch.dict(os.environ, {"XDG_STATE_HOME": str(state)}):
+            with mock.patch.object(
+                transaction_module, "_platform_mode_semantics", return_value="windows-basic"
+            ):
+                apply_transaction(
+                    project_root=project, memory_root=memory, project_id=None,
+                    command="local-reset", plan_id="windows-reset-plan",
+                    private_deletions=(PrivateDeleteMutation(target, "local/preferences.md"),),
+                    local_root=local_root, remove_directories=(overlay,),
+                    force_journal=True,
+                )
+        self.assertFalse(overlay.exists())
+
     def test_complete_after_first_replace_and_committed_cleanup_are_safe(self):
         for failpoint, expected_phase in (
             ("after-first-replace", "failed"),
@@ -177,6 +199,65 @@ class TransactionProtocol08Tests(unittest.TestCase):
                 self.assertEqual(first.read_bytes(), b"new-one\n")
                 self.assertEqual(second.read_bytes(), b"new-two\n")
                 self.assertFalse(directory.exists())
+
+    def test_committed_cleanup_requires_targets_to_still_match_output(self):
+        temporary, state, project, memory = self._fixture()
+        self.addCleanup(temporary.cleanup)
+        target = memory / "target.md"
+        target.write_bytes(b"old\n")
+        directory = self._interrupted(
+            state, project, memory, (TextMutation(target, "new"),),
+            "after-committed-before-cleanup", force_journal=True,
+        )
+        roots = {"shared": RootBinding("shared", project, "shared")}
+        self.assertEqual(target.read_bytes(), b"new\n")
+        target.write_bytes(b"old\n")
+        with mock.patch.dict(os.environ, {"XDG_STATE_HOME": str(state)}):
+            record = analyze_transaction(directory, roots)
+            self.assertFalse(record.safe_complete)
+            with self.assertRaises(RecoveryRequiredError):
+                recover_transaction(directory, roots, action="complete")
+            self.assertTrue((directory / "journal.json").exists())
+            target.write_bytes(b"new\n")
+            with mock.patch.object(
+                transaction_module, "_cleanup_replacement_temporaries",
+                side_effect=lambda *_: target.write_bytes(b"old\n"),
+            ):
+                with self.assertRaises(RecoveryRequiredError):
+                    recover_transaction(directory, roots, action="complete")
+            self.assertTrue((directory / "journal.json").exists())
+            target.write_bytes(b"new\n")
+            recover_transaction(directory, roots, action="complete")
+        self.assertFalse(directory.exists())
+
+    def test_committed_directory_only_cleanup_requires_directory_to_exist(self):
+        temporary, state, project, memory = self._fixture()
+        self.addCleanup(temporary.cleanup)
+        local_root = ensure_private_directory(state / "local-root")
+        created = local_root / "local"
+        with mock.patch.dict(os.environ, {
+            "XDG_STATE_HOME": str(state),
+            "MEMORY_CUSTODIAN_FAILPOINT": "after-committed-before-cleanup",
+        }):
+            with self.assertRaises(TransactionFailpoint):
+                apply_transaction(
+                    project_root=project, memory_root=memory, project_id=None,
+                    command="fixture", plan_id="directory-plan",
+                    private_directories=(created,), local_root=local_root,
+                )
+            directory = unfinished_transaction_directories(
+                binding_directory(project, memory, None)
+            )[0]
+            roots = {
+                "shared": RootBinding("shared", project, "shared"),
+                "local-overlay": RootBinding("local-overlay", local_root, "local"),
+            }
+            created.rmdir()
+            record = analyze_transaction(directory, roots)
+            self.assertFalse(record.safe_complete)
+            with self.assertRaises(RecoveryRequiredError):
+                recover_transaction(directory, roots, action="complete")
+            self.assertTrue((directory / "journal.json").exists())
 
     def test_sensitive_replace_temp_is_topic_free_and_recovery_cleans_only_its_artifact(self):
         temporary = tempfile.TemporaryDirectory()
@@ -751,6 +832,7 @@ apply_plan_transaction(plan, memory)
 
         directory, roots, journal, watched = self._prepared_replace_fixture()
         journal["phase"] = "recovering"
+        journal["recovery_action"] = "rollback"
         self._write_journal(directory, journal)
         for artifact in (directory / "targets").iterdir():
             artifact.unlink()
@@ -1224,10 +1306,181 @@ apply_plan_transaction(plan, memory)
                     recover_transaction(directory, roots, action="rollback")
             journal = json.loads((directory / "journal.json").read_text(encoding="utf-8"))
             self.assertEqual(journal["phase"], "recovering")
+            self.assertEqual(journal["recovery_action"], "rollback")
+            with self.assertRaises(RecoveryRequiredError):
+                recover_transaction(directory, roots, action="complete")
             with mock.patch.dict(os.environ, {"MEMORY_CUSTODIAN_FAILPOINT": ""}, clear=False):
                 recover_transaction(directory, roots, action="rollback")
         self.assertEqual(first.read_text(encoding="utf-8"), "old-first\n")
         self.assertEqual(second.read_text(encoding="utf-8"), "old-second\n")
+
+    def test_rolled_back_cleanup_interruption_is_recoverable(self):
+        temporary, state, project, memory = self._fixture()
+        self.addCleanup(temporary.cleanup)
+        first, second = memory / "first.md", memory / "second.md"
+        first.write_bytes(b"old-first\n")
+        second.write_bytes(b"old-second\n")
+        directory = self._interrupted(
+            state, project, memory,
+            (TextMutation(first, "new-first"), TextMutation(second, "new-second")),
+            "after-first-replace",
+        )
+        roots = {"shared": RootBinding("shared", project, "shared")}
+        with mock.patch.dict(os.environ, {"XDG_STATE_HOME": str(state), "MEMORY_CUSTODIAN_FAILPOINT": ""}):
+            with mock.patch.object(
+                transaction_module, "_cleanup_transaction",
+                side_effect=OSError("simulated crash after rollback marker"),
+            ):
+                with self.assertRaises(OSError):
+                    recover_transaction(directory, roots, action="rollback")
+            self.assertEqual(first.read_bytes(), b"old-first\n")
+            self.assertEqual(second.read_bytes(), b"old-second\n")
+            # Pre-fix schema-1 journals did not carry these optional fields.
+            # A terminal rollback from that build must still be cleanable.
+            journal = json.loads((directory / "journal.json").read_text(encoding="utf-8"))
+            journal.pop("removed_directories")
+            journal.pop("recovery_action")
+            self._write_journal(directory, journal)
+            inventory = transaction_inventory(directory.parent)
+            self.assertEqual(len(inventory), 1)
+            self.assertEqual(inventory[0].kind, "rolled-back-cleanup")
+            record = analyze_transaction(directory, roots)
+            self.assertFalse(record.safe_complete)
+            self.assertTrue(record.safe_rollback)
+            first.write_bytes(b"new-first\n")
+            record = analyze_transaction(directory, roots)
+            self.assertFalse(record.safe_rollback)
+            with self.assertRaises(RecoveryRequiredError):
+                recover_transaction(directory, roots, action="rollback")
+            self.assertTrue((directory / "journal.json").exists())
+            first.write_bytes(b"old-first\n")
+            with self.assertRaises(RecoveryRequiredError):
+                recover_transaction(directory, roots, action="complete")
+            recovered = recover_transaction(directory, roots, action="rollback")
+            self.assertEqual(recovered.phase, "rolled-back")
+            self.assertFalse(directory.exists())
+
+    def test_terminal_journal_without_artifacts_is_still_cleanup_pending(self):
+        temporary, state, project, memory = self._fixture()
+        self.addCleanup(temporary.cleanup)
+        target = memory / "target.md"
+        target.write_bytes(b"old\n")
+        directory = self._interrupted(
+            state, project, memory, (TextMutation(target, "new"),),
+            "after-committed-before-cleanup", force_journal=True,
+        )
+        roots = {"shared": RootBinding("shared", project, "shared")}
+        artifacts = directory / "targets"
+        for child in artifacts.iterdir():
+            child.unlink()
+        artifacts.rmdir()
+        with mock.patch.dict(os.environ, {"XDG_STATE_HOME": str(state), "MEMORY_CUSTODIAN_FAILPOINT": ""}):
+            inventory = transaction_inventory(directory.parent)
+            self.assertEqual([item.kind for item in inventory], ["committed-cleanup"])
+            self.assertTrue(analyze_transaction(directory, roots).safe_complete)
+            recover_transaction(directory, roots, action="complete")
+        self.assertFalse(directory.exists())
+        self.assertEqual(target.read_bytes(), b"new\n")
+
+    def test_empty_shell_after_journal_unlink_is_pruned_safely(self):
+        temporary, state, project, memory = self._fixture()
+        self.addCleanup(temporary.cleanup)
+        target = memory / "target.md"
+        target.write_bytes(b"old\n")
+        directory = self._interrupted(
+            state, project, memory, (TextMutation(target, "new"),),
+            "after-committed-before-cleanup", force_journal=True,
+        )
+        artifacts = directory / "targets"
+        for child in artifacts.iterdir():
+            child.unlink()
+        artifacts.rmdir()
+        (directory / "journal.json").unlink()
+        with mock.patch.dict(os.environ, {"XDG_STATE_HOME": str(state)}):
+            binding = binding_directory(project, memory, None)
+            self.assertEqual(transaction_inventory(binding), ())
+            ensure_no_unfinished(binding)
+            self.assertFalse(directory.exists())
+        self.assertEqual(target.read_bytes(), b"new\n")
+
+    def test_committed_directory_cleanup_preserves_external_child(self):
+        temporary, state, project, memory = self._fixture()
+        self.addCleanup(temporary.cleanup)
+        local_root = ensure_private_directory(state / "local-root")
+        overlay = ensure_private_directory(local_root / "local")
+        profiles = ensure_private_directory(overlay / "profiles")
+        target = overlay / "preferences.md"
+        target.write_bytes(b"private preference\n")
+        target.chmod(0o600)
+        with mock.patch.dict(os.environ, {
+            "XDG_STATE_HOME": str(state),
+            "MEMORY_CUSTODIAN_FAILPOINT": "after-committed-before-cleanup",
+        }):
+            with self.assertRaises(TransactionFailpoint):
+                apply_transaction(
+                    project_root=project, memory_root=memory, project_id=None,
+                    command="local-reset", plan_id="reset-plan",
+                    private_deletions=(PrivateDeleteMutation(target, "local/preferences.md"),),
+                    local_root=local_root,
+                    remove_directories=(overlay, profiles),
+                    force_journal=True,
+                )
+            directory = unfinished_transaction_directories(
+                binding_directory(project, memory, None)
+            )[0]
+            roots = {
+                "shared": RootBinding("shared", project, "shared"),
+                "local-overlay": RootBinding("local-overlay", local_root, "local"),
+            }
+            outsider = profiles / "new-file.txt"
+            outsider.write_bytes(b"external data\n")
+            record = analyze_transaction(directory, roots)
+            self.assertFalse(record.safe_complete)
+            with self.assertRaises(RecoveryRequiredError):
+                recover_transaction(directory, roots, action="complete")
+            self.assertEqual(outsider.read_bytes(), b"external data\n")
+            outsider.unlink()
+            with mock.patch.dict(os.environ, {"MEMORY_CUSTODIAN_FAILPOINT": ""}):
+                recover_transaction(directory, roots, action="complete")
+            self.assertFalse(overlay.exists())
+
+    def test_legacy_local_reset_without_directory_inventory_needs_manual_review(self):
+        temporary, state, project, memory = self._fixture()
+        self.addCleanup(temporary.cleanup)
+        local_root = ensure_private_directory(state / "local-root")
+        overlay = ensure_private_directory(local_root / "local")
+        target = overlay / "preferences.md"
+        target.write_bytes(b"private preference\n")
+        with mock.patch.dict(os.environ, {
+            "XDG_STATE_HOME": str(state),
+            "MEMORY_CUSTODIAN_FAILPOINT": "after-committed-before-cleanup",
+        }):
+            with self.assertRaises(TransactionFailpoint):
+                apply_transaction(
+                    project_root=project, memory_root=memory, project_id=None,
+                    command="local-reset", plan_id="legacy-reset-plan",
+                    private_deletions=(PrivateDeleteMutation(target, "local/preferences.md"),),
+                    local_root=local_root, force_journal=True,
+                )
+            directory = unfinished_transaction_directories(
+                binding_directory(project, memory, None)
+            )[0]
+            journal = json.loads((directory / "journal.json").read_text(encoding="utf-8"))
+            journal.pop("removed_directories")
+            journal.pop("recovery_action")
+            self._write_journal(directory, journal)
+            roots = {
+                "shared": RootBinding("shared", project, "shared"),
+                "local-overlay": RootBinding("local-overlay", local_root, "local"),
+            }
+            self.assertFalse(analyze_transaction(directory, roots).safe_complete)
+            with self.assertRaises(RecoveryRequiredError):
+                recover_transaction(directory, roots, action="complete")
+            self.assertTrue(overlay.exists())
+            overlay.rmdir()
+            with mock.patch.dict(os.environ, {"MEMORY_CUSTODIAN_FAILPOINT": ""}):
+                recover_transaction(directory, roots, action="complete")
+            self.assertFalse(directory.exists())
 
     def test_journal_write_failure_preserves_previous_atomic_record(self):
         temporary, state, project, memory = self._fixture()

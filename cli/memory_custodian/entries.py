@@ -154,6 +154,20 @@ STRUCTURAL_ENTRY_CODES = frozenset({"DEC", "CON", "DNU", "AREA"})
 VALID_ENTRY_STATUSES = frozenset({"active", "candidate", "superseded", "promoted"})
 
 
+def requires_structural_identity(entry: StructuredEntry, relative_path: str) -> bool:
+    """Whether this Entry class and storage require Subject/Facet ownership.
+
+    MC-AREA workflow Entries in rules/profiles are deliberately excluded.
+    Callers check lifecycle separately; schema and storage validation remain
+    the responsibility of their dedicated validators.
+    """
+
+    code = entry.entry_id.split("-", 2)[1].upper()
+    return code in STRUCTURAL_ENTRY_CODES and not relative_path.startswith(
+        ("rules/", "profiles/")
+    )
+
+
 def generate_entry_id(kind: str, existing_ids: set[str] | None = None, *, day: date | None = None) -> str:
     code = TYPE_CODES[kind]
     used = {value.casefold() for value in (existing_ids or set())}
@@ -1109,7 +1123,7 @@ def structured_entry_schema_issues(
         issues.append(f"{prefix} promoted entry has no Promoted-To")
 
     if require_active_identity and entry.status == "active":
-        if code in STRUCTURAL_ENTRY_CODES and not relative_path.startswith(("rules/", "profiles/")):
+        if requires_structural_identity(entry, relative_path):
             for name in ("Subject", "Facet"):
                 if entry.field_counts.get(name) != 1 or not entry.fields.get(name, "").strip():
                     issues.append(

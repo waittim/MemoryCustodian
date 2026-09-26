@@ -46,7 +46,7 @@ Do not read `archive/` unless the user asks.
 
 ## CLI Behavior
 
-The CLI must not classify inbox entries by keywords or infer semantic destinations. It may report budgets and candidates, remove exact duplicate top-level bullet units, and filter exact tombstone matches. A top-level bullet unit includes all of its continuation and nested lines; exact comparison and removal operate on that complete unit, never on a nested bullet or continuation line independently. All other candidates remain in the inbox until an Agent or user reviews their scope, type, confidence, and overlap with existing memory.
+The CLI MUST NOT classify inbox entries by keywords or infer semantic destinations. It MAY report budgets and candidates, remove exact duplicate top-level bullet units, and filter exact tombstone matches. A top-level bullet unit includes all of its continuation and nested lines; exact comparison and removal operate on that complete unit, never on a nested bullet or continuation line independently. All other candidates remain in the inbox until an Agent or user reviews their scope, type, confidence, and overlap with existing memory.
 
 Use `memory-custodian compact` to generate the candidate report and Plan ID. After review, edit the destination
 Markdown directly or call `add`, then run `check`. Under Protocol 0.8, use
@@ -54,7 +54,7 @@ Markdown directly or call `add`, then run `check`. Under Protocol 0.8, use
 in the preview; it does not promote candidates or remove them merely because they were reported.
 
 Protocol 0.8 applies every multi-file compaction through the shared
-transaction journal. An interrupted apply is recovery-required and must be
+transaction journal. An interrupted apply is recovery-required and MUST be
 reported by `audit --transactions`; never treat a cleaned private backup as
 archive content or as proof of complete erasure.
 
@@ -63,7 +63,7 @@ At `NEAR LIMIT` (80%–100%) or `OVER BUDGET`, use `memory-custodian compact --t
 semantic changes. With `--target`, the CLI reports the current budget state and applies only conservative
 deterministic changes: exact duplicate complete top-level bullet-unit removal for simple bullet files, or older
 complete H2 entry archival for supported history-like files such as `decisions.md` and `changelog.md`.
-Archive files have one canonical file-level explanation. Repeated same-day compaction must not append duplicate
+Archive files have one canonical file-level explanation. Repeated same-day compaction MUST NOT append duplicate
 batch wrappers; changelog entries with the same date are grouped under one heading and remain newest-first.
 
 Decision archival has an explicit semantic gate. First shorten long entries, consolidate, supersede, and relocate scoped knowledge; then review the dry run. The CLI blocks age-based archival while kept decisions remain over the per-entry guide. Use `--apply --archive-oldest` only when the proposed oldest entries contain no active invariant that would become unreachable. Changelog archival does not require this extra confirmation.

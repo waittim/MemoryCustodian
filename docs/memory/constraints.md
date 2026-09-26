@@ -46,7 +46,7 @@ Evidence:
 - repo:cli/memory_custodian/transactions.py
 
 Constraint:
-Precompute and validate multi-file plans, keep private recovery journals, and refuse silent partial completion.
+Journal multi-file changes and verify terminal effects before cleanup.
 
 ## MC-CON-20260921-10000011 — No protocol downgrade
 

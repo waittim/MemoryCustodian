@@ -8,7 +8,7 @@ declared by the manifest/state authority described in `manifest-policy.md`.
 ## Public envelope
 
 `--format text` is the human renderer and `--format json` emits exactly one
-UTF-8 JSON document on stdout. `--json` may remain a compatibility alias, but
+UTF-8 JSON document on stdout. `--json` MAY remain a compatibility alias, but
 documentation and fixtures use `--format json`. Fatal argument/runtime errors
 are written to stderr; domain validation failures in JSON mode still return a
 valid envelope:
@@ -36,13 +36,13 @@ or BLOCKER produces FAIL. Text and JSON render the same result model.
 
 Project audit (`audit`) checks persistent project state; invocation audit
 (`read --explain` or `audit --routing-input`) checks one context route; the
-repository check scripts check this source tree. They must not become three
+repository check scripts check this source tree. They MUST NOT become three
 independent routing, conflict, or severity implementations. `audit --format
 json` places `audit_schema_version: 1` in `data`, not in the shared manifest.
 
 ## Internal/public separation
 
-Internal execution plans may carry selectors and protected digests required to
+Internal execution plans MAY carry selectors and protected digests required to
 rebuild a mutation. They are never serialized directly as public JSON. A
 public preview uses opaque operation references, stable repo-relative or
 root-qualified aliases, and no hard/purge topic, removed body, or

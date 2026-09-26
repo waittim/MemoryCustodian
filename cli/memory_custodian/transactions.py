@@ -82,6 +82,9 @@ _REQUIRED_DIRECTORY_FIELDS = frozenset({
     "created",
     "identity",
 })
+_REQUIRED_REMOVED_DIRECTORY_FIELDS = frozenset({
+    "root_kind", "path", "mode_semantics", "mode", "identity", "removed",
+})
 
 
 class TransactionError(OSError):
@@ -570,11 +573,40 @@ def _unlink_in_trusted_parent(root: Path, path: Path) -> None:
             os.close(directory_fd)
 
 
+def _rmdir_in_trusted_parent(root: Path, path: Path) -> None:
+    """Remove one empty directory through a verified parent when available."""
+
+    _validate_directory_for_root(root, path)
+    parent = path.parent
+    directory_fd: int | None = None
+    try:
+        if os.name != "nt":
+            flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+            directory_fd = os.open(parent, flags)
+            try:
+                os.rmdir(path.name, dir_fd=directory_fd)
+            except TypeError:
+                path.rmdir()
+        else:
+            path.rmdir()
+    finally:
+        if directory_fd is not None:
+            os.close(directory_fd)
+    _fsync_directory(parent)
+
+
 def _directory_identity(path: Path) -> dict[str, int]:
     metadata = path.lstat()
     if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
         raise TransactionError("Planned directory is not a real directory.")
     return {"st_dev": int(metadata.st_dev), "st_ino": int(metadata.st_ino)}
+
+
+def _directory_mode(path: Path) -> str:
+    metadata = path.lstat()
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+        raise TransactionError("Planned directory is not a real directory.")
+    return f"{stat.S_IMODE(metadata.st_mode):04o}"
 
 
 def _directory_identity_matches(path: Path, identity: object) -> bool:
@@ -712,6 +744,24 @@ def _safe_transaction_id(directory: Path) -> str | None:
     return directory.name if _TRANSACTION_ID_RE.fullmatch(directory.name) else None
 
 
+def _empty_private_transaction_shell(directory: Path) -> bool:
+    """Recognize a journal-free directory with no recoverable state left."""
+
+    if _safe_transaction_id(directory) is None:
+        return False
+    try:
+        metadata = directory.lstat()
+        if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+            return False
+        if hasattr(os, "getuid") and metadata.st_uid != os.getuid():
+            return False
+        if os.name != "nt" and stat.S_IMODE(metadata.st_mode) != 0o700:
+            return False
+        return next(directory.iterdir(), None) is None
+    except OSError:
+        return False
+
+
 def _platform_mode_semantics() -> str:
     return "windows-basic" if os.name == "nt" else "posix"
 
@@ -757,6 +807,20 @@ def _classify_journal(
         return "malformed", "journal targets are malformed", safe_transaction_id, phase
     if not isinstance(journal["created_directories"], list):
         return "malformed", "created directory inventory is malformed", safe_transaction_id, phase
+    removed_directories = journal.get("removed_directories", [])
+    if not isinstance(removed_directories, list):
+        return "malformed", "removed directory inventory is malformed", safe_transaction_id, phase
+    recovery_action = journal.get("recovery_action")
+    if recovery_action not in {None, "complete", "rollback"}:
+        return "malformed", "recovery action is malformed", safe_transaction_id, phase
+    if phase == "recovering" and recovery_action is None:
+        return "malformed", "recovering journal lacks a durable action", safe_transaction_id, phase
+    if phase == "committed" and recovery_action == "rollback":
+        return "malformed", "committed journal has a rollback action", safe_transaction_id, phase
+    if phase == "rolled-back" and recovery_action not in {None, "rollback"}:
+        return "malformed", "rolled-back journal has a conflicting action", safe_transaction_id, phase
+    if phase in {"planned", "prepared", "committing", "failed"} and recovery_action is not None:
+        return "malformed", "recovery action is inconsistent with phase", safe_transaction_id, phase
 
     allowed_roots = {"shared", "local-overlay", "migration-state"}
     operation_existence = {
@@ -877,7 +941,39 @@ def _classify_journal(
             return "malformed", "created directory identity is malformed", safe_transaction_id, phase
     if directory_keys != sorted(directory_keys):
         return "malformed", "created directory inventory is not canonical", safe_transaction_id, phase
-    if not journal["targets"] and not directories:
+    removed_directory_keys: list[tuple[str, str]] = []
+    for item in removed_directories:
+        if not isinstance(item, dict) or set(item) != _REQUIRED_REMOVED_DIRECTORY_FIELDS:
+            return "malformed", "removed directory fields are malformed", safe_transaction_id, phase
+        root_kind = item["root_kind"]
+        relative = item["path"]
+        if (
+            root_kind != "local-overlay"
+            or not _safe_private_relative(relative)
+            or str(relative).split("/", 1)[0] != "local"
+        ):
+            return "unsafe", "removed directory locator is unsafe", safe_transaction_id, phase
+        if journal["command"] != "local-reset":
+            return "malformed", "removed directory operation is invalid", safe_transaction_id, phase
+        key = (root_kind, relative)
+        if key in seen_directories or key in removed_directory_keys or key in target_paths:
+            return "malformed", "removed directory inventory is duplicated", safe_transaction_id, phase
+        if (
+            item["mode_semantics"] != expected_mode_semantics
+            or not isinstance(item["mode"], str)
+            or _MODE_RE.fullmatch(item["mode"]) is None
+            or (expected_mode_semantics == "posix" and item["mode"] != "0700")
+            or not _valid_directory_identity(item["identity"])
+        ):
+            return "malformed", "removed directory identity is malformed", safe_transaction_id, phase
+        if not isinstance(item["removed"], bool):
+            return "malformed", "removed directory progress is malformed", safe_transaction_id, phase
+        if phase != "committed" and item["removed"]:
+            return "malformed", "removed directory progress is inconsistent", safe_transaction_id, phase
+        removed_directory_keys.append(key)
+    if removed_directory_keys != sorted(removed_directory_keys):
+        return "malformed", "removed directory inventory is not canonical", safe_transaction_id, phase
+    if not journal["targets"] and not directories and not removed_directory_keys:
         return "malformed", "journal operation inventory is empty", safe_transaction_id, phase
 
     targets_directory = directory / "targets"
@@ -912,13 +1008,13 @@ def _classify_journal(
         return "unsafe", "transaction target artifact is invalid", safe_transaction_id, phase
     if phase in {"prepared", "committing", "failed"} and set(observed_artifacts) != set(expected_artifacts):
         return "unsafe", "transaction target artifact inventory is incomplete", safe_transaction_id, phase
-    has_artifacts = bool(target_children)
     if phase in {"committed", "rolled-back"}:
-        if has_artifacts:
-            return "committed-cleanup" if phase == "committed" else "orphan", (
-                "committed cleanup is pending" if phase == "committed" else "rolled-back artifacts remain"
-            ), safe_transaction_id, phase
-        return "clean", "", safe_transaction_id, phase
+        return (
+            "committed-cleanup" if phase == "committed" else "rolled-back-cleanup",
+            "terminal transaction cleanup is pending",
+            safe_transaction_id,
+            phase,
+        )
     return "unfinished", "recovery is required", safe_transaction_id, phase
 
 
@@ -939,6 +1035,8 @@ def transaction_inventory(binding: Path) -> tuple[TransactionInventory, ...]:
             found.append(TransactionInventory(directory, "unsafe", public_id, None, "journal is symlinked"))
             continue
         if not journal_path.exists():
+            if _empty_private_transaction_shell(directory):
+                continue
             found.append(TransactionInventory(directory, "orphan", public_id, None, "transaction journal is missing"))
             continue
         try:
@@ -958,7 +1056,21 @@ def unfinished_transaction_directories(binding: Path) -> tuple[Path, ...]:
     return tuple(item.directory for item in transaction_inventory(binding))
 
 
+def _prune_empty_transaction_shells(binding: Path) -> None:
+    """Remove only empty crash residue while a mutation lock is held."""
+
+    if not binding.exists():
+        return
+    for directory in sorted(binding.iterdir(), key=lambda item: item.name):
+        if _empty_private_transaction_shell(directory):
+            try:
+                directory.rmdir()
+            except OSError:
+                pass
+
+
 def ensure_no_unfinished(binding: Path) -> None:
+    _prune_empty_transaction_shells(binding)
     unfinished = unfinished_transaction_directories(binding)
     if unfinished:
         ids = ", ".join(_safe_transaction_id(path) or "unknown" for path in unfinished)
@@ -974,11 +1086,12 @@ def ensure_no_unfinished_for_project(
 ) -> None:
     """Reject recovery state in this project's bootstrap/permanent bindings."""
 
+    bindings = existing_binding_directories(project_root, memory_root, project_ids)
+    for binding in bindings:
+        _prune_empty_transaction_shells(binding)
     unfinished = tuple(
         directory
-        for binding in existing_binding_directories(
-            project_root, memory_root, project_ids
-        )
+        for binding in bindings
         for directory in unfinished_transaction_directories(binding)
     )
     if unfinished:
@@ -1041,6 +1154,7 @@ def apply_transaction(
     private_mutations: tuple[PrivateTextMutation, ...] = (),
     private_deletions: tuple[PrivateDeleteMutation, ...] = (),
     private_directories: tuple[Path, ...] = (),
+    remove_directories: tuple[Path, ...] = (),
     local_root: Path | None = None,
     migration_mutations: tuple[PrivateTextMutation, ...] = (),
     migration_deletions: tuple[PrivateDeleteMutation, ...] = (),
@@ -1052,7 +1166,8 @@ def apply_transaction(
 
     if (
         not shared_mutations and not private_mutations and not private_deletions
-        and not private_directories and not migration_mutations and not migration_deletions
+        and not private_directories and not remove_directories
+        and not migration_mutations and not migration_deletions
     ):
         return ()
     paths = (
@@ -1064,12 +1179,20 @@ def apply_transaction(
     )
     if len(paths) != len(set(paths)):
         raise ValueError("Transaction contains the same target more than once.")
+    if len(remove_directories) != len(set(remove_directories)):
+        raise ValueError("Removed directory inventory contains duplicates.")
+    if remove_directories and command != "local-reset":
+        raise ValueError("Only local reset may remove private overlay directories.")
+    if set(remove_directories) & set(private_directories):
+        raise ValueError("A directory cannot be created and removed by one transaction.")
     for path in paths:
         _validate_write_target(path)
 
     roots = {"shared": RootBinding("shared", project_root.absolute(), "shared")}
-    if private_mutations or private_deletions:
+    if private_mutations or private_deletions or remove_directories:
         if local_root is None:
+            if remove_directories and not (private_mutations or private_deletions):
+                raise ValueError("Removed private directories require a trusted local root.")
             private_items = (*private_mutations, *private_deletions)
             common = Path(os.path.commonpath([str(item.path.parent) for item in private_items]))
             local_root = common
@@ -1090,6 +1213,13 @@ def apply_transaction(
         _safe_relative(roots["local-overlay"].root, directory_path)
         if directory_path.exists() and (not directory_path.is_dir() or directory_path.is_symlink()):
             raise ValueError("Transaction directory target is not a real directory.")
+    for directory_path in remove_directories:
+        relative = _safe_relative(roots["local-overlay"].root, directory_path)
+        if relative.split("/", 1)[0] != "local":
+            raise ValueError("Local reset directory is outside the current overlay.")
+        _validate_directory_for_root(roots["local-overlay"].root, directory_path)
+        if _platform_mode_semantics() == "posix" and _directory_mode(directory_path) != "0700":
+            raise ValueError("Removed private directory must use mode 0700.")
 
     for item in shared_mutations:
         _safe_relative(roots["shared"].root, item.path)
@@ -1122,6 +1252,7 @@ def apply_transaction(
         len(paths) == 1
         and not force_journal
         and not private_directories
+        and not remove_directories
         and single_target_parent_ready
     ):
         item = single_item
@@ -1249,6 +1380,19 @@ def apply_transaction(
                 "identity": None,
             })
 
+    removed_directories = [
+        {
+            "root_kind": "local-overlay",
+            "path": _safe_relative(roots["local-overlay"].root, path),
+            "mode_semantics": _platform_mode_semantics(),
+            "mode": _directory_mode(path),
+            "identity": _directory_identity(path),
+            "removed": False,
+        }
+        for path in remove_directories
+    ]
+    removed_directories.sort(key=lambda item: str(item["path"]))
+
     journal: dict[str, object] = {
         "transaction_schema_version": TRANSACTION_SCHEMA_VERSION,
         "transaction_id": transaction_id,
@@ -1259,12 +1403,14 @@ def apply_transaction(
         "command": command,
         "plan_id": plan_id,
         "phase": "planned",
+        "recovery_action": None,
         "created_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "targets": targets,
         "created_directories": sorted(
             created_directories,
             key=lambda item: (str(item["root_kind"]), str(item["path"])),
         ),
+        "removed_directories": removed_directories,
     }
     if erasure_scope is not None:
         journal["erasure_scope"] = dict(erasure_scope)
@@ -1357,7 +1503,9 @@ def apply_transaction(
                 pass
         raise
 
+    _finalize_removed_directories(journal, roots, journal_path)
     _cleanup_replacement_temporaries(journal, roots)
+    _verify_terminal_before_cleanup(directory, roots, "complete")
     _cleanup_transaction(directory, keep_record=False)
     return tuple(paths[index] for index in order)
 
@@ -1395,6 +1543,55 @@ def apply_plan_transaction(
         erasure_scope=erasure_scope,
         force_journal=force_journal or bool(plan.sensitive),
     )
+
+
+def _finalize_removed_directories(
+    journal: dict[str, object],
+    roots: dict[str, RootBinding],
+    journal_path: Path,
+) -> None:
+    """Finish journaled empty-directory removal after the commit marker.
+
+    The committed marker makes rollback unavailable.  Identity and emptiness
+    are rechecked on every retry; a new external child is never removed.
+    """
+
+    if journal["phase"] != "committed":
+        return
+    directories = sorted(
+        journal.get("removed_directories", []),
+        key=lambda item: (-len(str(item["path"]).split("/")), str(item["path"])),
+    )
+    for index, item in enumerate(directories):
+        root = roots[str(item["root_kind"])].root
+        path = root / str(item["path"])
+        _validate_directory_for_root(root, path)
+        if path.is_symlink():
+            raise RecoveryRequiredError("Removed directory was replaced by a symlink.")
+        if path.exists():
+            if item["removed"] or not _directory_identity_matches(path, item["identity"]):
+                raise RecoveryRequiredError("Removed directory identity changed during completion.")
+            if not _modes_match(_directory_mode(path), item["mode"]):
+                raise RecoveryRequiredError("Removed directory mode changed during completion.")
+            try:
+                _rmdir_in_trusted_parent(root, path)
+            except OSError as exc:
+                raise RecoveryRequiredError(
+                    "Removed directory is not empty or could not be removed safely."
+                ) from exc
+        item["removed"] = True
+        _atomic_journal(journal_path, journal)
+        if index == 0:
+            _failpoint("after-first-removed-directory")
+    if journal["command"] == "local-reset":
+        binding = roots.get("local-overlay")
+        if binding is None:
+            raise RecoveryRequiredError("Local reset has no trusted overlay root.")
+        overlay = binding.root / "local"
+        if overlay.exists() or overlay.is_symlink():
+            raise RecoveryRequiredError(
+                "Local reset overlay directory remains; manual recovery is required."
+            )
 
 
 def _cleanup_transaction(directory: Path, *, keep_record: bool) -> None:
@@ -1455,6 +1652,8 @@ def analyze_transaction(directory: Path, roots: dict[str, RootBinding]) -> Recov
     target_states: list[RecoveryTargetState] = []
     safe_complete = True
     safe_rollback = True
+    all_outputs_match = True
+    all_bases_match = True
     phase = journal["phase"]
     for raw in journal["targets"]:
         try:
@@ -1462,15 +1661,19 @@ def analyze_transaction(directory: Path, roots: dict[str, RootBinding]) -> Recov
         except ValueError:
             issues.append(f"Target {raw['target_id']} cannot be resolved safely.")
             safe_complete = safe_rollback = False
+            all_outputs_match = all_bases_match = False
             continue
         try:
             _validate_target_for_root(roots[raw["root_kind"]].root, path)
         except (KeyError, TransactionError):
             issues.append(f"Target {raw['target_id']} has an unsafe ancestor.")
             safe_complete = safe_rollback = False
+            all_outputs_match = all_bases_match = False
             continue
         is_base = _matches(path, raw["base_exists"], raw["base_sha256"], raw["base_mode"])
         is_output = _matches(path, raw["output_exists"], raw["output_sha256"], raw["output_mode"])
+        all_bases_match &= is_base
+        all_outputs_match &= is_output
         base_signature = (
             raw["base_exists"], raw["base_sha256"], raw["base_mode"],
         )
@@ -1514,14 +1717,85 @@ def analyze_transaction(directory: Path, roots: dict[str, RootBinding]) -> Recov
             safe_complete = safe_rollback = False
             issues.append("Created directory inventory cannot be resolved safely.")
             continue
+        if phase == "committed" and not path.is_dir():
+            safe_complete = False
+            issues.append("Committed transaction directory is missing.")
         if not raw_directory["created"]:
             continue
         if path.is_symlink() or (path.exists() and not _directory_identity_matches(path, raw_directory.get("identity"))):
             safe_complete = safe_rollback = False
             issues.append("Created directory identity changed during recovery.")
+    removable = {
+        (str(item["root_kind"]), str(item["path"]))
+        for item in journal.get("removed_directories", [])
+    }
+    for raw_directory in journal.get("removed_directories", []):
+        try:
+            root_kind = str(raw_directory["root_kind"])
+            root = roots[root_kind].root
+            path = root / str(raw_directory["path"])
+            _safe_relative(root, path)
+            _validate_directory_for_root(root, path)
+        except (KeyError, TypeError, ValueError, TransactionError):
+            safe_complete = safe_rollback = False
+            issues.append("Removed directory inventory cannot be resolved safely.")
+            continue
+        if path.is_symlink():
+            safe_complete = safe_rollback = False
+            issues.append("Removed directory was replaced by a symlink.")
+            continue
+        if not path.exists():
+            if phase != "committed":
+                safe_complete = safe_rollback = False
+                issues.append("Removed directory disappeared before commit.")
+            continue
+        try:
+            matches = (
+                not raw_directory["removed"]
+                and _directory_identity_matches(path, raw_directory["identity"])
+                and _modes_match(_directory_mode(path), raw_directory["mode"])
+            )
+        except (OSError, TransactionError):
+            matches = False
+        if not matches:
+            safe_complete = safe_rollback = False
+            issues.append("Removed directory identity or mode changed during recovery.")
+            continue
+        if phase == "committed":
+            try:
+                has_unplanned_child = any(
+                    (root_kind, _safe_relative(root, child)) not in removable
+                    for child in path.iterdir()
+                )
+            except (OSError, ValueError):
+                has_unplanned_child = True
+            if has_unplanned_child:
+                safe_complete = False
+                issues.append("Removed directory acquired an unplanned child or cannot be inspected.")
+    if journal["command"] == "local-reset" and not journal.get("removed_directories"):
+        binding = roots.get("local-overlay")
+        if binding is None or (binding.root / "local").exists() or (binding.root / "local").is_symlink():
+            safe_complete = False
+            issues.append("Legacy local reset lacks a recoverable directory inventory.")
     if phase == "committed":
         safe_rollback = False
         issues.append("Committed transaction can only be completed, not rolled back.")
+        if not all_outputs_match:
+            safe_complete = False
+            issues.append("Committed transaction target no longer matches its output.")
+    elif phase == "rolled-back":
+        safe_complete = False
+        issues.append("Rolled-back transaction can only finish rollback cleanup.")
+        if not all_bases_match:
+            safe_rollback = False
+            issues.append("Rolled-back transaction target no longer matches its base.")
+    elif phase == "recovering":
+        if journal["recovery_action"] == "complete":
+            safe_rollback = False
+            issues.append("Recovery is already completing this transaction.")
+        else:
+            safe_complete = False
+            issues.append("Recovery is already rolling back this transaction.")
     return RecoveryRecord(
         journal["transaction_id"], phase,
         journal["command"], directory,
@@ -1543,12 +1817,30 @@ def recover_transaction(
         raise RecoveryRequiredError(
             "Committed transaction cleanup can only be completed, not rolled back."
         )
+    if action == "complete" and record.phase == "rolled-back":
+        raise RecoveryRequiredError(
+            "Rolled-back transaction cleanup can only finish rollback."
+        )
     allowed = record.safe_complete if action == "complete" else record.safe_rollback
     if not allowed:
         raise RecoveryRequiredError("Automatic recovery is unsafe; manual recovery is required.")
     journal = load_journal(directory)
+    journal_path = directory / "journal.json"
+    if journal["phase"] in {"committed", "rolled-back"}:
+        if action == "complete":
+            _finalize_removed_directories(journal, roots, journal_path)
+        _cleanup_replacement_temporaries(journal, roots)
+        _verify_terminal_before_cleanup(directory, roots, action)
+        _cleanup_transaction(directory, keep_record=False)
+        return RecoveryRecord(
+            record.transaction_id, str(journal["phase"]), record.command, directory,
+            action == "complete", action == "rollback", (), record.target_states,
+        )
+    if journal["phase"] == "recovering" and journal["recovery_action"] != action:
+        raise RecoveryRequiredError("Recovery action cannot change after recovery started.")
+    journal["recovery_action"] = action
     journal["phase"] = "recovering"
-    _atomic_journal(directory / "journal.json", journal)
+    _atomic_journal(journal_path, journal)
     _failpoint("while-recovering")
     _cleanup_replacement_temporaries(journal, roots)
     targets = list(journal["targets"])
@@ -1562,7 +1854,7 @@ def recover_transaction(
                 _fsync_directory(path.parent)
                 directory_record["created"] = True
                 directory_record["identity"] = _directory_identity(path)
-                _atomic_journal(directory / "journal.json", journal)
+                _atomic_journal(journal_path, journal)
             elif path.is_symlink() or not path.is_dir():
                 raise RecoveryRequiredError("Planned parent directory became unsafe during recovery.")
             elif directory_record["created"] and not _directory_identity_matches(
@@ -1640,10 +1932,29 @@ def recover_transaction(
             except FileNotFoundError:
                 pass
         journal["phase"] = "rolled-back"
-    _atomic_journal(directory / "journal.json", journal)
+    _atomic_journal(journal_path, journal)
+    if action == "complete":
+        _finalize_removed_directories(journal, roots, journal_path)
     _cleanup_replacement_temporaries(journal, roots)
+    _verify_terminal_before_cleanup(directory, roots, action)
     _cleanup_transaction(directory, keep_record=False)
     return RecoveryRecord(
         record.transaction_id, str(journal["phase"]), record.command, directory,
-        True, True, (), record.target_states,
+        action == "complete", action == "rollback", (), record.target_states,
     )
+
+
+def _verify_terminal_before_cleanup(
+    directory: Path,
+    roots: dict[str, RootBinding],
+    action: str,
+) -> None:
+    """Keep protected artifacts until the durable terminal effect still holds."""
+
+    terminal = analyze_transaction(directory, roots)
+    expected_phase = "committed" if action == "complete" else "rolled-back"
+    safe = terminal.safe_complete if action == "complete" else terminal.safe_rollback
+    if terminal.phase != expected_phase or not safe:
+        raise RecoveryRequiredError(
+            "Terminal transaction state changed before cleanup; manual review is required."
+        )
