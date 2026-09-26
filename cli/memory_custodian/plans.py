@@ -51,7 +51,10 @@ def _read_regular_bytes(path: Path) -> tuple[bool, bytes]:
     if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode):
         raise ValueError(f"Plan operand must be a regular non-symlink file: {path}")
     try:
-        descriptor = os.open(candidate, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        descriptor = os.open(
+            candidate,
+            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0),
+        )
     except OSError as exc:
         raise ValueError(f"Plan operand could not be opened safely: {path}") from exc
     try:

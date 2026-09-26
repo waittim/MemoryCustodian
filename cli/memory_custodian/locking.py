@@ -120,7 +120,7 @@ def _fallback_private_directory(name: str) -> Path:
 
 
 def _private_open_flags(base: int) -> int:
-    return base | getattr(os, "O_NOFOLLOW", 0)
+    return base | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
 
 
 def validate_private_file(path: Path) -> None:

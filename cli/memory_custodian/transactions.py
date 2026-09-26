@@ -163,7 +163,9 @@ def _read_regular_bytes(path: Path) -> tuple[bool, bytes, str | None]:
         return False, b"", None
     if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode):
         raise ValueError(f"Transaction target is not a regular non-symlink file: {path}")
-    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    descriptor = os.open(
+        path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
+    )
     try:
         opened = os.fstat(descriptor)
         if (before.st_dev, before.st_ino) != (opened.st_dev, opened.st_ino):
@@ -181,7 +183,10 @@ def _read_regular_bytes(path: Path) -> tuple[bool, bytes, str | None]:
 
 def _write_private_bytes(path: Path, data: bytes) -> None:
     ensure_private_directory(path.parent)
-    flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0)
+    flags = (
+        os.O_CREAT | os.O_EXCL | os.O_WRONLY
+        | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
+    )
     descriptor = os.open(path, flags, 0o600)
     try:
         offset = 0
@@ -195,7 +200,9 @@ def _write_private_bytes(path: Path, data: bytes) -> None:
 
 def _read_private_bytes(path: Path) -> bytes:
     validate_private_file(path)
-    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    descriptor = os.open(
+        path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
+    )
     try:
         chunks: list[bytes] = []
         while True:
@@ -382,7 +389,8 @@ def _same_filesystem_replace(
         active_temporary_directory = temporary_directory
         descriptor = os.open(
             temporary_file,
-            os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0),
+            os.O_CREAT | os.O_EXCL | os.O_WRONLY
+            | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0),
             0o600,
         )
         view = memoryview(data)

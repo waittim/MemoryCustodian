@@ -956,7 +956,7 @@ def read_no_follow_text(
         raise ValueError(f"File operand has a non-directory parent: {candidate}") from exc
     if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode):
         raise ValueError(f"File operand must be a regular non-symlink file: {candidate}")
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
     try:
         descriptor = os.open(candidate, flags)
     except OSError as exc:

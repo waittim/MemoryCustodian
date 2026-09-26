@@ -106,7 +106,7 @@ def _reset_inventory(
                         "private directories must use mode 0700"
                     )
                 continue
-            flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+            flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
             descriptor = os.open(path, flags)
             try:
                 opened = os.fstat(descriptor)
