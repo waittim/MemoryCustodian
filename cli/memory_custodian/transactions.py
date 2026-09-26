@@ -315,6 +315,23 @@ def _target_state(path: Path) -> tuple[bool, str | None, str | None]:
     return exists, _sha256(data) if exists else None, mode
 
 
+def _modes_match(observed: str | None, expected: str | None) -> bool:
+    if expected is None:
+        return True
+    if observed is None:
+        return False
+    if _platform_mode_semantics() == "windows-basic":
+        # Windows chmod only controls the read-only attribute; compare that
+        # state rather than POSIX permission bits that Windows cannot preserve.
+        try:
+            return bool(int(observed, 8) & stat.S_IWRITE) == bool(
+                int(expected, 8) & stat.S_IWRITE
+            )
+        except ValueError:
+            return False
+    return observed == expected
+
+
 def _matches(path: Path, exists: bool, digest: str | None, mode: str | None) -> bool:
     try:
         observed_exists, observed_digest, observed_mode = _target_state(path)
@@ -323,7 +340,7 @@ def _matches(path: Path, exists: bool, digest: str | None, mode: str | None) -> 
     return (
         observed_exists == exists
         and (not exists or observed_digest == digest)
-        and (not exists or mode is None or observed_mode == mode)
+        and (not exists or _modes_match(observed_mode, mode))
     )
 
 

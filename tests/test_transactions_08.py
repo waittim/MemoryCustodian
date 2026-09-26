@@ -124,6 +124,30 @@ class TransactionProtocol08Tests(unittest.TestCase):
                 targets_before,
             )
 
+    def test_windows_basic_mode_matching_uses_read_only_state(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            target = Path(temporary) / "writable.md"
+            target.write_bytes(b"windows-basic mode check\n")
+            target.chmod(0o666)
+            digest = transaction_module._sha256(target.read_bytes())
+            with mock.patch.object(
+                transaction_module, "_platform_mode_semantics", return_value="windows-basic"
+            ):
+                self.assertTrue(transaction_module._matches(target, True, digest, "0644"))
+                self.assertTrue(transaction_module._matches(target, True, digest, "0600"))
+                self.assertFalse(transaction_module._matches(target, True, digest, "0444"))
+
+        with mock.patch.object(
+            transaction_module, "_platform_mode_semantics", return_value="windows-basic"
+        ):
+            self.assertTrue(transaction_module._modes_match("0444", "0444"))
+            self.assertFalse(transaction_module._modes_match("0444", "0644"))
+
+        with mock.patch.object(
+            transaction_module, "_platform_mode_semantics", return_value="posix"
+        ):
+            self.assertFalse(transaction_module._modes_match("0666", "0644"))
+
     def test_complete_after_first_replace_and_committed_cleanup_are_safe(self):
         for failpoint, expected_phase in (
             ("after-first-replace", "failed"),
