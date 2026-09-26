@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-## v0.12.0 - 2026-09-21
+_Candidate for package version 0.12.0; release date TBD. This is a working draft, not a published release. A release requires version consistency and the required checks passing for the exact final candidate SHA._
 
 ### Protocol 0.8 reliability baseline
 
@@ -75,11 +75,13 @@
 - Protocol 0.8 is not a 1.0 release candidate and makes no long-term 1.x
   compatibility promise.
 
-### Release evidence
+### Configured verification and evidence boundaries
 
-- The checked-in CI workflow defines Ubuntu and Windows Python 3.10–3.14
-  matrices, including the Windows private-state/path and public-JSON smoke
-  tests, repository contract checks, and whitespace verification.
+- The checked-in CI workflow is configured for Ubuntu and Windows Python
+  3.10–3.14 matrices, including the Windows private-state/path and public-JSON
+  smoke tests, repository contract checks, and whitespace verification. This
+  describes the configured gate; it does not report a passing run for this
+  candidate. Release evidence must identify the exact final candidate SHA.
 - The cross-agent fixture is executable offline: the static checker runs the
   same canonical JSON routing command once for each named adapter and compares
   the expected fields and payload stability. This validates the shared CLI
