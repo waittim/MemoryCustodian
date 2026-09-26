@@ -24,6 +24,26 @@
       {
         "path": "README.md",
         "regex": "version-([0-9.]+)-blue"
+      },
+      {
+        "path": "skills/memory-custodian/SKILL.md",
+        "regex": "^This skill describes package ([0-9.]+) / Protocol"
+      },
+      {
+        "path": "RELEASE-NOTES.md",
+        "regex": "^(?:_Candidate for package version |## v)([0-9.]+)"
+      },
+      {
+        "path": "templates/minimal/manifest.md",
+        "regex": "^- last_migrated_with: memory-custodian ([0-9.]+)"
+      },
+      {
+        "path": "docs/memory/manifest.md",
+        "regex": "^- last_migrated_with: memory-custodian ([0-9.]+)"
+      },
+      {
+        "path": "examples/nightnotes-video-demo/docs/memory/manifest.md",
+        "regex": "^- last_migrated_with: memory-custodian ([0-9.]+)"
       }
     ],
     "protocol_version": [

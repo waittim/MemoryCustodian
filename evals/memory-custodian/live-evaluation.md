@@ -12,6 +12,9 @@ adapter, but it is not a substitute for this live evaluation.
 5. Compare each result with `cross-agent/shared-contract.json`. File sets, ordering, routing completeness, reason codes, Entry/Subject identities, conflict/reconciliation findings, and `context_sha256` must match byte-for-byte.
 6. Record agent/runtime versions, OS, commit, UTC timestamp, and any deviation. A static adapter check is not a passing live result.
 
-The reproducible result record should be stored outside the fixture as an
-append-only evaluation note.  Until such a note exists, this file intentionally
-does not claim live Codex, Claude Code, Gemini, or generic-agent coverage.
+Store each reproducible result outside the fixture as an append-only evaluation
+note. One current-protocol Codex startup observation is recorded in the
+[Protocol 0.8 Codex smoke](../../docs/evaluations/protocol08-codex-live-smoke-2026-09-26.md); it used an
+existing task and did not execute this clean cross-agent recipe. There is no
+recorded live result for Claude Code, Gemini, or the generic adapter. The
+offline fixture does not substitute for those runtime observations.

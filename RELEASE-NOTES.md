@@ -68,6 +68,11 @@ _Candidate for package version 0.12.0; release date TBD. This is a working draft
   fixtures for recovery, JSON/audit, staged migration, and bounded erasure.
   These checks are static/offline and do not claim live-agent benchmark
   coverage.
+- The cross-agent fixture now uses nonempty canonical Entries and a Subject,
+  checks exact IDs and module reasons, and compares read, hard-forget preview,
+  and structural-conflict results across all four adapter labels. One
+  current-protocol Codex startup smoke is recorded separately; it is not a
+  clean-session or four-agent runtime evaluation.
 - Forgetting controls what remains available to future agents through
   MemoryCustodian. It is not a guarantee of erasure from Git history or
   previously distributed copies. MemoryCustodian does not rewrite Git history
@@ -79,9 +84,12 @@ _Candidate for package version 0.12.0; release date TBD. This is a working draft
 
 - The checked-in CI workflow is configured for Ubuntu and Windows Python
   3.10–3.14 matrices, including the Windows private-state/path and public-JSON
-  smoke tests, repository contract checks, and whitespace verification. This
-  describes the configured gate; it does not report a passing run for this
-  candidate. Release evidence must identify the exact final candidate SHA.
+  smoke tests, repository contract checks, and whitespace verification. Both
+  [CI run 36221367926](https://github.com/waittim/MemoryCustodian/actions/runs/36221367926)
+  and [CI run 36221365824](https://github.com/waittim/MemoryCustodian/actions/runs/36221365824)
+  completed successfully across that matrix on baseline SHA `1fdebe5`.
+  Those runs are baseline evidence. The release gate requires a separate
+  passing run for the exact final candidate SHA.
 - The cross-agent fixture is executable offline: the static checker runs the
   same canonical JSON routing command once for each named adapter and compares
   the expected fields and payload stability. This validates the shared CLI

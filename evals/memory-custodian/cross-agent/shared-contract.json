@@ -15,8 +15,24 @@
       "docs/memory/preferences.md",
       "docs/memory/changelog.md",
       "docs/memory/rules/README.md",
+      "docs/memory/rules/output.md",
       "docs/memory/profiles/README.md",
       "docs/memory/archive/README.md"
+    ],
+    "seed_files": [
+      "brief.md",
+      "subjects.md",
+      "constraints.md",
+      "decisions.md",
+      "do-not-use.md",
+      "preferences.md",
+      "rules/output.md"
+    ],
+    "manifest_replacements": [
+      {
+        "before": "### Enabled rules\n- None enabled.",
+        "after": "### Enabled rules\n- `rules/output.md`\n  - activation: explicit-only\n  - description: Load for user-facing output."
+      }
     ],
     "generated_project_id": true
   },
@@ -31,18 +47,58 @@
   },
   "expected_contract": {
     "file_set": ["brief.md", "constraints.md", "decisions.md", "do-not-use.md", "preferences.md"],
-    "skipped_module_set": [],
-    "entry_set": [],
+    "skipped_module_set": ["rules/output.md"],
+    "entry_set": [
+      "MC-CON-20260926-00000001",
+      "MC-DEC-20260926-00000002",
+      "MC-DNU-20260926-00000003",
+      "MC-PREF-20260926-00000004"
+    ],
     "order": ["brief.md", "constraints.md", "decisions.md", "do-not-use.md", "preferences.md"],
     "routing_completeness": "COMPLETE",
-    "reason_codes": ["MC-ROUTE-ALWAYS", "MC-ROUTE-TASK"],
+    "reason_codes": ["MC-ROUTE-ALWAYS", "MC-ROUTE-TASK", "MC-SKIP-NOT-REQUESTED"],
+    "module_reasons": [
+      ["brief.md", "loaded", "MC-ROUTE-ALWAYS"],
+      ["constraints.md", "loaded", "MC-ROUTE-ALWAYS"],
+      ["decisions.md", "loaded", "MC-ROUTE-TASK"],
+      ["do-not-use.md", "loaded", "MC-ROUTE-TASK"],
+      ["preferences.md", "loaded", "MC-ROUTE-TASK"],
+      ["rules/output.md", "skipped", "MC-SKIP-NOT-REQUESTED"]
+    ],
     "warnings": [],
-    "context_sha256": "5e6f14fe990c050847e6c67504a69ae0650152bb10658a34091f9817ca314554",
+    "context_sha256": "f24b6c9e5a7d4d1c9d661cbd673f11a6c6525927f28c5374ad0f363b092ea382",
     "context_sha256_field": "data.context_sha256",
-    "subject_ids_field": "data.subject_ids",
+    "subject_ids": ["MC-SUBJ-20260926-00000001"],
     "conflict_status": "CLEAR",
     "conflict_findings": [],
     "reconciliation_findings": [],
     "erasure_scope_field": "not-applicable-for-read"
+  },
+  "expected_forget": {
+    "entry_id": "MC-PREF-20260926-00000004",
+    "mode": "hard",
+    "erasure_scope": {
+      "erasure_scope_schema_version": 1,
+      "operation_phase": "preview",
+      "active_memory": "pending-removal",
+      "managed_archive": "not-targeted",
+      "local_overlay": "not-applicable",
+      "git_worktree_modified": "on-apply",
+      "git_history_modified": false,
+      "distributed_copies_revoked": false,
+      "history_check_status": "not-requested",
+      "topic_retained_in_new_records": false
+    },
+    "forbidden_public_text": ["Concise context", "Keep context packs concise."]
+  },
+  "expected_conflict": {
+    "source": "conflict-extra.md",
+    "status": "FAIL",
+    "exit_code": 1,
+    "conflict_status": "CONFLICT",
+    "finding_codes": ["MC-CONFLICT-001", "MC-ENTRY-001"],
+    "owner_entry_ids": ["MC-DEC-20260926-00000002", "MC-DEC-20260926-00000005"],
+    "subject_id": "mc-subj-20260926-00000001",
+    "reconciliation_findings": []
   }
 }

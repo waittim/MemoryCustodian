@@ -26,6 +26,7 @@ ADAPTER_PATHS = {
     "generic": "adapters/generic/agent-instructions.md",
 }
 CROSS_AGENT_FIXTURE = ROOT / "evals" / "memory-custodian" / "cross-agent" / "shared-contract.json"
+FIXTURE_PROJECT_FILES = CROSS_AGENT_FIXTURE.parent / "project-files"
 LIVE_EVALUATION = ROOT / "evals" / "memory-custodian" / "live-evaluation.md"
 
 
@@ -126,20 +127,26 @@ def _check_cross_agent_fixture() -> list[str]:
         issues.append("cross-agent fixture must cover the four supported adapters in stable order")
     required = {
         "file_set", "skipped_module_set", "entry_set", "order",
-        "routing_completeness", "reason_codes", "warnings",
-        "context_sha256_field", "subject_ids_field", "conflict_status",
+        "routing_completeness", "reason_codes", "module_reasons", "warnings",
+        "context_sha256", "subject_ids", "conflict_status",
         "conflict_findings", "reconciliation_findings", "erasure_scope_field",
     }
     contract = fixture.get("expected_contract", {})
     missing = sorted(required - set(contract)) if isinstance(contract, dict) else sorted(required)
     if missing:
         issues.append("cross-agent fixture missing expected fields: " + ", ".join(missing))
+    if not isinstance(fixture.get("expected_forget"), dict):
+        issues.append("cross-agent fixture is missing the forgetting contract")
+    if not isinstance(fixture.get("expected_conflict"), dict):
+        issues.append("cross-agent fixture is missing the conflict contract")
     setup = fixture.get("setup", {})
     if not isinstance(setup, dict) or setup.get("local_mode") != "disabled":
         issues.append("cross-agent fixture must declare a disabled local mode")
     elif not setup.get("project_files"):
         issues.append("cross-agent fixture must declare its project file set")
-    else:
+    elif not isinstance(setup.get("seed_files"), list) or not setup["seed_files"]:
+        issues.append("cross-agent fixture must declare its seeded memory files")
+    if not issues:
         issues.extend(_run_cross_agent_fixture(fixture))
     if not LIVE_EVALUATION.exists() or "not a claim" not in _read_text(LIVE_EVALUATION):
         issues.append("live cross-agent evaluation recipe must remain explicit and non-aspirational")
@@ -161,9 +168,14 @@ def _run_cross_agent_fixture(fixture: dict) -> list[str]:
     expected = fixture.get("expected_contract", {})
     agents = fixture.get("agents", [])
     setup = fixture.get("setup", {})
-    with tempfile.TemporaryDirectory(prefix="memory-custodian-cross-agent-") as project:
+    with (
+        tempfile.TemporaryDirectory(prefix="memory-custodian-cross-agent-") as project,
+        tempfile.TemporaryDirectory(prefix="memory-custodian-cross-agent-state-") as state,
+    ):
         env = os.environ.copy()
         env["PYTHONPATH"] = str(ROOT / "cli") + os.pathsep + env.get("PYTHONPATH", "")
+        env["XDG_STATE_HOME"] = state
+        env["LOCALAPPDATA"] = state
         init = subprocess.run(
             [sys.executable, "-m", "memory_custodian.main", "init", "--extended", "--project-root", project],
             cwd=ROOT,
@@ -175,6 +187,23 @@ def _run_cross_agent_fixture(fixture: dict) -> list[str]:
         if init.returncode != 0:
             return [f"cross-agent fixture setup failed: {init.stderr.strip() or init.stdout.strip()}"]
         memory_root = Path(project) / "docs" / "memory"
+        for relative in setup.get("seed_files", []):
+            source = FIXTURE_PROJECT_FILES / str(relative)
+            target = memory_root / str(relative)
+            if not source.is_file() or not source.resolve().is_relative_to(FIXTURE_PROJECT_FILES.resolve()):
+                return [f"cross-agent fixture seed is missing or unsafe: {relative}"]
+            if not target.resolve().is_relative_to(memory_root.resolve()):
+                return [f"cross-agent fixture target is unsafe: {relative}"]
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(source.read_bytes())
+        manifest_path = memory_root / "manifest.md"
+        manifest = manifest_path.read_text(encoding="utf-8")
+        for replacement in setup.get("manifest_replacements", []):
+            before, after = replacement["before"], replacement["after"]
+            if manifest.count(before) != 1:
+                return ["cross-agent fixture manifest replacement is not unique"]
+            manifest = manifest.replace(before, after, 1)
+        manifest_path.write_text(manifest, encoding="utf-8")
         actual_files = sorted(
             path.relative_to(memory_root).as_posix()
             for path in memory_root.rglob("*")
@@ -250,6 +279,10 @@ def _run_cross_agent_fixture(fixture: dict) -> list[str]:
                     item.get("reason") for item in data.get("module_dispositions", [])
                     if item.get("reason")
                 }),
+                "module_reasons": [
+                    [item.get("module"), item.get("disposition"), item.get("reason")]
+                    for item in data.get("module_dispositions", [])
+                ],
                 "warnings": data.get("warnings", []),
                 "subject_ids": data.get("subject_ids", []),
                 "conflict_status": data.get("conflict_status"),
@@ -267,7 +300,7 @@ def _run_cross_agent_fixture(fixture: dict) -> list[str]:
                 issues.append(f"cross-agent fixture context_sha256 field is absent for {agent}")
             for key in (
                 "file_set", "skipped_module_set", "entry_set", "order", "routing_completeness",
-                "reason_codes", "warnings", "conflict_status", "conflict_findings",
+                "reason_codes", "module_reasons", "warnings", "conflict_status", "conflict_findings",
                 "reconciliation_findings",
             ):
                 if values[key] != expected.get(key):
@@ -275,8 +308,11 @@ def _run_cross_agent_fixture(fixture: dict) -> list[str]:
                         f"cross-agent fixture {key} drift for {agent}: "
                         f"expected {expected.get(key)!r}, got {values[key]!r}"
                     )
-            if expected.get("subject_ids_field") and not isinstance(values["subject_ids"], list):
-                issues.append(f"cross-agent fixture Subject IDs are not an array for {agent}")
+            if values["subject_ids"] != expected.get("subject_ids"):
+                issues.append(
+                    f"cross-agent fixture Subject IDs drift for {agent}: "
+                    f"expected {expected.get('subject_ids')!r}, got {values['subject_ids']!r}"
+                )
             if expected.get("erasure_scope_field") == "not-applicable-for-read" and "erasure_scope" in data:
                 issues.append(f"cross-agent read fixture unexpectedly emitted an ErasureScope for {agent}")
             if baseline_values is None:
@@ -286,6 +322,93 @@ def _run_cross_agent_fixture(fixture: dict) -> list[str]:
                 issues.append(f"cross-agent fixture payload fields differ for {agent}")
             elif payload != baseline_payload:
                 issues.append(f"cross-agent fixture JSON payload differs for {agent}")
+
+        forgetting = fixture["expected_forget"]
+        forget_command = [
+            sys.executable, "-m", "memory_custodian.main", "forget",
+            "--id", forgetting["entry_id"], "--mode", forgetting["mode"],
+            "--project-root", project, "--format", "json",
+        ]
+        baseline_forget = None
+        for agent in agents:
+            adapter_env = dict(env, MEMORY_CUSTODIAN_CROSS_AGENT=agent)
+            run = subprocess.run(
+                forget_command, cwd=ROOT, env=adapter_env, text=True,
+                capture_output=True, check=False,
+            )
+            try:
+                payload = json.loads(run.stdout)
+            except json.JSONDecodeError:
+                issues.append(f"cross-agent forget preview did not emit JSON for {agent}")
+                continue
+            if run.returncode != 0 or payload.get("status") != "PASS":
+                issues.append(f"cross-agent forget preview failed for {agent}")
+            scope = payload.get("data", {}).get("erasure_scope")
+            if scope != forgetting["erasure_scope"]:
+                issues.append(f"cross-agent ErasureScope drift for {agent}: {scope!r}")
+            if any(text in run.stdout for text in forgetting["forbidden_public_text"]):
+                issues.append(f"cross-agent hard-forget preview leaked managed text for {agent}")
+            if str(project) in run.stdout:
+                issues.append(f"cross-agent hard-forget preview leaked the project path for {agent}")
+            result = (scope, payload.get("findings"), payload.get("disclaimers"))
+            if baseline_forget is None:
+                baseline_forget = result
+            elif result != baseline_forget:
+                issues.append(f"cross-agent hard-forget result differs for {agent}")
+
+        conflict = fixture["expected_conflict"]
+        conflict_source = CROSS_AGENT_FIXTURE.parent / conflict["source"]
+        if not conflict_source.is_file() or not conflict_source.resolve().is_relative_to(CROSS_AGENT_FIXTURE.parent.resolve()):
+            return ["cross-agent conflict fixture source is missing or unsafe"]
+        decisions_path = memory_root / "decisions.md"
+        decisions_path.write_text(
+            decisions_path.read_text(encoding="utf-8")
+            + "\n" + conflict_source.read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+        conflict_command = [
+            sys.executable, "-m", "memory_custodian.main", "audit",
+            "--conflicts", "--project-root", project, "--format", "json",
+        ]
+        baseline_conflict = None
+        for agent in agents:
+            adapter_env = dict(env, MEMORY_CUSTODIAN_CROSS_AGENT=agent)
+            run = subprocess.run(
+                conflict_command, cwd=ROOT, env=adapter_env, text=True,
+                capture_output=True, check=False,
+            )
+            try:
+                payload = json.loads(run.stdout)
+            except json.JSONDecodeError:
+                issues.append(f"cross-agent conflict audit did not emit JSON for {agent}")
+                continue
+            findings = payload.get("findings", [])
+            structural = next(
+                (item for item in findings if item.get("code") == "MC-CONFLICT-001"),
+                {},
+            )
+            details = structural.get("details", {})
+            result = (
+                run.returncode, payload.get("status"),
+                payload.get("data", {}).get("conflict_status"),
+                [item.get("code") for item in findings],
+                details.get("entry_ids"), details.get("subject_id"),
+                payload.get("data", {}).get("reconciliation_findings"),
+            )
+            expected_result = (
+                conflict["exit_code"], conflict["status"],
+                conflict["conflict_status"], conflict["finding_codes"],
+                conflict["owner_entry_ids"], conflict["subject_id"],
+                conflict["reconciliation_findings"],
+            )
+            if result != expected_result:
+                issues.append(f"cross-agent conflict finding drift for {agent}: {result!r}")
+            if str(project) in run.stdout:
+                issues.append(f"cross-agent conflict audit leaked the project path for {agent}")
+            if baseline_conflict is None:
+                baseline_conflict = (result, findings)
+            elif (result, findings) != baseline_conflict:
+                issues.append(f"cross-agent conflict audit differs for {agent}")
     return issues
 
 
@@ -306,7 +429,7 @@ def main() -> int:
     print(f"Scenarios: {len(config['required_scenarios'])}")
     print(f"Skill contracts: {len(config['skill_contract'])}")
     print(f"Adapter contracts: {len(ADAPTERS)}")
-    print(f"Cross-agent fixture: offline CLI contract executed for {len(ADAPTER_PATHS)} adapters")
+    print(f"Cross-agent fixture: offline CLI contract checked under {len(ADAPTER_PATHS)} adapter labels")
     return 0
 
 
