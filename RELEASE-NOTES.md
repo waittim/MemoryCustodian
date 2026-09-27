@@ -2,7 +2,10 @@
 
 ## Unreleased
 
-_Candidate for package version 0.12.0; release date TBD. This is a working draft, not a published release. A release requires version consistency and the required checks passing for the exact final candidate SHA._
+## v0.12.0 - 2026-09-26
+
+Protocol 0.8 is a pre-1.0 reliability release focused on recovery,
+auditability, and cross-agent consistency.
 
 ### Protocol 0.8 reliability baseline
 
@@ -95,11 +98,10 @@ _Candidate for package version 0.12.0; release date TBD. This is a working draft
 - The checked-in CI workflow is configured for Ubuntu and Windows Python
   3.10–3.14 matrices, including the Windows private-state/path and public-JSON
   smoke tests, repository contract checks, and whitespace verification. Both
-  [CI run 36221367926](https://github.com/waittim/MemoryCustodian/actions/runs/36221367926)
-  and [CI run 36221365824](https://github.com/waittim/MemoryCustodian/actions/runs/36221365824)
-  completed successfully across that matrix on baseline SHA `1fdebe5`.
-  Those runs are baseline evidence. The release gate requires a separate
-  passing run for the exact final candidate SHA.
+  [push CI](https://github.com/waittim/MemoryCustodian/actions/runs/36266960254)
+  and [pull-request CI](https://github.com/waittim/MemoryCustodian/actions/runs/36266964370)
+  completed successfully across that matrix on candidate SHA `45432b2`.
+  The final merged commit must also pass CI before tagging.
 - The cross-agent fixture is executable offline: the static checker runs the
   same canonical JSON routing command once for each named adapter and compares
   the expected fields and payload stability. This validates the shared CLI
