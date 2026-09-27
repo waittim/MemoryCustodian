@@ -167,7 +167,7 @@ def read_local_private_file(path: Path) -> str:
     metadata = path.lstat()
     if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
         raise ValueError(f"Local private state file is not a regular file: {path}")
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
     descriptor = os.open(path, flags)
     try:
         opened = os.fstat(descriptor)
@@ -942,7 +942,7 @@ def validated_project_identity(
         metadata.get("protocol_version", "0.5"),
         CURRENT_PROTOCOL_VERSION,
     ) != 0:
-        raise ValueError("Local overlay access requires Protocol 0.7.")
+        raise ValueError("Local overlay access requires Protocol 0.8.")
     return metadata["project_id"]
 
 
@@ -999,6 +999,23 @@ def add_local_preference(
 
 
 def render_overlay_status(overlay: LocalOverlay) -> None:
+    # Import lazily to keep the local-state model independent from the CLI
+    # renderer during module initialization.
+    from .output import publish_data, publish_finding
+    from .results import make_finding
+
+    publish_data(local_overlay_status=overlay.status.value)
+    warnings = list(overlay.warnings)
+    if overlay.status in {LocalStatus.UNBOUND, LocalStatus.REVIEW} and not warnings:
+        warnings.append(f"Local overlay status is {overlay.status.value}.")
+    for warning in warnings:
+        publish_finding(make_finding(
+            "MC-LOCAL-001",
+            "WARNING",
+            warning,
+            path="local/",
+            remediation="Review and explicitly link or repair the local overlay.",
+        ))
     print(f"Local overlay status: {overlay.status.value}")
     for warning in overlay.warnings:
         print(f"- {warning}")

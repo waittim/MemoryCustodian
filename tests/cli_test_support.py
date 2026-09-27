@@ -1,4 +1,10 @@
-"""Compatibility helpers for exercising Protocol 0.6 from legacy regression tests."""
+"""Compatibility helpers for legacy protocol regression tests.
+
+The production CLI intentionally requires explicit staged migration selectors.
+Older regression tests predate that public contract, so this module translates
+their bare ``migrate`` call into prepare/canonicalize/finalize while the v0.12
+contract tests exercise the real parser directly.
+"""
 
 from contextlib import redirect_stdout
 from io import StringIO
@@ -59,8 +65,82 @@ def _subject_for_add(args):
     return [*args, "--subject", subject_id, "--facet", "behavior"]
 
 
+def _confirmed_stage(base_args, stage):
+    preview = StringIO()
+    with redirect_stdout(preview):
+        code = cli_main([*base_args, stage])
+    if code != 0:
+        print(preview.getvalue(), end="")
+        return code
+    match = re.search(r"(?m)^Plan ID: ([0-9a-f]{16})$", preview.getvalue())
+    if not match:
+        print(preview.getvalue(), end="")
+        return code
+    applied = StringIO()
+    with redirect_stdout(applied):
+        code = cli_main([
+            *base_args, stage, "--apply", "--confirm-plan", match.group(1),
+        ])
+    if code != 0:
+        print(applied.getvalue(), end="")
+    return code
+
+
+def _legacy_staged_migrate(args):
+    apply = "--apply" in args
+    confirm = _option(args, "--confirm-plan")
+    base = []
+    skip = False
+    for value in args:
+        if skip:
+            skip = False
+            continue
+        if value == "--apply":
+            continue
+        if value == "--confirm-plan":
+            skip = True
+            continue
+        base.append(value)
+
+    # A confirmation obtained from the compatibility preview is always the
+    # finalize Plan ID; prepare and canonicalize were already committed to
+    # private migration state by that preview.
+    if apply and confirm:
+        return cli_main([
+            *base, "--finalize", "--apply", "--confirm-plan", confirm,
+        ])
+
+    for stage in ("--prepare", "--canonicalize"):
+        code = _confirmed_stage(base, stage)
+        if code != 0:
+            return code
+
+    if not apply:
+        return cli_main([*base, "--finalize"])
+
+    preview = StringIO()
+    with redirect_stdout(preview):
+        code = cli_main([*base, "--finalize"])
+    if code != 0:
+        print(preview.getvalue(), end="")
+        return code
+    match = re.search(r"(?m)^Plan ID: ([0-9a-f]{16})$", preview.getvalue())
+    if not match:
+        print(preview.getvalue(), end="")
+        return code
+    return cli_main([
+        *base, "--finalize", "--apply", "--confirm-plan", match.group(1),
+    ])
+
+
 def main(argv):
     args = list(argv)
+    if (
+        args
+        and args[0] == "migrate"
+        and not {"--prepare", "--canonicalize", "--finalize"}.intersection(args)
+    ):
+        return _legacy_staged_migrate(args)
     if args and args[0] == "add" and "--evidence" not in args:
         kind = args[args.index("--type") + 1] if "--type" in args else "inbox"
         args.extend([

@@ -9,6 +9,7 @@ import subprocess
 from .entries import (
     StructuredEntry,
     parse_entry_inventory,
+    requires_structural_identity,
     structured_relation_issues,
 )
 from .reconciliations import (
@@ -30,6 +31,10 @@ from .structural import active_structural_operand_issues, subject_index
 class MergeReviewResult:
     text: str
     blocking: bool
+    status: str = "INVALID"
+    merge_base: str | None = None
+    conflicts: tuple[str, ...] = ()
+    reviews: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -110,12 +115,10 @@ def _entries(
     prefix = memory_relative.rstrip("/") + "/"
     for entry in result:
         relative = entry.path.as_posix().removeprefix(prefix)
-        code = entry.entry_id.split("-", 2)[1].upper()
         if (
             entry.status == "active"
-            and code in {"DEC", "CON", "DNU", "AREA"}
             and not relative.startswith("archive/")
-            and not relative.startswith(("rules/", "profiles/"))
+            and requires_structural_identity(entry, relative)
         ):
             for issue in active_structural_operand_issues(entry, subject_map):
                 if issue.field in {"Subject", "Facet"}:
@@ -304,6 +307,8 @@ def merge_review(project_root: Path, memory_dir: Path, target_ref: str) -> Merge
         return MergeReviewResult(
             "Merge review unavailable: " + str(exc) + "\nConflict-free status was not established.",
             True,
+            status="INVALID",
+            conflicts=("MC-MERGE-000 Merge review was unavailable; conflict-free status was not established.",),
         )
 
     left_entries = _changed(base_entries, head_entries)
@@ -507,4 +512,11 @@ def merge_review(project_root: Path, memory_dir: Path, target_ref: str) -> Merge
     lines.extend(f"- {item}: Concurrent hard-memory changes require semantic reconciliation." for item in reviews)
     if status == "CLEAR":
         lines.append("- No deterministic conflict or configured reconciliation risk was detected; this is not a semantic-consistency proof.")
-    return MergeReviewResult("\n".join(lines), bool(conflicts))
+    return MergeReviewResult(
+        "\n".join(lines),
+        bool(conflicts),
+        status=status,
+        merge_base=base,
+        conflicts=tuple(conflicts),
+        reviews=tuple(reviews),
+    )

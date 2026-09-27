@@ -1,4 +1,4 @@
-"""Canonical ID index and preview-only promotion operations."""
+"""Canonical ID index and transactional promotion operations."""
 
 from __future__ import annotations
 
@@ -23,6 +23,8 @@ from .local_overlay import (
     inspect_overlay,
     validated_project_identity,
 )
+from .locking import project_mutation_guard
+from .mutations import TextMutation
 from .protocol import (
     CURRENT_PROTOCOL_VERSION,
     compare_versions,
@@ -30,13 +32,17 @@ from .protocol import (
     manifest_contract_metadata,
     manifest_with_optional_module_index,
     parse_markdown_units,
+    prepended_text,
     resolve_memory_dir,
     resolve_project_root,
     read_managed_text,
 )
 from .snapshot import build_snapshot
 from .subjects import load_subjects, validate_subject_registry
-from .plans import digest_text
+from .plans import MutationPlan, digest_text, publish_plan
+from .output import publish_data
+from .results import stable_path
+from .transactions import apply_plan_transaction
 from .structural import (
     active_structural_operand_issues,
     candidate_structural_operand_issues,
@@ -182,6 +188,14 @@ def run_list(args) -> int:
         if (not args.status or item.status == args.status)
         and (not args.scope or item.scope == args.scope)
     )
+    publish_data(entries=[{
+        "entry_id": record.entry_id,
+        "status": record.status,
+        "scope": record.scope,
+        "source": stable_path(
+            record.source, project_root=project_root, memory_dir=memory_dir,
+        ),
+    } for record in records])
     print("Canonical memory entries:")
     for record in records:
         print(f"- {record.entry_id} [{record.status}; {record.scope}] {record.source}")
@@ -198,24 +212,42 @@ def run_show(args) -> int:
         include_archive=args.include_archive,
         include_local=args.local,
     ), args.entry_id)
-    print(f"Source: {record.source}")
-    if record.structured:
-        subject_id = record.structured.fields.get("Subject") or record.structured.fields.get("Provisional-Subject")
-        if subject_id:
-            subjects = {item.subject_id.casefold(): item for item in load_subjects(memory_dir)}
-            subject = subjects.get(subject_id.casefold())
-            current = subject_id
-            if subject and subject.status == "merged" and subject.merged_into:
-                current = subject.merged_into
-            print(f"Historical Subject ID: {subject_id}")
-            print(f"Current canonical Subject ID: {current}")
-    # The parser owns the body envelope boundary.  Show its semantic source,
-    # not the explicit serialization wrapper; user-authored ``&#8283;`` text
-    # remains untouched because it has no protocol meaning.
-    print(
+    display_text = (
         (record.structured.display_text or record.text)
         if record.structured else record.text
     )
+    subject_id = None
+    current_subject_id = None
+    if record.structured:
+        subject_id = record.structured.fields.get("Subject") or record.structured.fields.get("Provisional-Subject")
+        current_subject_id = subject_id
+        if subject_id:
+            subjects = {item.subject_id.casefold(): item for item in load_subjects(memory_dir)}
+            subject = subjects.get(subject_id.casefold())
+            if subject and subject.status == "merged" and subject.merged_into:
+                current_subject_id = subject.merged_into
+    publish_data(
+        source=stable_path(
+            record.source, project_root=project_root, memory_dir=memory_dir,
+        ),
+        entry={
+            "entry_id": record.entry_id,
+            "status": record.status,
+            "scope": record.scope,
+            "text": display_text,
+            "historical_subject_id": subject_id,
+            "current_subject_id": current_subject_id,
+        },
+    )
+    print(f"Source: {record.source}")
+    if record.structured:
+        if subject_id:
+            print(f"Historical Subject ID: {subject_id}")
+            print(f"Current canonical Subject ID: {current_subject_id}")
+    # The parser owns the body envelope boundary.  Show its semantic source,
+    # not the explicit serialization wrapper; user-authored ``&#8283;`` text
+    # remains untouched because it has no protocol meaning.
+    print(display_text)
     return 0
 
 
@@ -229,15 +261,13 @@ def _promoted_id(candidate: IndexedEntry, kind: str) -> str:
 
 
 def run_promote(args) -> int:
-    if getattr(args, "apply", False):
-        raise ValueError("Transactional promotion apply requires Protocol 0.8.")
     project_root = resolve_project_root(args.project_root)
     memory_dir = resolve_memory_dir(project_root, args.memory_dir)
     manifest = read_managed_text(memory_dir, memory_dir / "manifest.md")
     metadata = manifest_contract_metadata(manifest)
     snapshot = build_snapshot(memory_dir, project_root)
     if compare_versions(metadata["protocol_version"], CURRENT_PROTOCOL_VERSION) != 0:
-        raise ValueError("Promotion preview requires Protocol 0.7.")
+        raise ValueError("Promotion requires Protocol 0.8.")
     registry_issues = validate_subject_registry(memory_dir, project_root)
     if registry_issues:
         raise ValueError("Subject registry is invalid: " + "; ".join(registry_issues[:5]))
@@ -449,6 +479,56 @@ def run_promote(args) -> int:
     print("Blockers:")
     for blocker in blockers or ["none"]:
         print(f"- {blocker}")
-    print(f"Plan ID: {hashlib.sha256(plan_seed).hexdigest()[:16]}")
-    print("Transactional promotion apply requires Protocol 0.8.")
+    candidate_path = memory_dir.joinpath(*Path(candidate.source).parts)
+    candidate_document = read_managed_text(memory_dir, candidate_path)
+    if candidate_document.count(candidate.text) != 1:
+        blockers.append("Candidate source no longer resolves exactly once")
+    candidate_updated = candidate_document.replace(candidate.text, promoted_candidate_text, 1)
+    target_updated = prepended_text(target_baseline, prospective_entry_text)
+    mutations = [
+        TextMutation(candidate_path, candidate_updated),
+        TextMutation(target_path, target_updated),
+    ]
+    if manifest_changed:
+        mutations.append(TextMutation(memory_dir / "manifest.md", updated_manifest))
+    plan = MutationPlan(
+        "promote", {"entry_id": candidate.entry_id, "type": args.type},
+        metadata["project_id"], CURRENT_PROTOCOL_VERSION,
+        tuple(mutations) if not blockers else (), blockers=tuple(sorted(set(blockers))),
+        private_context={
+            "dependency_sha256": hashlib.sha256(plan_seed).hexdigest(),
+        },
+        project_root=project_root,
+        dependency_paths=tuple(dict.fromkeys((
+            memory_dir / "manifest.md",
+            memory_dir / "subjects.md",
+            *(item.path for item in snapshot.files),
+        ))),
+        private_dependency_paths=tuple(dict.fromkeys(
+            item.path
+            for item in (
+                ()
+                if overlay is None or overlay.snapshot is None
+                else overlay.snapshot.files
+            )
+        )),
+    )
+    public_plan = publish_plan(plan)
+    print(f"Plan ID: {public_plan['plan_id']}")
+    if not args.apply:
+        print("Dry run only. Re-run with --apply --confirm-plan <PLAN_ID>.")
+        return 0
+    if blockers:
+        print("Refusing promotion while blockers remain.")
+        return 1
+    if args.confirm_plan != plan.plan_id:
+        raise ValueError("Stale or mismatched promotion plan. No files written.")
+    with project_mutation_guard(
+        project_root, memory_dir / "manifest.md", "promote",
+        timeout=args.lock_timeout, break_stale=args.break_stale_lock,
+    ):
+        if plan.plan_id != args.confirm_plan:
+            raise ValueError("Promotion inputs changed before apply; preview again. No files written.")
+        apply_plan_transaction(plan, memory_dir, force_journal=True)
+    print(f"Promoted {candidate.entry_id} to {new_id}.")
     return 0

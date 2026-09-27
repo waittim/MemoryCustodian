@@ -7,6 +7,7 @@ from pathlib import Path
 from .locking import project_mutation_guard
 from .mutations import TextMutation, apply_mutations
 from .plans import MutationPlan, print_plan
+from .transactions import apply_plan_transaction
 from .protocol import (
     ENTRY_SCHEMA_MIGRATION_MESSAGE,
     LEGACY_ENTRY_SCHEMA_VERSION,
@@ -323,7 +324,7 @@ def run(args) -> int:
         if existing_protocol_version != CURRENT_PROTOCOL_VERSION or existing_project_id is None:
             raise ValueError(
                 "Legacy memory must be migrated before --replace-existing; "
-                "run `memory-custodian migrate` to establish a stable Protocol 0.7 project_id first."
+                "run staged `memory-custodian migrate --prepare` to establish a stable Protocol 0.8 project_id first."
             )
         results, mutations, replacement_warnings = _replacement_state(
             args,
@@ -357,7 +358,7 @@ def run(args) -> int:
             print("Dry run only. Re-run with --replace-existing --apply --confirm-plan <PLAN_ID>.")
             return 0
         if not args.confirm_plan:
-            raise ValueError("Protocol 0.7 replacement apply requires --confirm-plan <PLAN_ID>.")
+            raise ValueError("Protocol 0.8 replacement apply requires --confirm-plan <PLAN_ID>.")
         with project_mutation_guard(
             project_root,
             existing_manifest,
@@ -395,7 +396,7 @@ def run(args) -> int:
                     f"Stale or mismatched plan: confirmed {args.confirm_plan}, "
                     f"current Plan ID is {current_plan.plan_id}. No files written."
                 )
-            apply_mutations(current_mutations)
+            apply_plan_transaction(current_plan, memory_dir, force_journal=True)
         print(f"Initialized MemoryCustodian at {memory_dir}")
         for item in current_results:
             print(f"- {item}")
@@ -419,7 +420,13 @@ def run(args) -> int:
             current_date,
         )
         if mutations:
-            apply_mutations(mutations)
+            plan = MutationPlan(
+                "init repair" if args.repair else "init",
+                {"memory_dir": memory_dir.relative_to(project_root).as_posix()},
+                guard.project_id, CURRENT_PROTOCOL_VERSION, tuple(mutations),
+                project_root=project_root,
+            )
+            apply_plan_transaction(plan, memory_dir, force_journal=True)
 
     action = "Repaired" if args.repair else "Initialized"
     print(f"{action} MemoryCustodian at {memory_dir}")

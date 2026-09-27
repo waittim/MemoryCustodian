@@ -8,8 +8,8 @@ It stores memory as plain Markdown in your repo and routes a bounded context pac
 
 **Durable memory. Minimal context.**
 
-[![Version](https://img.shields.io/badge/version-0.11.0-blue.svg)](https://github.com/waittim/MemoryCustodian/releases/latest)
-[![CI](https://img.shields.io/badge/CI-passing-blue.svg)](#)
+[![Version](https://img.shields.io/badge/version-0.12.0-blue.svg)](https://github.com/waittim/MemoryCustodian/releases/latest)
+[![CI](https://github.com/waittim/MemoryCustodian/actions/workflows/ci.yml/badge.svg)](https://github.com/waittim/MemoryCustodian/actions/workflows/ci.yml)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-agnostic-blue.svg)](#)
@@ -28,6 +28,10 @@ MemoryCustodian moves durable project context into the repository. Humans can re
 - Optional `rules/`, `profiles/`, and `areas/` only when the manifest says they apply
 
 *This is project memory, not chat history.*
+
+Forgetting is bounded to the selected MemoryCustodian-managed scope. It is not
+a guarantee of erasure from Git history or previously distributed copies;
+Git history and distributed copies remain outside the operation's control.
 
 ---
 
@@ -116,8 +120,8 @@ MemoryCustodian turns project memory into a small, explicit workflow:
 2. **The manifest routes context.** The agent reads `manifest.md`, then `brief.md`, then only the task-relevant files named by the manifest.
 3. **Optional memory stays opt-in.** `rules/`, `profiles/`, `areas/`, and `archive/` remain out of default context until explicitly triggered.
 4. **Updates are scoped.** Cross-cutting decisions stay at root; subsystem knowledge lives in matched `areas/` files.
-5. **Active memory is evidence-backed.** Protocol 0.7 gives entries stable IDs and requires user confirmation or project source; unconfirmed agent observations stay candidates in `inbox.md`.
-6. **Concurrent mutation is guarded.** Every writer uses an external mutation lock; preview-first commands reject stale Plan IDs.
+5. **Active memory is evidence-backed.** Protocol 0.8 / Entry schema 3 gives entries stable IDs, typed bodies, Subjects, and Facets, and requires user confirmation or project source; unconfirmed agent observations stay candidates in `inbox.md`.
+6. **Concurrent mutation is recoverable.** Every multi-file writer uses the external lock and transaction journal; preview-first commands reject stale Plan IDs and interrupted writes are detected for safe recovery.
 7. **Conflict identity is structural.** Decisions and constraints reference a stable Subject ID and controlled Facet; display names and aliases are not conflict keys.
 8. **Maintenance is deterministic.** Budgets and structure are checked automatically, preserving active invariants before archiving.
 
@@ -203,6 +207,11 @@ memory-custodian check --freshness
 memory-custodian check --privacy
 memory-custodian check --security
 
+# Unified project audit (human or machine-readable)
+memory-custodian audit
+memory-custodian audit --format json
+memory-custodian audit --transactions
+
 # Detect structural collisions and duplicate owners
 memory-custodian check --conflicts
 
@@ -231,9 +240,18 @@ memory-custodian compact
 # Archive oldest decision entries when over budget (requires explicit confirmation)
 memory-custodian compact --target decisions.md --apply --archive-oldest --confirm-plan <PLAN_ID>
 
-# Preview and apply migration to Protocol 0.7 (and Entry schema 2)
-memory-custodian migrate
-memory-custodian migrate --apply --confirm-plan <PLAN_ID>
+# Migrate in three explicit, independently confirmed stages
+memory-custodian migrate --prepare
+memory-custodian migrate --prepare --apply --confirm-plan <PREPARE_PLAN_ID>
+memory-custodian migrate --canonicalize
+memory-custodian migrate --canonicalize --apply --confirm-plan <CANONICALIZE_PLAN_ID>
+memory-custodian migrate --finalize
+memory-custodian migrate --finalize --apply --confirm-plan <FINALIZE_PLAN_ID>
+
+# Inspect and recover an interrupted multi-file mutation
+memory-custodian recover --transaction-id <OPAQUE_TRANSACTION_ID>
+memory-custodian recover --transaction-id <OPAQUE_TRANSACTION_ID> --complete
+memory-custodian recover --transaction-id <OPAQUE_TRANSACTION_ID> --rollback
 ```
 
 ---
@@ -253,6 +271,7 @@ memory-custodian local link
 - **Precedence:** Shared constraints > Shared decisions > Local preferences.
 - **Boundaries:** Local memory cannot override shared hard memory, redefine routes, or serve as a secret store.
 - **Privacy:** State directories use POSIX `0700` and regular files use `0600`.
+- **Erasure boundary:** Forget, hard/purge, ID forget, local reset, and recovery use one versioned `data.erasure_scope`; `unavailable` history inspection is REVIEW, not PASS.
 
 ---
 
@@ -264,6 +283,7 @@ memory-custodian local link
 - **No RAG / Vector DB required:** Deterministic manifest routing avoids embedding latency, hallucinations, and ungrounded full-context stuffing.
 - **Safe Trust Boundaries:** Memory constrains project conventions but never overrides system instructions, security boundaries, or authorizes destructive external actions.
 - **Strict Evidence & Identity:** Stable IDs (`MC-DEC-...`, `MC-SUBJ-...`) and required Evidence prevent phantom rules and accidental overwrites.
+- **Auditable recovery:** Protocol 0.8 keeps crash-recovery journals private and reports unfinished transactions without loading protected backup bytes into context.
 
 ---
 
@@ -295,16 +315,42 @@ MemoryCustodian was developed prior to OpenAI Build Week (v0.7.0 baseline) and e
 
 ## Upgrading & Versioning
 
-MemoryCustodian tracks three related versions:
-- **Package version** (`0.11.0`): CLI, skill bundle, and plugin metadata.
-- **Protocol version** (`0.7`): `manifest.md` schema, entry schemas (Schema 2), and routing rules.
+MemoryCustodian tracks related package and protocol schemas:
+- **Package version** (`0.12.0`): CLI, skill bundle, and plugin metadata.
+- **Protocol version** (`0.8`): manifest/routing rules, Entry schema 3, transaction schema 1, audit schema 1, and output envelope schema 1.
+- **Erasure scope** (`1`): the canonical `data.erasure_scope` child object shared by forget, purge, ID forget, local reset, and recovery.
 - **Project memory version**: Protocol metadata declared in your repository's `manifest.md`.
 
-Protocol 0.7/schema 1 was publicly available on the `0.11.0` branch as a legacy input; CLI `0.11.0` or newer reads it with literal semantics and migrates to the current Protocol 0.7/schema 2 grammar. Strict reads and writers must not treat schema 1 as current. Bound local files are included in the same preview/apply plan.
+Protocol 0.5, 0.6, and 0.7/schema 1 or 2 projects remain readable source
+formats. The staged migration path is `--prepare`, a repeatable manual
+`--canonicalize` interval, and `--finalize`; each stage has a distinct Plan ID
+and transaction. Schema 1 treats wrapper-like text literally, while schema 2
+and 3 decode the explicit `memory-custodian-body-v1` wrapper. Finalize writes
+Protocol 0.8 / Entry schema 3 only after canonical entries, Subjects, Facets,
+relations, and audit blockers are resolved. Bound local files participate in
+the same transition.
 
-Run `memory-custodian check` to inspect compatibility, and `memory-custodian migrate` to preview and apply upgrades.
+Protocol 0.8 is a pre-1.0 reliability release focused on recovery,
+auditability, and cross-agent consistency. It does not guarantee semantic
+correctness, database ACID behavior, or complete erasure. Forgetting controls
+what future agents can access through MemoryCustodian; it does not rewrite Git
+history or revoke clones, forks, backups, caches, or other distributed copies.
+
+Run `memory-custodian check` to inspect compatibility, then use the staged
+`migrate --prepare`, `--canonicalize`, and `--finalize` previews to apply an
+upgrade safely.
 
 For complete release history and breaking change notes, see [RELEASE-NOTES.md](RELEASE-NOTES.md).
+
+### Release verification
+
+The checked-in CI workflow runs the standard-library test suite and repository
+contract checks on Ubuntu and runs the Windows smoke, private-state, and JSON
+contract checks on Python 3.10 through 3.14. The cross-agent fixture runner is
+an offline deterministic CLI check executed once for each named adapter; it is
+not a live Codex, Claude Code, Gemini, or generic-agent benchmark. See
+[`live-evaluation.md`](evals/memory-custodian/live-evaluation.md) for the
+reproducible live-evaluation procedure.
 
 ---
 

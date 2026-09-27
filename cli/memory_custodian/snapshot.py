@@ -16,6 +16,7 @@ from .entries import (
     CANDIDATE_ONLY_EVIDENCE,
     StructuredEntry,
     parse_entry_inventory,
+    requires_structural_identity,
     structured_entry_schema_issues,
     structured_relation_issues,
 )
@@ -221,8 +222,7 @@ def _entry_semantic_diagnostics(
                     )
 
             if entry.status == "active":
-                code = entry.entry_id.split("-", 2)[1].upper()
-                if code in {"DEC", "CON", "DNU", "AREA"}:
+                if requires_structural_identity(entry, relative):
                     subject_id = entry.fields.get("Subject", "")
                     facet = entry.fields.get("Facet", "")
                     if not subject_id or not facet:
@@ -399,13 +399,14 @@ def build_snapshot(
                 entries,
                 tuple(dict.fromkeys([*entry_issues, *required_identity])),
             )
+            check_entry_issues = tuple(dict.fromkeys([*entry_issues, *required_identity]))
         files.append(
             SnapshotFile(
                 path,
                 relative,
                 text,
                 entries,
-                entry_issues,
+                check_entry_issues,
                 conflict_entry_issues,
                 entry_issues,
                 (),

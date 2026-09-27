@@ -1,6 +1,7 @@
 from contextlib import redirect_stderr, redirect_stdout
 from datetime import date
 from io import StringIO
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -33,8 +34,10 @@ from memory_custodian.main import main as raw_main
 from memory_custodian.plans import (
     MutationPlan,
     PENDING_PLAN_MAX_AGE_SECONDS,
+    digest_path,
     discard_pending_seed,
     pending_entry_suffixes,
+    pending_plan_nonce,
     pending_project_id,
 )
 from memory_custodian.mutations import TextMutation
@@ -409,6 +412,60 @@ class Protocol06Tests(unittest.TestCase):
             path.write_text("changed\n", encoding="utf-8")
             self.assertNotEqual(first, plan.plan_id)
 
+    def test_digest_path_uses_raw_bytes_and_distinguishes_missing_from_empty(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "operand"
+            missing = digest_path(path)
+            path.write_bytes(b"")
+            empty = digest_path(path)
+            path.write_bytes(b"\xff\x00\r\n")
+            binary = digest_path(path)
+            self.assertEqual(missing, "missing")
+            self.assertNotEqual(missing, empty)
+            self.assertNotEqual(empty, binary)
+            self.assertEqual(binary, hashlib.sha256(b"\xff\x00\r\n").hexdigest())
+
+    def test_private_dependency_snapshot_changes_plan_id_without_public_exposure(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as state:
+            root = Path(tmp)
+            target = root / "memory.md"
+            target.write_text("before\n", encoding="utf-8")
+            external = Path(state) / "local" / "preferences.md"
+            external.parent.mkdir()
+            external.write_bytes(b"one\r\n")
+            plan = MutationPlan(
+                "test", {}, str(uuid.uuid4()), "0.8", (TextMutation(target, "after\n"),),
+                project_root=root,
+                private_dependency_paths=(("local-preferences", external),),
+            )
+            first = plan.plan_id
+            self.assertNotIn(str(external), json.dumps(plan.canonical(), sort_keys=True))
+            external.write_bytes(b"two\r\n")
+            self.assertNotEqual(first, plan.plan_id)
+            external.unlink()
+            self.assertNotEqual(first, plan.plan_id)
+
+    def test_sensitive_plan_id_is_opaque_reference_and_pending_filename_is_generic(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as state:
+            root = Path(tmp)
+            target = root / "memory.md"
+            target.write_text("secret topic\n", encoding="utf-8")
+            with patch.dict(os.environ, {"XDG_STATE_HOME": state}):
+                nonce, pending = pending_plan_nonce("forget-private", root, "selector-digest")
+                plan = MutationPlan(
+                    "forget", {"topic": "SecretTopic", "mode": "hard"}, str(uuid.uuid4()), "0.8",
+                    (TextMutation(target, "redacted\n"),),
+                    project_root=root,
+                    private_context={"privacy_nonce": nonce},
+                    public_arguments={"topic": "[redacted]", "mode": "hard"},
+                    sensitive=True,
+                    public_redactions=("SecretTopic",),
+                )
+                self.assertEqual(plan.plan_id, nonce[:16])
+                self.assertNotIn("SecretTopic", json.dumps(plan.canonical(), sort_keys=True))
+                self.assertNotIn("selector-digest", pending.name)
+                discard_pending_seed(pending)
+
     def test_stale_forget_plan_writes_nothing(self):
         with tempfile.TemporaryDirectory() as tmp:
             self.assertEqual(main(["init", "--project-root", tmp]), 0)
@@ -425,6 +482,24 @@ class Protocol06Tests(unittest.TestCase):
                 ])
             self.assertEqual(code, 2)
             self.assertEqual((memory / "constraints.md").read_text(encoding="utf-8"), before)
+
+    def test_stale_hard_forget_reference_checks_private_digest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp) / "state"
+            self.assertEqual(main(["init", "--project-root", tmp]), 0)
+            memory = Path(tmp) / "docs" / "memory"
+            (memory / "constraints.md").write_text(
+                "# Constraints\n\n- Remove SensitiveAlpha.\n", encoding="utf-8"
+            )
+            args = ["forget", "SensitiveAlpha", "--mode", "hard", "--project-root", tmp]
+            with patch.dict(os.environ, {"XDG_STATE_HOME": str(state)}):
+                plan_id = preview_id(args)
+                before = (memory / "constraints.md").read_bytes()
+                (memory / "constraints.md").write_bytes(before + b"\nConcurrent edit\n")
+                with redirect_stdout(StringIO()), redirect_stderr(StringIO()):
+                    code = main([*args, "--apply", "--confirm-plan", plan_id])
+            self.assertEqual(code, 2)
+            self.assertEqual((memory / "constraints.md").read_bytes(), before + b"\nConcurrent edit\n")
 
     def test_compact_and_forget_rebuild_complete_plan_under_lock(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -693,7 +768,7 @@ class Protocol06Tests(unittest.TestCase):
 
             status = StringIO()
             with redirect_stdout(status):
-                self.assertEqual(main(["status", "--project-root", tmp]), 1)
+                self.assertEqual(main(["status", "--project-root", tmp]), 0)
             self.assertIn("decisions.md: NEAR LIMIT", status.getvalue())
 
             checked = StringIO()
@@ -765,7 +840,7 @@ class Protocol06Tests(unittest.TestCase):
             manifest = memory / "manifest.md"
             manifest.write_text(
                 manifest.read_text(encoding="utf-8").replace(
-                "- protocol_version: 0.7", "- protocol_version: 0.5"
+                    "- protocol_version: 0.8", "- protocol_version: 0.5"
                 ),
                 encoding="utf-8",
             )
@@ -778,11 +853,10 @@ class Protocol06Tests(unittest.TestCase):
             )
             args = ["migrate", "--project-root", tmp]
             plan_id = preview_id(args)
-            self.assertEqual(main([*args, "--apply", "--confirm-plan", plan_id]), 0)
+            self.assertEqual(main([*args, "--apply", "--confirm-plan", plan_id]), 1)
             migrated = area.read_text(encoding="utf-8")
-            self.assertRegex(migrated, r"MC-AREA-20260728-[0-9a-f]{8}")
-            self.assertIn("Scope: area:backend", migrated)
-            self.assertIn("- legacy-unverified", migrated)
+            self.assertNotRegex(migrated, r"MC-AREA-20260728-[0-9a-f]{8}")
+            self.assertIn("## 2026-07-28 - Keep backend offline", migrated)
 
     def test_real_concurrent_add_preserves_both_entries(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -813,7 +887,7 @@ class Protocol06Tests(unittest.TestCase):
             manifest_path = Path(tmp) / "docs" / "memory" / "manifest.md"
             legacy_manifest = manifest_path.read_text(encoding="utf-8")
             legacy_manifest = legacy_manifest.replace(
-                "- protocol_version: 0.7",
+                "- protocol_version: 0.8",
                 "- protocol_version: 0.5",
             )
             legacy_manifest = re.sub(

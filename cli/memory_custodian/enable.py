@@ -19,6 +19,8 @@ from .protocol import (
     today,
 )
 from .mutations import TextMutation, apply_mutations
+from .plans import MutationPlan
+from .transactions import apply_plan_transaction
 from .routes import validate_glob
 from .templates import render_area_template, render_profile_template, render_rule_template, render_template
 
@@ -145,7 +147,7 @@ def run(args) -> int:
             )
         if comparison == 0 and guard.project_id is None:
             raise ValueError(
-                "Protocol 0.7 manifest is missing a valid project_id; run `init --repair`."
+                "Protocol 0.8 manifest is missing a valid project_id; run `init --repair`."
             )
         state, manifest_state, mutations = _build_mutations(
             memory_dir,
@@ -155,7 +157,13 @@ def run(args) -> int:
             path_globs=path_globs,
         )
         if mutations:
-            apply_mutations(mutations)
+            plan = MutationPlan(
+                "enable", {"feature": args.feature},
+                guard.project_id or "legacy-protocol",
+                metadata.get("protocol_version", "0.5"), tuple(mutations),
+                project_root=project_root,
+            )
+            apply_plan_transaction(plan, memory_dir)
     if not mutations:
         print(f"{relative_path}: already enabled")
         return 0

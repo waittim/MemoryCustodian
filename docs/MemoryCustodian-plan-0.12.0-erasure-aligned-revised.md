@@ -12,11 +12,16 @@
   * Deterministic task/path/explicit routing
   * Complete `read --explain` 与 strict routing
   * Local overlay、root binding 与 shared/local precedence
+  * Entry schema 2、`memory-custodian-body-v1` body fencing 与 schema 1 literal-body compatibility
   * Reachability、freshness 与 current-worktree conflict checks
   * Merge-aware read-only reconciliation review
   * Reconciliation record、Exception-To 与 Subject merge preview contracts
   * ID list/show/forget
   * Unified forgetting/history-inspection wording
+
+本指南的 inherited baseline 于 2026-09-15 在 commit `9a63a3c` 核查：package `0.11.0`、Protocol `0.7`、
+Entry schema `2`，完整测试、version check 与 skill/adapter contract checks通过。若实施起点改变，Phase 0 必须重新
+验证 baseline，不能仅依赖此记录。
 
 本阶段不是发布 MemoryCustodian 1.0，而是在进入 1.0 决策前，对现有能力进行生产化加固。重点是：
 
@@ -33,7 +38,7 @@
 
 * Package version：`0.12.0`
 * Protocol version：`0.8`
-* Entry schema version：`1`
+* Entry schema version：`3`
 * Subject schema version：`1`
 * Conflict schema version：`1`
 * Routing schema version：`1`（shared manifest，继承 Protocol 0.7）
@@ -47,6 +52,9 @@ Schema authority：
 
 | Schema | Authority and storage |
 | --- | --- |
+| Entry | shared `manifest.md` selects the grammar; normative rules live in `entry-schema.md`; bound local Entry bodies use the same selected grammar |
+| Subject | shared `manifest.md` selects the schema; `subjects.md` is the identity registry |
+| Conflict | shared `manifest.md` selects the schema; active entries、`subjects.md` 与按需创建的 `reconciliations.md` 共同承载状态 |
 | Routing | shared `manifest.md` |
 | Local overlay | repo-external local `manifest.md` |
 | Transaction | repo-external transaction journal |
@@ -54,7 +62,11 @@ Schema authority：
 | Audit | audit `data`/`findings` child object under output envelope |
 | Erasure scope | versioned `erasure_scope` child object |
 
-`audit_schema_version` 与 `erasure_scope_schema_version` 可以作为 `output_schema_version: 1` 下的 child version，不进入 shared manifest。
+`audit_schema_version` 固定放在 audit envelope 的 `data` object；`erasure_scope_schema_version` 固定放在
+`data.erasure_scope` object。二者都是 `output_schema_version: 1` 下的 child version，不进入 shared manifest。
+
+Protocol 0.8 / Entry schema 3 是对 Protocol 0.7 / Entry schema 2 的前向扩展。它继续使用
+`memory-custodian-body-v1`，不得把 Protocol 0.7 / schema 1 中字面出现的同名 fence 误解码为 schema 2/3 body wrapper。
 
 ## 一、v0.12 版本目标与可验证能力
 
@@ -70,7 +82,8 @@ MemoryCustodian v0.12 必须实现并通过仓库内测试、fixtures、audit �
 8. 所有 multi-file mutation 发生进程崩溃后都可以检测，并在安全条件满足时 complete 或 rollback。
 9. Local preference 不会进入 shared repo。
 10. Forgetting 可以按完整语义单元或稳定 ID 执行。
-11. Hard forget 与 purge 不泄露被删除 topic。
+11. Hard forget 与 purge 不在 public output、generated filenames 或新增 semantic metadata 中泄露被删除 topic；
+    crash recovery 所需的受保护 pre-state bytes 与 pre-existing target locator 受第三节和第四节的严格边界约束。
 12. Memory 不会扩大 agent 权限。
 13. Protocol 0.5、0.6、0.7 项目存在明确迁移路径。
 14. 核心运行不依赖网络、数据库、embedding、daemon 或第三方 runtime package。
@@ -85,9 +98,9 @@ MemoryCustodian v0.12 必须实现并通过仓库内测试、fixtures、audit �
 23. Subject merge、supersede、promotion、exception、reconciliation、forget/purge、migration、compact、enable 与 local reset 等所有 multi-file mutation 具备 transaction protection。
 24. Soft/hard/purge、ID forget 和 local reset 具有统一、可机器读取的 erasure-scope contract。
 25. Git-history exposure inspection 的结果有稳定 status，但任何结果都不会被表述为对 forks、clones、backups 或 caches 的全局擦除证明。
-26. Transaction journal metadata、filenames、JSON、audit 和 error paths 不泄露 hard-forgotten topic；
-    protected rollback backup bytes 可以短暂包含 pre-operation content，必须受限、不可进入 agent context，
-    并在 commit/rollback 后清理。
+26. Transaction semantic metadata、generated filenames、JSON、audit 和 public error paths 不泄露 hard-forgotten topic；
+    protected rollback backup bytes 与恢复必需的 pre-existing target locator 可以短暂包含 pre-operation content，
+    必须受限、不可进入 reader/agent context，并在 commit/rollback 后清理。
 27. 所有 adapters 对 forgetting boundary 使用相同语义和用户承诺。
 
 不得宣称：
@@ -145,6 +158,9 @@ changelog.md
 ```
 
 理由：decision、constraint、preference、rejection 与 area facts 需要稳定身份；brief、rules、profiles 与 changelog 保持适合人工维护的连续文本。
+`rules/*.md` 与 `profiles/*.md` 可以保留人工维护的连续文本；但 CLI 在其中创建的 formal entry 仍必须满足
+Entry schema 3，并使用 `MC-AREA`、明确的 `Entry-Type: rule | profile` 与相应 typed body。这些 workflow entries
+不参与 Subject/Facet structural ownership，除非未来协议通过显式 schema migration 改变这一点。
 
 ### 2.2 Canonical metadata and typed body
 
@@ -156,8 +172,9 @@ Status
 Scope
 Evidence
 Typed body
-Subject（managed decision/constraint/do-not-use/area hard memory）
-Facet（managed decision/constraint/do-not-use/area hard memory）
+Subject（managed decision/constraint/do-not-use/area hard memory；`MC-TOMB` erasure guard 除外）
+Facet（managed decision/constraint/do-not-use/area hard memory；`MC-TOMB` erasure guard 除外）
+Entry-Type（仅 schema 3 `MC-AREA` entry）
 ```
 
 Active managed files允许：
@@ -194,16 +211,26 @@ Typed-body matrix：
 | `MC-DNU` | `Rejected:` |
 | `MC-PREF` | `Preference:` |
 | `MC-INBOX` | `Statement:` |
-| `MC-TOMB` | `Rejected:` |
-| area entry | 使用原始 type-specific ID，或声明 `Entry-Type` 后使用对应 typed body |
+| `MC-TOMB` | `Rejected:`；它是 erasure guard，不是 Subject/Facet owner |
+| `MC-AREA` | 由 `Entry-Type` 决定 `Decision:`、`Constraint:`、`Preference:`、`Rejected:`、`Rule:` 或 `Profile:` |
 
-Protocol 0.8 推荐 area 文件继续使用 type-specific IDs，例如 `MC-DEC`、`MC-CON` 与 `MC-PREF`。如果保留 `MC-AREA`，必须增加：
+Protocol 0.8 的新 area hard-memory writes 使用 type-specific IDs，例如 `MC-DEC`、`MC-CON`、`MC-PREF` 与
+`MC-DNU`。为保持已有稳定身份，Protocol 0.7 创建的 `MC-AREA` 不改写 ID，但迁移到 schema 3 时必须增加：
 
 ```text
-Entry-Type: decision | constraint | preference | do-not-use
+Entry-Type: decision | constraint | preference | do-not-use | rule | profile
 ```
 
-并验证 typed body 与 `Entry-Type` 一致。
+`Entry-Type`、typed body、storage path 与 Scope 必须一致。只有一个已识别 typed body 且不存在语义歧义时，
+migration 才可机械补充 `Entry-Type`；否则进入 manual checklist。
+`areas/*.md` 只允许 decision/constraint/preference/do-not-use，`rules/*.md` 只允许 rule，`profiles/*.md` 只允许
+profile；rule/profile entries 使用 project scope但不成为 structural owners。
+现有 `add --type area --name <slug>` 在 0.12.x 保留为 deprecated compatibility alias：它创建
+`MC-AREA` + `Entry-Type: decision` 并提示优先使用 `add --type decision --area <slug>`；是否在 1.0 移除另行决策。
+
+Entry schema 3 继续使用 schema 2 的 `memory-custodian-body-v1` wrapper。Parser 按 manifest 中
+`protocol_version + entry_schema_version` 选择解释规则：schema 1 将 wrapper-like text 视为字面正文，schema 2/3
+解码 wrapper；search 使用 decoded semantic text，mutation 使用原始 source unit。
 
 Parser 必须拒绝：
 
@@ -269,6 +296,9 @@ Reconciled-With  # derived/display convenience only when backed by a record
 docs/memory/reconciliations.md
 ```
 
+该文件是按需创建的 shared authority，不加入默认初始化文件集；文件不存在表示当前没有 reconciliation records，
+不是 missing-required error。首次创建 reconciliation record 时，由 transaction 原子创建该文件。
+
 Resolution 枚举：
 
 ```text
@@ -304,13 +334,12 @@ Supersedes
 Superseded-By
 Promoted-From
 Promoted-To
-Related
 Exception-To
 ```
 
 要求：
 
-* 所有 ID 引用存在，除非明确 external。
+* 所有 relation operand 都是当前项目 registry/index 中存在的 canonical ID；Protocol 0.8 不为 Entry relation 定义 external operand syntax。
 * Supersedes 与 promotion relations 双向一致。
 * 不允许 cycle。
 * Exception-To 满足 scope/Subject/Facet contract。
@@ -329,13 +358,17 @@ Protocol 0.8 项目中：
 * CLI 新写入永远不得创建 legacy entry。
 * Migration 使用 prepare/manual/finalize，不把未完成 canonicalization 的项目标为 fully compliant 0.8。
 
+兼容输入必须明确区分 Protocol 0.7 / Entry schema 1 与 Protocol 0.7 / Entry schema 2。Schema 1 使用 literal-body
+语义；schema 2 使用 `memory-custodian-body-v1`。Migrator 必须按 source metadata 解析，绝不能先按目标 schema
+解释后再迁移。Protocol 0.8 的 writer 只创建 schema 3 entry。
+
 Release 前必须将仓库自身 dogfood memory、templates 与 examples 迁移至 canonical format。
 
 ## 三、Transaction Journal 与 Crash Recovery
 
 现有能力包括单文件 atomic replace、unified mutation guard、Plan ID 与 apply-time digest verification。Protocol 0.8 为**所有 multi-file mutation**增加 journal。
 
-必须 transactional 的操作包括但不限于：
+以下 mutating paths 必须接入 transaction engine；当展开后的 target count 大于一时强制使用 journal：
 
 * add when it also updates manifest/changelog
 * supersede
@@ -346,20 +379,34 @@ Release 前必须将仓库自身 dogfood memory、templates 与 examples 迁移�
 * soft/hard/purge forget when more than one target changes
 * compact/archive
 * enable optional module
-* `init --replace-existing`
+* init、`init --repair` 与 `init --replace-existing` when more than one target changes
 * migration prepare/finalize/canonicalization
 * local reset
 * any canonicalization that changes Subject or relation references
 
-如果一个命令最终只有一个 target，可以继续使用单文件 atomic replace；一旦 target count 大于一，必须进入 transaction engine。Release notes 不得将只覆盖 conflict-governance mutation 描述为所有 multi-file recovery。
+如果一个命令最终只有一个 file target 且没有 planned managed-directory/private-state/schema-authority side effect，可以继续使用单文件
+atomic replace；一旦存在多个 file targets，或计划包含上述额外 side effect，必须进入 transaction engine。Release
+notes 不得将只覆盖 conflict-governance mutation 描述为所有 multi-file recovery。
 
 ### 3.1 Journal 位置与权限
 
 ```text
-<state-root>/transactions/<project_id>/<transaction_id>/journal.json
+<state-root>/transactions/<binding-kind>/<binding-id>/<transaction_id>/journal.json
 ```
 
 同一 transaction directory包含 prepared outputs 与 backups。
+
+Binding 规则：
+
+* 已有合法 `project_id` 的项目使用 `binding-kind=project-id`。
+* 尚无 `project_id` 的 init、repair 或 legacy migration 使用 repo-external opaque bootstrap binding；它绑定规范化
+  project root 与 memory root，但 journal 不保存 machine-absolute path。
+  Binding ID 使用 private per-user salt 对 normalized roots 做 HMAC-SHA-256，或使用等价的 private opaque mapping；
+  同一 roots 必须可重新定位，raw path 与 unhashed path-derived ID 不得进入 public output。
+* 一次 transaction 可以包含 `shared`、`local-overlay` 与 `migration-state` target root。每个 target 只保存相对其
+  trusted root 的路径；recovery 从当前 project binding 重新解析 trusted roots。
+* 创建或改变 `project_id` 的 transaction 始终保留 bootstrap binding，直到 commit/rollback cleanup 完成，避免中途
+  schema flip 后失去 recovery namespace。
 
 要求：
 
@@ -369,6 +416,8 @@ Release 前必须将仓库自身 dogfood memory、templates 与 examples 迁移�
 * 不位于 repo、`.git/` 或项目根目录
 * state paths 拒绝 symlink escape
 * 删除 temporary state 是 best-effort cleanup，不得描述为 cryptographic secure deletion
+* Windows 使用当前用户的 private state root，并拒绝 symlink/reparse escape；文档不得宣称 Windows 权限与 POSIX
+  `0700/0600` 完全等价。
 
 ### 3.2 Transaction phases and target model
 
@@ -388,20 +437,29 @@ Journal target：
 
 ```json
 {
-  "path": "docs/memory/decisions.md",
+  "target_id": "0001",
+  "root_kind": "shared | local-overlay | migration-state",
+  "path": "decisions.md",
   "operation": "create | replace | delete",
+  "commit_group": "content | authority",
   "base_exists": true,
-  "base_digest": "...",
+  "base_sha256": "...",
+  "mode_semantics": "posix | windows-basic",
+  "base_mode": "0644",
   "output_exists": true,
-  "output_digest": "...",
-  "original_mode": "0644",
+  "output_sha256": "...",
+  "output_mode": "0644",
   "backup_path": "targets/0001.backup",
   "prepared_path": "targets/0001.prepared",
   "replaced": false
 }
 ```
 
-必须区分“不存在”与“存在但为空”；不得用 empty-file digest 替代 existence state。
+必须区分“不存在”与“存在但为空”；不得用 empty-file digest 替代 existence state。Digest 固定为原始 bytes 的
+SHA-256；backup 必须能 byte-for-byte 恢复 CRLF、trailing whitespace 与缺少 terminal newline 的 legacy preimage。
+不存在的 mode、backup 或 prepared operand 使用 schema 明确允许的缺省/省略规则，不能用假值伪装成存在。
+POSIX `base_mode`/`output_mode` 使用 permission bits；Windows 仅记录 stdlib 可可靠验证的 regular-file、reparse 与
+read-only/basic mode 状态，不能把 `windows-basic` 描述为 POSIX permission guarantee。
 
 Journal top-level 至少包含：
 
@@ -409,7 +467,10 @@ Journal top-level 至少包含：
 {
   "transaction_schema_version": 1,
   "transaction_id": "opaque-random-id",
-  "project_id": "...",
+  "project_binding": {
+    "kind": "project-id | bootstrap",
+    "id": "opaque-binding-id"
+  },
   "command": "generic-operation-type",
   "plan_id": "...",
   "phase": "prepared",
@@ -418,36 +479,55 @@ Journal top-level 至少包含：
 }
 ```
 
+需要创建 parent directory 的 init/enable/compact 等操作还必须在 journal 中记录稳定排序的
+`created_directories` inventory：`root_kind`、root-relative path、controlled mode、base existence 与 created progress。
+Transaction engine 只创建计划内目录；rollback 仅在目录由本 transaction 创建、identity 未改变且当前为空时删除，
+绝不递归删除目录。
+
+允许的正常 transition 为 `planned -> prepared -> committing -> committed`；recovery 使用
+`planned|prepared|committing|failed -> recovering -> committed|rolled-back|failed`。`replaced` 只是最近一次已持久化的
+progress hint；crash 可能发生在 target replace 与 journal update 之间，因此 recovery 必须以实际 target
+existence、bytes digest 与 mode 为准。所有 recovery 操作必须幂等。
+
 ### 3.3 Atomic journal update
 
-每次 phase 或 target progress 更新必须：
+创建 transaction directory 后、写入任何 prepared output 或 backup 前，必须先原子写入 `planned` journal。每次
+phase 或 target progress 更新必须：
 
 1. 在 transaction directory 写同文件系统 temp。
 2. flush 与 best-effort fsync file。
 3. `os.replace(temp, journal.json)`。
 4. best-effort fsync transaction directory。
 
-不得原地覆盖 journal，因为 target replace 已完成而 journal progress 丢失会破坏 recovery 判断。
+不得原地覆盖 journal，因为 target replace 已完成而 journal progress 丢失会破坏 recovery 判断。任何存在内容但
+缺少有效 journal 的 transaction directory 都是 orphan transaction state，`recover` 与 `audit --transactions`
+必须报告 BLOCKER；不得静默删除其中可能包含的 pre-state bytes。
 
 ### 3.4 Apply 流程
 
-1. 获取 permanent project mutation lock。
+1. 获取与 project binding 对应的 mutation lock；已有 `project_id` 时为 permanent project lock，否则为 bootstrap lock。
 2. 检查 unfinished transactions；存在时拒绝新 mutation。
 3. 在 lock 内重新构建与验证 Plan ID。
-4. 读取所有 targets，验证 existence、base digest、realpath 与 symlink safety。
-5. 在 state transaction directory 写 prepared outputs 与 backups。
-6. flush/fsync，写 atomic journal `prepared`。
+4. 解析所有 trusted roots，读取 targets 与 planned parent directories，并验证 existence、raw-byte digest、mode、
+   realpath 与 symlink/reparse safety；private state另外验证 owner-only boundary。
+5. 创建 transaction directory 并写 atomic `planned` journal。
+6. 在 transaction directory 写 prepared outputs 与 backups；逐文件 flush/fsync，随后写 atomic `prepared` journal。
 7. 更新 journal 为 `committing`。
-8. 以 canonical repo-relative path稳定排序提交 targets。
-9. 每个 target 在 target parent 创建 same-filesystem temp，写入 prepared bytes，preserve original mode or controlled new-file mode，flush/fsync，并以 `os.replace()` 提交。
-10. Delete operation 只在 current target仍与 base state一致时执行。
-11. 每提交一个 target，atomic 更新 journal `replaced`。
-12. 所有 target 完成后验证 output existence/digest。
-13. 更新 journal 为 `committed`。
-14. 清理 prepared 与 backups。
-15. 保留最小 generic completion record或安全删除 transaction directory。
+8. 以 `(commit_group, root_kind, normalized root-relative path)` 稳定排序提交 targets；`content` 先于
+   `authority`，使 manifest/schema/route authority 在其引用的内容准备完成后才提交。
+9. 先按 journal 创建缺失的 planned parent directories并记录 progress；随后 create/replace 在 target parent 创建
+   same-filesystem temp，写入 prepared bytes，设置 output mode，flush/fsync，
+   再以 `os.replace()` 提交；replace 后 best-effort fsync target parent directory。
+10. Delete 只在 current target仍与 base existence/digest/mode一致时执行；unlink 后 best-effort fsync target parent directory。
+11. 每提交一个 target，atomic 更新 journal `replaced` progress；若此更新前崩溃，由 recovery 根据实际 target state判断。
+12. 所有 target 完成后验证 output existence/digest/mode。
+13. 更新 journal 为 `committed` 并 best-effort fsync transaction directory。
+14. 清理 prepared 与 backups；清理失败时保留可检测的 committed-but-cleanup-pending state。
+15. 保留不含用户内容的 bounded completion record，或安全删除 transaction directory；必须定义 retention 上限，
+    不得让 completion records 无界增长。
 
-State-root prepared file不得直接 rename 到 repo target，因为二者可能位于不同 filesystem。
+State-root prepared file不得直接 rename 到 shared 或 local target，因为二者可能位于不同 filesystem。Public plan
+使用稳定的 `shared/...`、`local/...` 等别名；不得输出 machine-absolute private-state path。
 
 ### 3.5 Recovery
 
@@ -455,17 +535,22 @@ State-root prepared file不得直接 rename 到 repo target，因为二者可能
 
 ```bash
 memory-custodian recover
-memory-custodian recover --complete
-memory-custodian recover --rollback
+memory-custodian recover --transaction-id <ID> --complete
+memory-custodian recover --transaction-id <ID> --rollback
 ```
 
 要求：
 
-* analysis 与 apply 都先获取同一 permanent project lock。
+* analysis 与 apply 都先获取该 transaction binding 使用的同一 permanent 或 bootstrap lock。
 * recovery 期间拒绝任何新 mutation。
-* 多个 unfinished transactions 时不自动选择，输出 inventory 与 manual selection requirement。
+* Crash residue lock 仍使用 Protocol 0.7 的 same-host、dead-PID、age 与 explicit `--break-stale-lock` 规则；recover
+  不得拥有绕过 lock ownership/safety 的隐藏路径。
+* 单个 unfinished transaction 可由默认 `recover` 分析；多个 unfinished transactions 时不自动选择，输出 redacted
+  inventory，并要求通过 `--transaction-id` 选择。任何 complete/rollback apply 都必须显式给出 ID。
 * newer unsupported transaction schema 为 BLOCKER。
 * malformed journal 不被忽略。
+* `planned`、`prepared`、`committing`、`recovering`、`failed` 与 committed-but-cleanup-pending 均可被重复分析；
+  phase 不得替代对实际 target state 的验证。
 
 默认 `recover` 只分析，不写入。
 
@@ -475,19 +560,23 @@ memory-custodian recover --rollback
 * 已替换 target 与 expected output existence/digest 一致。
 * prepared outputs完整。
 * target realpaths 未改变且不存在 symlink replacement。
+* base/output mode 与 observed mode满足 journal contract。
 
 `--rollback` 规则：
 
 * replace：当前 target仍等于 transaction output时，恢复 backup。
 * create：当前 target仍等于 output时，删除该新文件。
 * delete：target仍不存在时，从 backup恢复。
+* 本 transaction 创建的 directory：仅在所有 file rollback 完成、目录仍为空且 identity 未改变时删除。
 * 任何外部修改都会阻止自动覆盖。
+* hard/purge rollback 会恢复受保护的 pre-operation bytes；结果必须以 redacted wording 明确说明 managed content was
+  restored，不得把 rollback 描述为完成了 forgetting。
 
 complete 与 rollback 都不安全时：
 
 * 报告 manual recovery required。
 * 不覆盖任何文件。
-* 只输出 repo-relative path、digests、existence state 与 generic operation type。
+* 只输出 stable target alias、digests、existence/mode state 与 generic operation type。
 * hard/purge 不显示 topic。
 
 ### 3.6 Crash tests
@@ -496,10 +585,13 @@ Failpoints：
 
 ```text
 after-journal-prepared
+after-planned-before-first-artifact
+after-first-backup
 after-first-replace
 after-each-replace
 before-committed
 after-committed-before-cleanup
+while-recovering
 ```
 
 测试必须证明：
@@ -508,9 +600,12 @@ after-committed-before-cleanup
 * 不继续新 mutation。
 * create/replace/delete 都能安全 complete 或 rollback。
 * 外部 edit、mode change、symlink replacement 时不会覆盖。
-* Journal metadata、filenames 与 diagnostics 不泄露 hard-forgotten topic。
+* bootstrap-bound init/migration 与 shared/local mixed-root transaction 均可恢复。
+* Orphan transaction directory 与缺失/malformed journal 被检测且不被自动删除。
+* Journal semantic metadata、generated filenames 与 public diagnostics 不泄露 hard-forgotten topic。
 * Committed-but-not-cleaned transaction 可安全 finalize。
 * Journal update 本身崩溃后仍可判定安全状态。
+* 至少一组测试使用子进程强制终止验证真实 crash boundary；其余组合可使用 deterministic failpoints。
 
 Failpoint 仅用于测试或显式开发环境。
 
@@ -533,25 +628,38 @@ recovery of an interrupted forgetting transaction
 
 ```json
 {
-  "active_memory": true,
-  "managed_archive": false,
-  "local_overlay": false,
-  "git_worktree_modified": true,
+  "erasure_scope_schema_version": 1,
+  "operation_phase": "preview",
+  "active_memory": "pending-removal",
+  "managed_archive": "not-targeted",
+  "local_overlay": "not-applicable",
+  "git_worktree_modified": "on-apply",
   "git_history_modified": false,
   "distributed_copies_revoked": false,
-  "history_check_status": "not-requested"
+  "history_check_status": "not-requested",
+  "topic_retained_in_new_records": true
 }
 ```
 
 要求：
 
 * 字段不得省略；不适用时使用 documented enum，而不是模糊 null。
-* `active_memory`、`managed_archive`、`local_overlay` 只表示 MemoryCustodian 本次管理和修改的 scope。
-* `git_worktree_modified` 表示 managed files 在 working tree 中发生变化，不表示已 commit。
+* `operation_phase` 固定 enum：`preview | applied | no-op | recovered-complete | recovered-rollback`。
+* `active_memory`、`managed_archive`、`local_overlay` 固定 enum：
+  `not-targeted | no-match | pending-removal | removed | restored | not-applicable`。
+* `no-match` 仅表示 selector 未命中；`pending-removal` 表示匹配内容仍存在且此操作未移除。`recovered-rollback` 时，若
+  恢复前 target 已全部处于 journaled base content，`pending-removal` 表示内容原样保留；它不代表 transaction 尚未结束或删除已排队。
+  仍需删除时必须重新 preview 并 apply。只有 rollback 将实际不同于 base 的 transaction output 内容恢复为 base 时才能使用 `restored`。
+* `git_worktree_modified` 固定 enum：`no | on-apply | yes`；它表示当前 command 对 shared managed files 的工作树改动，不表示已 commit。
+  recovery 仅清理已 committed transaction state 时为 `no`；local reset 不修改 Git worktree，也为 `no`。
+* `topic_retained_in_new_records`：soft forget 为 true；hard/purge 为 false；不涉及 topic 的 local reset 使用 false，
+  并由 command/mode 说明其不适用语义。
 * `git_history_modified` 在 v0.12 所有正常 forgetting/local-reset 操作中固定为 false。
 * `distributed_copies_revoked` 固定为 false。
 * CLI 不提供绕过 preview 的 history-rewrite shortcut。
 * 对 hard forget/purge，result 不包含原始敏感 topic；使用 Entry ID、generic unit reference、counts 或 redacted operation type。
+* Preview、apply、recovery-complete、recovery-rollback 与 no-op 必须各有 fixture，确保 phase 和 domain effect 不会把
+  “将要修改”“已修改”“已恢复”混为一谈。
 
 ### 4.2 History check status
 
@@ -569,7 +677,8 @@ no-reachable-copy-detected
 * `unavailable` 不等于 PASS。
 * `reachable-copy-detected` 表示当前可检查 repository history 中仍存在先前 committed copy。
 * `no-reachable-copy-detected` 只描述本次 bounded inspection；不得推断 dangling objects、other refs、remote copies、clones、forks、backups、caches 或 exported artifacts 不存在副本。
-* Git-derived path、ref 和 digest 可以输出，但不得为了报告 hard-forgotten content 而重复敏感 topic。
+* Git-derived path、ref 和 digest 可以输出，但 path 必须经过 hard/purge selector redaction，且不得为了报告
+  hard-forgotten content 而重复敏感 topic。
 * 相同 Git graph 和 parameters 必须产生确定 status。
 * Git 不可用时核心 forgetting 仍可工作，但 output 必须明确 history 未检查。
 
@@ -577,40 +686,36 @@ no-reachable-copy-detected
 
 Forgetting transaction 的 journal、prepared output、backup 与 recovery 必须满足：
 
-* Journal 只记录 generic operation type、target path、digests、Entry ID 或 redacted unit reference。
-* Journal 不保存 topic string、完整 removed body、secret preview 或可逆编码的敏感内容。
+* Journal semantic metadata 只记录 generic operation type、opaque target ID、digests、Entry ID 或 redacted unit reference。
+* Journal 不保存 user-supplied topic string、完整 removed body、secret preview 或它们的可逆编码。
+* Recovery 所需的 root-relative target locator 属于 protected pre-state metadata。若 pre-existing path 本身包含要遗忘的
+  topic，它与 backup bytes 受到相同 private-state、non-context 与 cleanup 限制；public plan、audit 与 errors 只能显示
+  redacted target alias。不得声称 content-only forget 已从 filesystem path 或外部副本中擦除该 topic。
 * Prepared output 与 rollback backup 只在 `0700` 的受控 state transaction directory 中存在，文件使用
   `0600`，filename 不包含 topic。
 * Rollback backup 必然可能包含完整 pre-operation bytes，包括被忘记的 topic；这是恢复能力与
   pre-state confidentiality 的物理边界，不得声称 backup content 不含 topic。
-* Backup 不进入 reader、audit payload、JSON、error output 或 agent context。
+* Backup 与未 redacted target locator 不进入 reader、audit payload、public JSON、error output 或 agent context。
 * Recovery complete/rollback 后必须按 transaction policy 清理 temporary prepared files 与 backups。
 * Crash 后遗留的 transaction state 必须由 `audit --transactions` 检测；不得静默长期保留。
 * Backup 是 crash recovery mechanism，不是 archive；不能被 reader 或 agent context loading 使用。
 * 即使 managed transaction state 被清理，也不得声称 Git history 或 distributed copies 已被清除。
 
-### 4.4 Erasure audit findings
+### 4.4 Erasure findings and their authority
 
-统一 audit 增加：
+`MC-ERASURE-*` 是共享 finding namespace，不代表每一项都能由普通项目 audit 推断。各 finding 只能由能观察到相应证据的层产生：
 
-```text
-MC-ERASURE-001  Output claims broader erasure than performed
-MC-ERASURE-002  Git history inspection unavailable
-MC-ERASURE-003  Reachable historical copy detected
-MC-ERASURE-004  No reachable copy detected; external copies unverified
-MC-ERASURE-005  Forgotten topic leaked into journal, backup metadata, JSON or error output
-MC-ERASURE-006  Local reset scope exceeds current machine/project overlay
-MC-ERASURE-007  Sensitive repo memory should be minimized or moved to a controlled source
-```
+| Finding | Authority and verification |
+| --- | --- |
+| `MC-ERASURE-001` — Output claims broader erasure than performed | Repository contract check and rendered-operation tests verify source wording and generated output. Project audit cannot infer arbitrary semantic overclaims. A detected runtime contract violation is ERROR. |
+| `MC-ERASURE-002` — Git history inspection unavailable | Invocation audit only, when `--history-exposure` has an explicit `--topic` or `--id`; WARNING/REVIEW. |
+| `MC-ERASURE-003` — Reachable historical copy detected | Invocation audit only, with the same explicit selector; WARNING/REVIEW. |
+| `MC-ERASURE-004` — No reachable copy detected; external copies unverified | Invocation audit only, with the same explicit selector; INFO and always accompanied by the external-copy disclaimer. |
+| `MC-ERASURE-005` — Forgotten topic leaked into semantic metadata, generated names, public JSON or error output | Forget-operation tests and output-boundary checks have the topic only for that operation; a confirmed leak is BLOCKER. Ordinary audit must not retain or guess forgotten topics. |
+| `MC-ERASURE-006` — Local reset scope exceeds current machine/project overlay | Local-reset plan/apply/recovery contract checks verify the operation is limited to the bound local overlay; a scope violation is BLOCKER. A project audit with no reset request cannot infer an intended target. |
+| `MC-ERASURE-007` — Sensitive repo memory should be minimized or moved to a controlled source | Project audit may report deterministic credential/privacy pattern matches. The finding must omit matched values and sensitive filenames; WARNING or ERROR follows the existing scanner severity. It cannot claim to detect every semantically sensitive fact. |
 
-Severity：
-
-* broader-erasure false claim：ERROR。
-* forgotten topic leakage：BLOCKER。
-* unsafe local reset scope：BLOCKER。
-* reachable historical copy：WARNING/REVIEW；不阻止 managed-memory removal，但要求准确提示。
-* inspection unavailable：INFO/REVIEW，不能显示 PASS。
-* sensitive raw content finding：WARNING/ERROR，按 security pattern 与 policy 决定。
+`audit --erasure` runs the existing deterministic privacy/security scan and maps any hits to a generic `MC-ERASURE-007`; a clean scan is reported as clean in `data.erasure_audit`. It does not search for a previously forgotten topic. `audit --history-exposure --topic ...` or `--id ...` remains the explicit entrypoint for findings 002–004. Repository contract and mutation-specific cases are verified by their own tests/checks, not emitted as speculative project findings.
 
 ### 4.5 Documentation language
 
@@ -690,12 +795,17 @@ transactions
 --transactions
 --erasure
 --history-exposure
+--topic <value>
+--id <ENTRY_ID>
 --all
 --format text
 --format json
 ```
 
 无 task/path 输入的 project audit 不输出某次 invocation 的 `Routing completeness`；它输出 routing configuration validity、substantial-route coverage 与 unreachable hard constraints。
+无 selector 的 `audit` 运行所有不需要外部参数的 core project checks；`--all` 也不凭空推断已遗忘 topic。`--erasure` 复用项目 privacy/security scanner 检查有限的已知敏感模式，finding 不包含匹配内容或敏感文件名；语义层面的敏感度仍需人工判断。
+`--history-exposure` 必须由用户重新提供 topic 或稳定 Entry ID，或者引用仍有效的受保护 pending operation；CLI 不保留
+raw forgotten topic 作为未来 audit 输入。`--merge-base` 显式启用 merge-aware conflict checks。
 
 ### 5.2 Invocation audit
 
@@ -714,6 +824,10 @@ memory-custodian audit --routing-input \
 ```
 
 该模式必须直接复用 read routing result model，不能重新实现第二套路由。
+
+Protocol 0.12.x 中保留现有 `check` 命令作为 compatibility facade。它与 `audit`、`status` 必须复用同一 snapshot、
+validation 与 finding model；不得维护第二套 severity、relation、routing 或 conflict 逻辑。是否在 1.0 弃用 `check`
+留待独立决策。
 
 ### 5.3 Repository contract checks
 
@@ -748,7 +862,7 @@ BLOCKER
 固定 status mapping：
 
 ```text
-only INFO findings                         -> PASS
+zero findings or only INFO findings        -> PASS
 one or more WARNING, no ERROR/BLOCKER       -> REVIEW
 one or more ERROR or BLOCKER                -> FAIL
 ```
@@ -761,7 +875,7 @@ Exit code：
 2  FAIL caused by BLOCKER or fatal invocation/runtime error
 ```
 
-* Optional Git unavailable 是 INFO/WARNING review state，不是 fatal runtime error。
+* Optional Git unavailable 固定为 WARNING/REVIEW，不是 fatal runtime error。
 * Unsupported transaction schema 是 BLOCKER。
 * Invalid command arguments 或 malformed output request 是 exit 2。
 * Project policy 可以将特定 WARNING 提升为 CI error，但 core status model保持稳定。
@@ -783,7 +897,7 @@ Exit code：
 
 * Finding code稳定。
 * Text 与 JSON来自同一 internal finding model。
-* Path repo-relative POSIX。
+* Shared path 使用 repo-relative POSIX；private target 使用不含 machine path 的 stable alias，例如 `local/preferences.md`。
 * 不在 JSON、message 或 remediation 中泄露 secret/topic。
 * History inspection unavailable不得渲染为 PASS evidence。
 
@@ -821,7 +935,34 @@ MC-CONFLICT-007  Branch extends an entry superseded on the other side
 MC-CONFLICT-008  Subject merged on one side but referenced on the other
 ```
 
-Erasure 与 transaction findings沿用第四节与 transaction policy。
+Entry/evidence/relation：
+
+```text
+MC-ENTRY-001     Malformed or ambiguous canonical entry
+MC-ENTRY-002     Active legacy entry is not Protocol 0.8 compliant
+MC-ENTRY-003     ID、Entry-Type、typed body、status、scope or storage mismatch
+MC-EVIDENCE-001  Active entry has no admissible evidence
+MC-EVIDENCE-002  Evidence reference is malformed or unavailable
+MC-RELATION-001  Relation target is missing or invalid
+MC-RELATION-002  Required reciprocal lifecycle relation is missing
+MC-RELATION-003  Relation cycle detected
+```
+
+Transaction/migration/local：
+
+```text
+MC-TRANSACTION-001  Unfinished transaction requires recovery
+MC-TRANSACTION-002  Malformed or unsupported transaction journal
+MC-TRANSACTION-003  Orphan private transaction state lacks a valid journal
+MC-TRANSACTION-004  Automatic complete/rollback is unsafe
+MC-MIGRATION-001    Canonicalization blocker remains
+MC-MIGRATION-002    Migration state no longer matches project/source schema
+MC-LOCAL-001        Local overlay is unbound or bound to a different root
+MC-LOCAL-002        Local overlay cannot safely participate in a schema transition
+```
+
+Budget/privacy/security 的完整 code registry 必须在 `quality-audit.md` 中冻结后再发布；code 不得复用或改变含义。
+Erasure findings 使用第四节的 `MC-ERASURE-*`。任何新 namespace 都必须由同一 internal finding registry 生成 text 与 JSON。
 
 ### 5.6 Audit summary
 
@@ -845,6 +986,7 @@ Erasure policy: bounded; Git history and distributed copies unchanged
 ```
 
 Invocation completeness只在提供具体 routing inputs 时进入 summary。
+Audit JSON 的 `data` 必须以 `"audit_schema_version": 1` 开始；text renderer 与 JSON renderer 都消费同一 audit result。
 
 ## 六、统一 Machine-readable CLI 输出
 
@@ -868,7 +1010,9 @@ Invocation completeness只在提供具体 routing inputs 时进入 summary。
   "protocol_version": "0.8",
   "status": "REVIEW",
   "exit_class": "success-with-review",
-  "data": {},
+  "data": {
+    "audit_schema_version": 1
+  },
   "findings": [],
   "disclaimers": []
 }
@@ -878,13 +1022,21 @@ Invocation completeness只在提供具体 routing inputs 时进入 summary。
 
 * stdout 仅输出一个 JSON document；环境/argument parser fatal errors 使用 stderr。
 * Domain validation failure在命令已进入 JSON mode 后仍输出合法 envelope，并使用 nonzero exit。
-* Repo-relative path 使用 `/`。
+* Shared path 使用 repo-relative `/`；private path 只使用 stable root-qualified alias，不输出 machine-absolute path。
 * Arrays 与 object-derived lists 使用稳定顺序。
 * Timestamp 使用 UTC RFC 3339。
 * 缺失 collection 使用空 array/object；只有规范明确允许时使用 null。
+* `protocol_version` 在缺失或无法解析 manifest 的 domain-failure envelope 中允许为 null；除此之外不得用 null
+  代替明确状态。
 * JSON schema 在 Protocol 0.8 / 0.12.x 生命周期内兼容，不承诺未来所有 1.x。
+* Top-level `status` 只使用 `PASS | REVIEW | FAIL`；routing completeness、plan readiness、recovery state 等
+  command-specific 状态放在 `data`，不能重载 top-level status。
+* `exit_class` 固定为 `success | success-with-review | domain-failure | blocker | fatal`：PASS/success 与
+  REVIEW/success-with-review 返回 0；ERROR/domain-failure 返回 1；BLOCKER/blocker 与 fatal 返回 2。每个 command
+  的 matrix 必须有 fixture。
 
-至少覆盖：status、check、audit、read、show、list、migrate preview、compact preview、forget preview 与 recover。
+至少覆盖：status、check、audit、read、show、list、所有 mutation preview、所有 mutation apply result 与 recover。
+JSON mode 不得改变 preview/confirm-plan/transaction 要求。
 
 ### 6.2 Internal execution plan、public plan 与 journal
 
@@ -896,16 +1048,17 @@ Internal execution plan
 - never serialized directly to public JSON
 
 Public preview plan
-- repo-relative paths
+- stable root-qualified aliases；shared target 为 repo-relative path，private target 不含 machine-absolute path
 - no hard/purge raw topic
 - opaque operation reference
-- target existence/digests and bounded effects
+- non-sensitive operation 可显示 target existence/digests 与 bounded effects
+- hard/purge public plan 省略 file digests 与 selector-dependent fingerprints；stale protection仍使用 private plan/journal digests
 
 Transaction journal
 - generic command type
 - opaque IDs
-- target paths/existence/digests
-- no user message/topic/title or secret preview
+- protected root-relative target locators/existence/digests
+- no user message/topic/title、removed body 或 secret preview；pre-existing locator 的边界遵循第四节
 ```
 
 不得直接对 `MutationPlan.canonical()` 调用 JSON serialization作为 public output。
@@ -929,6 +1082,7 @@ Context pack data至少包含：
 * conflict status and identities
 * Subject IDs/Facets
 * optional merge-aware findings
+* `context_sha256`：对最终 rendered context 的 UTF-8、LF-normalized bytes（包括规范化 terminal newline）计算 SHA-256
 
 Forgetting/local-reset/recovery result包含 versioned `erasure_scope` 与 bounded `history_check_status`。
 
@@ -1014,7 +1168,21 @@ Static checker 验证 adapter 不偏离 protocol。可以保留少量 documented
 
 ## 八、协议迁移
 
-支持 0.5、0.6、0.7 进入 staged Protocol 0.8 migration。
+支持 Protocol 0.5、0.6、0.7 / Entry schema 1，以及 Protocol 0.7 / Entry schema 2 进入 staged
+Protocol 0.8 / Entry schema 3 migration。Migrator 必须先按 source metadata 解析；不得把 schema 1 中字面出现的
+`memory-custodian-body-v1` 当作 wrapper。
+
+`--prepare`、`--canonicalize` 与 `--finalize` 是互斥 stage selector；一次 invocation 必须且只能选择一个。
+每个 stage 默认 preview-only，写入均要求同一 preview 产生的 `--confirm-plan`：
+
+```bash
+memory-custodian migrate --prepare
+memory-custodian migrate --prepare --apply --confirm-plan <PLAN_ID>
+memory-custodian migrate --canonicalize ...
+memory-custodian migrate --canonicalize ... --apply --confirm-plan <PLAN_ID>
+memory-custodian migrate --finalize
+memory-custodian migrate --finalize --apply --confirm-plan <PLAN_ID>
+```
 
 ### 8.1 Prepare
 
@@ -1026,12 +1194,15 @@ memory-custodian migrate --prepare
 
 * 使用独立 Prepare Plan ID 与独立 transaction。
 * 保持原 protocol version，不写入表示 0.8 compliance 的 shared metadata。
-* Migration state存放在 repo 外 state directory，并绑定 project_id、source protocol 与 prepare result digests。
-* 执行可机械证明安全的 transformations。
+* Migration state存放在 repo 外 state directory，并绑定 project/bootstrapping identity、normalized root、source
+  protocol、source Entry schema、bound local-overlay snapshot 与 prepare result digests。
+* 执行可机械证明安全且在 source protocol/schema 下仍可正确解析的 transformations。
 * 生成逐 entry canonicalization、Evidence、Subject、Facet 与 relation checklist。
 * 不伪造 Evidence、Subject equivalence、Facet、Exception-To 或 reconciliation。
 * 不自动创建 local overlay、添加 area glob或移动 shared preferences。
 * 保留 custom routes、optional index、合法 IDs 与 descriptions。
+* Target-only schema 3 syntax 不得在 manifest 仍声明旧 schema 时写入 active shared/local files；可以写入受保护的
+  repo-external prepared state，或推迟到 finalize transaction。
 
 ### 8.2 Manual interval and helpers
 
@@ -1039,7 +1210,7 @@ memory-custodian migrate --prepare
 
 ```bash
 memory-custodian migrate --canonicalize
-memory-custodian add --from-legacy <file>:<unit-index> ...
+memory-custodian add --from-legacy <file>:<unit-index> --type ... --evidence ... --scope ... --subject ... --facet ...
 memory-custodian audit
 ```
 
@@ -1050,6 +1221,10 @@ Canonicalize：
 * Top-level bullet不自动生成语义 title。
 * 不使用 LLM。
 * 用户/agent显式提供 type、Evidence、Scope、Subject、Facet 与 title后才创建 canonical entry。
+* Apply 到 active files 的中间结果必须保持 source-schema readable；无法在 source schema 表达的 `Entry-Type` 等
+  target-only metadata 保存在 migration state，由 finalize 一次性写入。
+* Protocol 0.7 / schema 1 到 schema 2/3 的 body conversion 必须保留原始 source bytes 与 literal-body 语义；bound
+  local overlay 使用 shared manifest 选定的 Entry schema，必须与 shared files 位于同一 migration transaction。
 
 Manual interval允许 source files变化，因此 Prepare Plan ID不得跨阶段复用。
 
@@ -1062,11 +1237,13 @@ memory-custodian migrate --finalize
 要求：
 
 * 重新生成新的 Finalize Plan ID 与新的 transaction。
-* 验证 source protocol、project_id 与 prepare state binding。
+* 验证 source protocol、source Entry schema、project/bootstrap identity、root binding、local-overlay snapshot 与
+  prepare state binding。
 * 验证所有 managed active entries canonical。
 * 验证 Subject/Facet/relations完整。
-* 验证 project audit无 BLOCKER，且 canonicalization blockers为零。
-* 最后才写入 `protocol_version: 0.8` 与相关 schema metadata。
+* 验证 project audit无 ERROR/BLOCKER，且 canonicalization blockers为零。
+* 在同一 finalize transaction 中写入全部 target-only schema 3 rewrites、bound local overlay rewrites，最后提交
+  `protocol_version: 0.8` 与 `entry_schema_version: 3` 等 metadata；任一 target 失败都进入统一 recovery。
 * 清理 repo-external migration state。
 
 不得要求用户逐版本运行，但 prepare、manual interval 与 finalize 是三个明确阶段，不共享一个 Plan ID 或一个 transaction。
@@ -1131,6 +1308,9 @@ Skill 必须指导 agent：
 * 不允许 local reset 删除 project overlay 外文件。
 * Transaction restore 不允许 target path 在 plan 生成后被替换为逃逸 symlink。
 * Apply 前重新检查 realpath。
+* POSIX 在可用时使用 verified parent directory descriptor 与 `dir_fd`/no-follow operations 缩小 check/use race；
+  不支持等价原语的平台必须在每次 replace/delete 前立即重验 parent/target identity，并在文档中说明 threat-model 边界，
+  不得宣称对恶意同机并发文件系统攻击提供绝对防护。
 * Repo target replace preserve existing file mode；new managed files使用受控默认 mode。
 * State unlink只表示 managed temporary file removed，不声称底层 storage cryptographic erasure。
 
@@ -1141,9 +1321,12 @@ Skill 必须指导 agent：
 ### Phase 0 — Inherited contract verification
 
 * Protocol 0.7 routing/local/conflict tests green
+* Protocol 0.7 / Entry schema 1 literal-body 与 schema 2 `memory-custodian-body-v1` compatibility tests green
+* search 使用 decoded semantic text、mutation 保留 raw source/preimage 的 tests green
 * public/internal Plan separation complete
 * all state helpers private and symlink-safe
 * no unresolved v0.11 apply stubs presented as supported mutations
+* 建立所有 mutating CLI paths 的 inventory；任何运行时产生两个以上 targets 的 path 都必须进入 transaction engine
 
 ### Phase 1 — Transaction engine
 
@@ -1157,13 +1340,15 @@ Skill 必须指导 agent：
 
 * add/enable/compact
 * forget/purge
-* migration prepare/finalize
+* existing migration/schema-conversion mutation paths；为 Phase 5 staged migration 保留统一 transaction integration
 * Subject merge/reconciliation/Exception-To/promotion
 * local reset
-* init replacement and canonicalization
+* init/repair/replacement、local enable/link 与 canonicalization
 
-### Phase 3 — Governance apply
+### Phase 3 — Entry schema 3 and governance apply
 
+* schema 3 parser/writer、`Entry-Type` 与 schema 1/2 compatibility
+* rule/profile formal-entry contract 与 `MC-TOMB` structural-owner exception
 * Subject merge transaction
 * reconciliation record transaction
 * Exception-To add/remove transaction
@@ -1217,18 +1402,18 @@ Skill 必须指导 agent：
 
 CI 至少覆盖：
 
-* Python 3.10
-* 当前主要 Python 版本
-* Ubuntu
-* Windows smoke
+* Python 3.10、3.11、3.12、3.13、3.14
+* Ubuntu 上运行完整 suite、skill/adapter contracts、version drift 与 static checks
+* Windows 在 Python 3.10–3.14 上运行 smoke、path/private-state 与 JSON contract tests
 * macOS 可使用 GitHub Actions 条件允许时加入；若不加入，必须保证 path tests 覆盖 macOS semantics
 
 ### 11.2 Core protocol
 
 覆盖：
 
-* Canonical entry parse/write。
-* Legacy parse。
+* Entry schema 3 parse/write 与 schema 2 body-fence compatibility。
+* Protocol 0.7 / schema 1 literal-body parse；wrapper-like text 不被错误解码。
+* `MC-AREA` Entry-Type、rule/profile formal entries 与 `MC-TOMB` non-owner exception。
 * Relation integrity。
 * Subject registry integrity。
 * Canonical-Ref and alias uniqueness。
@@ -1256,7 +1441,8 @@ CI 至少覆盖：
 * Local precedence。
 * Budget packing。
 * Explain。
-* Public JSON envelope、stable ordering 与 internal/public Plan separation。
+* Public JSON envelope、child schema versions、stable ordering 与 internal/public Plan separation。
+* `check`、`status` 与 `audit` 复用同一 snapshot/finding model。
 * Staged migration prepare/manual/finalize with separate Plan IDs and transactions。
 
 ### 11.3 Transaction recovery
@@ -1264,6 +1450,8 @@ CI 至少覆盖：
 覆盖全部 failpoints：
 
 * prepared before replace
+* planned before first backup/prepared artifact
+* orphan directory before/without a valid journal
 * first target replaced
 * middle target replaced
 * all replaced before committed
@@ -1276,7 +1464,15 @@ CI 至少覆盖：
 * newer unsupported journal schema
 * atomic journal update interrupted
 * create/delete rollback semantics
-* file mode preservation
+* planned parent-directory creation and non-recursive empty-directory rollback
+* POSIX file-mode preservation 与 Windows basic-mode/reparse validation
+* raw-byte digest 与 CRLF/no-terminal-newline exact rollback
+* target-parent directory fsync path
+* bootstrap-bound init/migration
+* mixed shared/local target roots
+* recovery selection with multiple transactions
+* crash during `recovering` and idempotent retry
+* subprocess termination at representative real crash boundaries
 
 ### 11.4 Cross-agent contract
 
@@ -1325,6 +1521,8 @@ Adapter drift checker 确保：
 * local reset does not affect another-machine fixture
 * false complete-erasure wording is rejected
 * transaction backup metadata and filenames do not leak forgotten topic; protected backup bytes are never emitted
+* pre-existing topic-bearing target locator never appears unredacted in public output and is cleaned with protected state
+* hard/purge rollback reports restored managed content without exposing topic
 
 ### 11.6 Migration fixtures
 
@@ -1333,6 +1531,8 @@ Adapter drift checker 确保：
 * clean 0.5 project
 * heavily customized 0.5 manifest
 * 0.6 evidence project
+* 0.7 / Entry schema 1 pre-wrapper project with literal wrapper-like body text
+* 0.7 / Entry schema 2 body-fenced project
 * 0.7 local-overlay and conflict-governance project
 * legacy bullet-heavy project
 * corrupted metadata
@@ -1426,6 +1626,7 @@ README 使用产品语言，不重复全部 MUST 级规则。
 * package scripts
 * protocol metadata templates
 * dogfood manifest
+* Entry/Subject/Conflict/Routing/Local/Transaction/Audit/Output/Erasure child schema versions
 
 增加 automated version drift check。
 
@@ -1461,20 +1662,22 @@ README 使用产品语言，不重复全部 MUST 级规则。
 
 仓库自身 `docs/memory/` 必须：
 
-* 使用 Protocol 0.8。
+* 使用 Protocol 0.8 / Entry schema 3，并继续通过 fixtures 验证 schema 1/2 compatibility。
 * 有 project_id。
 * Active managed entries canonical。
 * 无 duplicate ID。
 * 无 duplicate active Subject ID。
 * 无 duplicate normalized Canonical-Ref。
 * 无 alias ownership collision。
-* 所有 managed hard-memory entries 有合法 Subject 与 Facet。
+* 所有 managed hard-memory entries 有合法 Subject 与 Facet；`MC-TOMB` erasure guards不被错误计为 structural owners。
 * 无 multiple active structural owners。
 * project/area overlaps 有合法 Exception-To 或已完成 reconciliation。
 * 无 broken relation。
 * 无 active legacy entry。
+* `reconciliations.md` 不存在时按 empty authority 处理；存在时所有 records均 canonical。
 * Evidence coverage 可解释。
 * `audit --all` 不存在 ERROR/BLOCKER。
+* `audit --transactions` 报告 clean，且没有 orphan 或 committed-but-cleanup-pending private state。
 * project policy 要求的 merge-aware fixtures 不存在 unresolved REVIEW。
 * manifest area index 与实际文件一致。
 * 所有 active project-scoped hard constraints 对 substantial routes 可达。
@@ -1484,6 +1687,7 @@ README 使用产品语言，不重复全部 MUST 级规则。
 * budgets 健康。
 * forgetting fixtures 的 output 与 JSON 都包含 canonical erasure scope。
 * dogfood docs 不使用 complete-erasure language。
+* 默认 init 仍只创建六个 task-memory files 加非 routed 的 `subjects.md`；`reconciliations.md` 按需创建。
 
 ---
 
@@ -1513,13 +1717,16 @@ README 使用产品语言，不重复全部 MUST 级规则。
 ### Protocol
 
 * Protocol version 为 0.8。
+* Entry schema version 为 3；schema 2 的 `memory-custodian-body-v1` 语义保持不变，schema 1 wrapper-like text仍按字面读取。
 * Canonical managed entry contract、typed-body matrix 与 area Entry-Type strategy已定义并验证。
-* Routing、local、transaction、output、audit 与 erasure-scope schema authorities明确。
-* Active managed decision、constraint、do-not-use 与 area hard-memory entries有合法 Subject/Facet。
-* `subjects.md` 与 `reconciliations.md` 是规范 shared authorities，但不进入普通 context pack。
+* Entry、Subject、Conflict、Routing、local、transaction、output、audit 与 erasure-scope schema authorities明确。
+* Active managed decision、constraint、do-not-use 与 area hard-memory entries有合法 Subject/Facet；`MC-TOMB` erasure guard
+  与 rule/profile workflow entry 的非 owner 语义明确。
+* `subjects.md` 与按需创建的 `reconciliations.md` 是规范 shared authorities，但不进入普通 context pack；空项目不因
+  缺少 `reconciliations.md` 而失败。
 * Active legacy entry在 Protocol 0.8 项目中为 ERROR。
 * Reader仍安全读取 legacy projects。
-* 0.5/0.6/0.7 可进入 prepare；只有 canonical audit通过后 finalize为 0.8。
+* 0.5、0.6、0.7/schema 1 与 0.7/schema 2 可进入 prepare；只有 canonical audit通过后 finalize为 0.8/schema 3。
 * Prepare与Finalize使用不同 Plan IDs和transactions。
 * 不发生 protocol downgrade。
 
@@ -1528,12 +1735,15 @@ README 使用产品语言，不重复全部 MUST 级规则。
 * Concurrent writers不发生 silent lost update。
 * Stale Plan ID无写入。
 * 所有 multi-file mutations使用 transaction journal；不只覆盖 conflict governance。
+* Bootstrap-bound、project-ID-bound 与 shared/local mixed-root mutations均使用同一 transaction contract。
 * Journal updates atomic。
+* `planned` journal 在任何 backup/prepared bytes 前落盘；orphan state 可检测且不会被静默删除。
 * Create/replace/delete均有 existence-aware recovery。
 * Crash后可检测 complete/rollback；不安全时不覆盖外部修改。
-* Recovery获取同一 permanent project lock并阻止新 mutation。
-* Transaction state不位于 repo，使用 private permissions。
-* Repo target使用 same-filesystem atomic replacement并 preserve file mode。
+* Recovery获取同一 permanent 或 bootstrap lock并阻止新 mutation；多个 transaction 通过 opaque ID显式选择。
+* Transaction state不位于 repo；POSIX 使用 `0700/0600`，Windows 使用文档化的 per-user state boundary。
+* Shared/local target使用 same-filesystem atomic replacement，验证 raw-byte digest/mode，并在 replace/delete 后
+  best-effort fsync target parent。
 
 ### Memory quality and governance
 
@@ -1568,9 +1778,10 @@ README 使用产品语言，不重复全部 MUST 级规则。
 * Memory不能授予权限。
 * Security scan不泄露 secret。
 * Internal execution plan、public plan与journal分离。
-* Hard/purge preview、JSON、journal metadata、filenames与errors不泄露 topic。
-* Protected rollback backup bytes可能包含 pre-operation topic，但使用 `0700/0600`、永不输出/加载，并在安全完成后清理。
-* Forget、purge、local reset与recovery使用统一 versioned ErasureScope。
+* Hard/purge preview、JSON、semantic journal metadata、generated filenames与public errors不泄露 topic。
+* Protected rollback backup bytes与必要的 pre-existing target locator可能包含 pre-operation topic，但使用 private-state
+  protections、永不输出/加载，并在安全完成后清理。
+* Forget、purge、local reset与recovery使用统一 versioned ErasureScope，并区分 preview/applied/no-op/restored。
 * `git_history_modified`与`distributed_copies_revoked`在正常操作中固定 false。
 * `unavailable`不显示 PASS；bounded no-match不表示无外部副本。
 * Shared/local/state paths防 traversal与symlink escape。
@@ -1581,8 +1792,10 @@ README 使用产品语言，不重复全部 MUST 级规则。
 * Project audit、invocation audit与repository contract checks职责分离。
 * Finding severity到 status/exit code映射固定并有测试。
 * Public JSON使用 `output_schema_version: 1`统一 envelope。
+* Audit `data.audit_schema_version` 与 `data.erasure_scope.erasure_scope_schema_version` 位置固定。
 * Paths、arrays、timestamps与null/empty semantics稳定。
 * Text与JSON来自同一 result model。
+* `check` 与 `status` 复用 audit snapshot/finding model，不形成第二套协议。
 * JSON包含 Subject、Facet、conflict identity、reconciliation findings、ErasureScope与history status。
 * Public output不直接序列化 internal MutationPlan。
 * Fatal errors与domain findings的 stdout/stderr contract文档化。
@@ -1592,6 +1805,7 @@ README 使用产品语言，不重复全部 MUST 级规则。
 * Codex、Claude Code、Gemini与generic adapters使用同一 CLI contract。
 * Adapter不包含第二套路由、Subject、conflict或erasure logic。
 * Cross-agent routing/conflict/forgetting fixtures产生一致 IDs、reason codes、context hashes、ErasureScope与wording。
+* `context_sha256` 对规范 UTF-8/LF rendered context bytes产生跨平台一致结果。
 * Static checker不冒充 live runtime benchmark。
 * 至少保留一个明确标注的可复现 live evaluation。
 
@@ -1601,6 +1815,7 @@ README 使用产品语言，不重复全部 MUST 级规则。
 * README、Skill、references、templates、examples、evals与dogfood同步。
 * Release notes准确描述 transaction scope，不夸大 ACID、semantic correctness、security或complete erasure。
 * 所有版本号和schema metadata一致。
+* Python 3.10–3.14 的 Ubuntu matrix 与 Windows smoke matrix通过。
 * `audit --all` 对dogfood memory无 ERROR/BLOCKER。
 * 全部 tests、CI、static contract checks与whitespace checks通过。
 * 不改变 local-first、plain-text、repo-native、minimal-context 产品定位。

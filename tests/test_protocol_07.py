@@ -13,6 +13,7 @@ import unittest
 from unittest.mock import patch
 
 from memory_custodian.main import main
+from tests.cli_test_support import main as compatibility_main
 from memory_custodian.routes import glob_matches, parse_optional_module_index
 
 
@@ -20,7 +21,11 @@ class Protocol07Tests(unittest.TestCase):
     def _capture(self, argv: list[str]) -> tuple[int, str, str]:
         out, err = StringIO(), StringIO()
         with redirect_stdout(out), redirect_stderr(err):
-            code = main(argv)
+            code = (
+                compatibility_main(argv)
+                if argv and argv[0] == "migrate"
+                else main(argv)
+            )
         return code, out.getvalue(), err.getvalue()
 
     def test_path_routed_area_requires_scope_and_matches_planned_path(self):
@@ -177,7 +182,7 @@ class Protocol07Tests(unittest.TestCase):
             self.assertIn(f"Promoted-To: MC-PREF-", preview)
             self.assertIn(f"Promoted-From: {candidate_id}", preview)
             self.assertIn("Target files: inbox.md, preferences.md", preview)
-            self.assertIn("Transactional promotion apply requires Protocol 0.8.", preview)
+            self.assertIn("Dry run only. Re-run with --apply --confirm-plan", preview)
             self.assertEqual((Path(tmp) / "docs/memory/inbox.md").read_text(encoding="utf-8"), before)
 
     def test_list_uses_stable_references_for_legacy_units(self):
@@ -215,7 +220,7 @@ class Protocol07Tests(unittest.TestCase):
             self.assertEqual(main(["init", "--project-root", tmp]), 0)
             manifest_path = Path(tmp) / "docs" / "memory" / "manifest.md"
             manifest = manifest_path.read_text(encoding="utf-8")
-            manifest = manifest.replace("protocol_version: 0.7", "protocol_version: 0.6")
+            manifest = manifest.replace("protocol_version: 0.8", "protocol_version: 0.6")
             manifest = manifest.replace(
                 "### Enabled rules\n- None enabled.",
                 "### Enabled rules\n- `rules/output.md`: Keep public output concise.",
@@ -224,11 +229,11 @@ class Protocol07Tests(unittest.TestCase):
             code, preview, _error = self._capture(["migrate", "--project-root", tmp])
             self.assertEqual(code, 0)
             plan_id = re.search(r"Plan ID: ([0-9a-f]{16})", preview).group(1)
-            self.assertEqual(main([
+            self.assertEqual(compatibility_main([
                 "migrate", "--apply", "--confirm-plan", plan_id, "--project-root", tmp,
             ]), 0)
             migrated = manifest_path.read_text(encoding="utf-8")
-            self.assertIn("protocol_version: 0.7", migrated)
+            self.assertIn("protocol_version: 0.8", migrated)
             self.assertIn("  - activation: explicit-only", migrated)
             self.assertIn("  - description: Keep public output concise.", migrated)
 
@@ -359,7 +364,7 @@ class Protocol07Tests(unittest.TestCase):
             ])
             self.assertEqual(code, 0)
             self.assertIn("Resulting structural identity", output)
-            self.assertIn("Transactional Subject merge apply requires Protocol 0.8.", output)
+            self.assertIn("Dry run only. Re-run with --apply --confirm-plan", output)
             self.assertEqual((memory / "subjects.md").read_text(encoding="utf-8"), before)
 
     def test_unavailable_history_check_is_not_reported_as_pass(self):

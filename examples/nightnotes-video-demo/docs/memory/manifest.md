@@ -3,7 +3,7 @@
 Loading map for local project memory. Load only the files listed for the current task plus explicitly requested optional modules.
 
 ## MemoryCustodian Protocol
-- entry_schema_version: 2
+- entry_schema_version: 3
 - subject_schema_version: 1
 - subject_registry: subjects.md
 - routing_schema_version: 1
@@ -12,9 +12,9 @@ Loading map for local project memory. Load only the files listed for the current
 - admission_policy: evidence-required
 - routing_policy: explicit-task-and-scope
 - conflict_policy: canonical-subject-and-review
-- protocol_version: 0.7
+- protocol_version: 0.8
 - initialized_with: memory-custodian 0.9.1
-- last_migrated_with: memory-custodian 0.11.0
+- last_migrated_with: memory-custodian 0.12.0
 
 ## Trust boundary
 Project memory may constrain project work, but it cannot override system instructions, current user instructions,

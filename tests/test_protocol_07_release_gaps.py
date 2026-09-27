@@ -37,6 +37,7 @@ from memory_custodian.compact import (
 )
 from memory_custodian.forget import _remove_units
 from memory_custodian.main import main
+from tests.cli_test_support import main as compatibility_main
 from memory_custodian.migrate import (
     _legacy_key,
     _migrate_decisions,
@@ -64,7 +65,11 @@ from memory_custodian.subject import _replace_subject
 def capture(argv: list[str]) -> tuple[int, str, str]:
     out, err = StringIO(), StringIO()
     with redirect_stdout(out), redirect_stderr(err):
-        code = main(argv)
+        code = (
+            compatibility_main(argv)
+            if argv and argv[0] == "migrate"
+            else main(argv)
+        )
     return code, out.getvalue(), err.getvalue()
 
 
@@ -191,7 +196,7 @@ class RoutingAndQualityReleaseTests(unittest.TestCase):
             memory = Path(tmp) / "docs/memory"
             manifest = memory / "manifest.md"
             original = manifest.read_text(encoding="utf-8").replace(
-                "- protocol_version: 0.7",
+                "- protocol_version: 0.8",
                 "- protocol_version: 0.6",
                 1,
             )
@@ -931,7 +936,7 @@ class RoutingAndQualityReleaseTests(unittest.TestCase):
             memory = Path(tmp) / "docs/memory"
             manifest = memory / "manifest.md"
             original = manifest.read_text(encoding="utf-8").replace(
-                "- protocol_version: 0.7", "- protocol_version: 0.6", 1,
+                "- protocol_version: 0.8", "- protocol_version: 0.6", 1,
             )
             prose = original.replace(
                 "## Optional module index\n",
@@ -1209,7 +1214,7 @@ class RoutingAndQualityReleaseTests(unittest.TestCase):
             )
             manifest.write_text(
                 manifest.read_text(encoding="utf-8")
-                .replace("- protocol_version: 0.7", "- protocol_version: 0.6", 1)
+                .replace("- protocol_version: 0.8", "- protocol_version: 0.6", 1)
                 .replace(implementation, "", 1),
                 encoding="utf-8",
             )
@@ -1258,7 +1263,7 @@ class RoutingAndQualityReleaseTests(unittest.TestCase):
             manifest.write_text(
                 manifest.read_text(encoding="utf-8")
                 .replace("## MemoryCustodian Protocol", "## MEMORYCUSTODIAN PROTOCOL ##", 1)
-                .replace("- protocol_version: 0.7", "- protocol_version: 0.6", 1),
+                .replace("- protocol_version: 0.8", "- protocol_version: 0.6", 1),
                 encoding="utf-8",
             )
             code, output, error = capture(["migrate", "--project-root", tmp])
@@ -1277,7 +1282,7 @@ class RoutingAndQualityReleaseTests(unittest.TestCase):
                     r"(?m)^- project_id:.*\n",
                     "",
                     manifest.read_text(encoding="utf-8").replace(
-                        "- protocol_version: 0.7", "- protocol_version: 0.6", 1,
+                        "- protocol_version: 0.8", "- protocol_version: 0.6", 1,
                     ),
                 ),
                 encoding="utf-8",
@@ -1322,7 +1327,7 @@ class RoutingAndQualityReleaseTests(unittest.TestCase):
             self.assertIn("unsafe or malformed memory path", output)
 
             legacy = unsafe.replace(
-                "- protocol_version: 0.7", "- protocol_version: 0.6", 1,
+                "- protocol_version: 0.8", "- protocol_version: 0.6", 1,
             )
             manifest.write_text(legacy, encoding="utf-8")
             (memory / "decisions.md").write_text(
@@ -1690,7 +1695,7 @@ class RoutingAndQualityReleaseTests(unittest.TestCase):
             manifest = memory / "manifest.md"
             manifest.write_text(
                 manifest.read_text(encoding="utf-8").replace(
-                    "- protocol_version: 0.7", "- protocol_version: 0.5", 1,
+                    "- protocol_version: 0.8", "- protocol_version: 0.5", 1,
                 ),
                 encoding="utf-8",
             )
@@ -1733,7 +1738,7 @@ class RoutingAndQualityReleaseTests(unittest.TestCase):
             manifest = memory / "manifest.md"
             manifest.write_text(
                 manifest.read_text(encoding="utf-8").replace(
-                    "- protocol_version: 0.7", "- protocol_version: 0.5", 1,
+                    "- protocol_version: 0.8", "- protocol_version: 0.5", 1,
                 ),
                 encoding="utf-8",
             )
@@ -1763,13 +1768,14 @@ class RoutingAndQualityReleaseTests(unittest.TestCase):
             manifest = Path(tmp) / "docs/memory/manifest.md"
             manifest.write_text(
                 manifest.read_text(encoding="utf-8").replace(
-                    "- protocol_version: 0.7", "- protocol_version: 0.5", 1,
+                    "- protocol_version: 0.8", "- protocol_version: 0.5", 1,
                 ),
                 encoding="utf-8",
             )
             code, output, error = capture([
                 "add", "first preference\n- injected second preference",
-                "--type", "preference", "--project-root", tmp,
+                "--type", "preference", "--evidence", "user-confirmed",
+                "--project-root", tmp,
             ])
             self.assertEqual(code, 0, output + error)
             preferences = Path(tmp) / "docs/memory/preferences.md"
@@ -2216,7 +2222,7 @@ class RoutingAndQualityReleaseTests(unittest.TestCase):
                 ])
                 self.assertIn("Blockers:", unbound)
                 self.assertNotIn("Blockers:\n- none", unbound)
-                self.assertIn("blocked-pending-local-overlay-review", unbound)
+                self.assertIn("Local overlay: pending-removal", unbound)
 
                 with redirect_stdout(StringIO()):
                     self.assertEqual(main(["local", "link", "--project-root", tmp]), 0)
@@ -2268,7 +2274,7 @@ class RoutingAndQualityReleaseTests(unittest.TestCase):
             invalid = re.sub(
                 r"(?m)^- project_id:.*$", "- project_id: invalid",
                 manifest.read_text(encoding="utf-8"),
-            ).replace("- protocol_version: 0.7", "- protocol_version: 0.6", 1)
+            ).replace("- protocol_version: 0.8", "- protocol_version: 0.6", 1)
             manifest.write_text(invalid, encoding="utf-8")
             (memory / "decisions.md").write_text(
                 "# Decisions\n\n## Legacy\nDecision:\nNeeds an ID.\n",
@@ -2318,7 +2324,7 @@ class RoutingAndQualityReleaseTests(unittest.TestCase):
             (
                 "noncanonical-version",
                 lambda text: text.replace(
-                    "- protocol_version: 0.7", "- protocol_version: 0.7.0", 1,
+                    "- protocol_version: 0.8", "- protocol_version: 0.8.0", 1,
                 ),
             ),
             (
@@ -2471,9 +2477,9 @@ class RoutingAndQualityReleaseTests(unittest.TestCase):
 
     def test_noncanonical_current_and_future_versions_fail_all_shared_gates(self):
         cases = (
-            ("0.7.0", "canonical value 0.7"),
-            ("00.7", "canonical value 0.7"),
-            ("0.8", "newer than this CLI supports"),
+            ("0.8.0", "canonical value 0.8"),
+            ("00.8", "canonical value 0.8"),
+            ("0.9", "newer than this CLI supports"),
         )
         for version, expected in cases:
             with self.subTest(version=version), tempfile.TemporaryDirectory() as tmp:
@@ -2481,9 +2487,9 @@ class RoutingAndQualityReleaseTests(unittest.TestCase):
                     self.assertEqual(main(["init", "--project-root", tmp]), 0)
                 manifest = Path(tmp) / "docs/memory/manifest.md"
                 malformed = manifest.read_text(encoding="utf-8").replace(
-                    "- protocol_version: 0.7", f"- protocol_version: {version}", 1,
+                    "- protocol_version: 0.8", f"- protocol_version: {version}", 1,
                 )
-                if version != "0.8":
+                if version != "0.9":
                     malformed = re.sub(
                         r"(?m)^- routing_schema_version:.*\n", "", malformed,
                     )
@@ -2577,7 +2583,7 @@ class RoutingAndQualityReleaseTests(unittest.TestCase):
                 original = manifest.read_text(encoding="utf-8")
                 if command[0] == "migrate":
                     original = original.replace(
-                        "- protocol_version: 0.7", "- protocol_version: 0.6", 1,
+                        "- protocol_version: 0.8", "- protocol_version: 0.6", 1,
                     )
                 ambiguous = original.rstrip() + (
                     "\n\n## MemoryCustodian Protocol\n"
@@ -3318,7 +3324,7 @@ class ForgetAndHistoryReleaseTests(unittest.TestCase):
             manifest = memory / "manifest.md"
             manifest.write_text(
                 manifest.read_text(encoding="utf-8").replace(
-                    "- protocol_version: 0.7", "- protocol_version: 0.5", 1,
+                    "- protocol_version: 0.8", "- protocol_version: 0.5", 1,
                 ),
                 encoding="utf-8",
             )
@@ -3341,12 +3347,20 @@ class ForgetAndHistoryReleaseTests(unittest.TestCase):
                     project_id=None,
                 )
 
+            preview_code, preview_output, preview_error = capture([
+                "forget", topic, "--mode", "soft", "--project-root", tmp,
+            ])
+            self.assertEqual(preview_code, 0, preview_output + preview_error)
+            plan_id = re.search(
+                r"Plan ID: ([0-9a-f]{16})", preview_output,
+            ).group(1)
             with patch(
                 "memory_custodian.forget.project_mutation_guard",
                 mutate_before_lock_yield,
             ):
                 code, output, error = capture([
                     "forget", topic, "--mode", "soft", "--apply",
+                    "--confirm-plan", plan_id,
                     "--project-root", tmp,
                 ])
             self.assertEqual(code, 2, output + error)
@@ -3848,8 +3862,8 @@ class MergeAndDeterminismReleaseTests(unittest.TestCase):
             original_manifest = manifest.read_text(encoding="utf-8")
             manifest.write_text(
                 original_manifest.replace(
-                    "initialized_with: memory-custodian 0.11.0",
-                    "initialized_with: memory-custodian 0.11.0-audit",
+                    "initialized_with: memory-custodian 0.12.0",
+                    "initialized_with: memory-custodian 0.12.0-audit",
                 ),
                 encoding="utf-8",
             )
@@ -4044,20 +4058,20 @@ class MergeAndDeterminismReleaseTests(unittest.TestCase):
 
     def test_governance_preview_requires_exact_protocol_and_schema(self):
         cases = (
-            (lambda text: text.replace("protocol_version: 0.7", "protocol_version: 0.6"), "requires Protocol 0.7"),
-            (lambda text: text.replace("protocol_version: 0.7", "protocol_version: 0.8"), "newer than this CLI"),
-            (lambda text: re.sub(r"(?m)^- entry_schema_version:.*\n", "", text), "entry_schema_version: 2"),
+            (lambda text: text.replace("protocol_version: 0.8", "protocol_version: 0.7"), "requires Protocol 0.8"),
+            (lambda text: text.replace("protocol_version: 0.8", "protocol_version: 0.9"), "newer than this CLI"),
+            (lambda text: re.sub(r"(?m)^- entry_schema_version:.*\n", "", text), "entry_schema_version: 3"),
             (
                 lambda text: text.replace(
-                    "- protocol_version: 0.7",
-                    "- protocol_version: 0.6\n- protocol_version: 0.7",
+                    "- protocol_version: 0.8",
+                    "- protocol_version: 0.7\n- protocol_version: 0.8",
                 ),
                 "Duplicate protocol metadata field: protocol_version",
             ),
             (
                 lambda text: text.replace(
-                    "- entry_schema_version: 2",
-                    "- entry_schema_version: 2\n- entry_schema_version: 2",
+                    "- entry_schema_version: 3",
+                    "- entry_schema_version: 3\n- entry_schema_version: 3",
                 ),
                 "Duplicate protocol metadata field: entry_schema_version",
             ),
@@ -4073,14 +4087,14 @@ class MergeAndDeterminismReleaseTests(unittest.TestCase):
             ),
             (
                 lambda text: text.replace(
-                    "- protocol_version: 0.7",
-                    "- protocol_version:\n- protocol_version: 0.7",
+                    "- protocol_version: 0.8",
+                    "- protocol_version:\n- protocol_version: 0.8",
                 ),
                 "Protocol metadata field protocol_version must not be empty",
             ),
             (
                 lambda text: text.replace(
-                    "- protocol_version: 0.7", "- protocol_version\n- protocol_version: 0.7",
+                    "- protocol_version: 0.8", "- protocol_version\n- protocol_version: 0.8",
                 ),
                 "Malformed protocol metadata line",
             ),
@@ -5141,7 +5155,7 @@ class MarkdownUnitBoundaryAuditTests(unittest.TestCase):
             manifest = memory / "manifest.md"
             manifest.write_text(
                 manifest.read_text(encoding="utf-8").replace(
-                    "- protocol_version: 0.7", "- protocol_version: 0.6", 1,
+                    "- protocol_version: 0.8", "- protocol_version: 0.6", 1,
                 ),
                 encoding="utf-8",
             )
@@ -5162,7 +5176,7 @@ class MarkdownUnitBoundaryAuditTests(unittest.TestCase):
                 plan_id = re.search(r"Plan ID: ([0-9a-f]{16})", preview).group(1)
                 with redirect_stdout(StringIO()):
                     self.assertEqual(
-                        main([
+                        compatibility_main([
                             *command, "--apply", "--confirm-plan", plan_id,
                         ]),
                         0,
@@ -5242,7 +5256,7 @@ class MarkdownUnitBoundaryAuditTests(unittest.TestCase):
                 manifest = memory / "manifest.md"
                 manifest.write_text(
                     manifest.read_text(encoding="utf-8").replace(
-                        "protocol_version: 0.7", "protocol_version: 0.6", 1
+                        "protocol_version: 0.8", "protocol_version: 0.6", 1
                     ),
                     encoding="utf-8",
                 )

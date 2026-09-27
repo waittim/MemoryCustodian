@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 
 from .protocol import (
+    CURRENT_ENTRY_SCHEMA_VERSION,
     CURRENT_PROTOCOL_VERSION,
     DECISION_ENTRY_BUDGET,
     budget_for,
@@ -40,10 +41,149 @@ from .quality import (
     routing_findings,
 )
 from .local_overlay import (
+    LocalOverlay,
     LocalStatus,
     inspect_overlay,
 )
-from .snapshot import build_snapshot
+from .snapshot import MemorySnapshot, build_snapshot
+from .results import CommandResult, Finding, make_finding, unique_findings, render_findings
+
+
+def _entry_id_from_message(message: str) -> str | None:
+    match = re.search(r"\bMC-(?:DEC|CON|DNU|PREF|AREA|INBOX|TOMB)-\d{8}-[0-9a-f]{8}\b", message, re.I)
+    return match.group(0) if match else None
+
+
+def _issue_finding(
+    message: str,
+    severity: str,
+    *,
+    project_root: Path,
+    memory_dir: Path,
+) -> Finding:
+    """Map one check diagnostic at its producer boundary to a stable code."""
+
+    lower = message.casefold()
+    path = message.split(":", 1)[0] if ":" in message else "docs/memory"
+    entry_id = _entry_id_from_message(message)
+    if "active entry" in lower and "no evidence" in lower:
+        code = "MC-EVIDENCE-001"
+    elif "legacy-unverified" in lower:
+        code = "MC-EVIDENCE-001"
+    elif "evidence path" in lower or "evidence" in lower and "exist" in lower:
+        code = "MC-EVIDENCE-002"
+    elif "required core file" in lower or "required route file" in lower:
+        code = "MC-ROUTING-005"
+    elif "unreachable" in lower:
+        code = "MC-ROUTING-006"
+    elif "manifest.md is missing" in lower:
+        code = "MC-ROUTING-001"
+    elif "protocol" in lower or "routing" in lower:
+        code = "MC-ROUTING-007"
+    elif "duplicate entry id" in lower:
+        code = "MC-ENTRY-001"
+    elif "legacy entr" in lower or "not protocol 0.8" in lower:
+        code = "MC-ENTRY-002"
+    elif "subject" in lower and "missing" in lower:
+        code = "MC-SUBJECT-004"
+    elif "subject" in lower and "invalid" in lower:
+        code = "MC-SUBJECT-004"
+    elif "relation" in lower:
+        code = "MC-RELATION-001"
+    elif "over budget" in lower or "near limit" in lower or "compaction" in lower:
+        code = "MC-BUDGET-001"
+    elif "security" in lower or "credential" in lower:
+        code = "MC-SECURITY-001"
+    elif "privacy" in lower or "machine-specific" in lower:
+        code = "MC-PRIVACY-001"
+    else:
+        code = "MC-ENTRY-001"
+    return make_finding(
+        code,
+        severity,
+        message,
+        path=path if path.endswith(".md") or "/" in path else "docs/memory",
+        entry_id=entry_id,
+        project_root=project_root,
+        memory_dir=memory_dir,
+    )
+
+
+def _quality_result(
+    command: str,
+    title: str,
+    quality_findings,
+    *,
+    protocol_version: str | None,
+    project_root: Path,
+    memory_dir: Path,
+) -> CommandResult:
+    findings = tuple(
+        make_finding(
+            item.code,
+            item.severity,
+            item.message,
+            project_root=project_root,
+            memory_dir=memory_dir,
+        )
+        for item in quality_findings
+    )
+    return CommandResult(
+        command=command,
+        protocol_version=protocol_version,
+        data={"check": title, "finding_count": len(findings)},
+        findings=unique_findings(findings),
+    )
+
+
+def _conflict_result(
+    result,
+    *,
+    protocol_version: str | None,
+    project_root: Path,
+    memory_dir: Path,
+) -> CommandResult:
+    severity = {
+        ConflictStatus.CLEAR: "INFO",
+        ConflictStatus.REVIEW: "WARNING",
+        ConflictStatus.CONFLICT: "ERROR",
+        ConflictStatus.INVALID: "ERROR",
+    }
+    findings = tuple(
+        make_finding(
+            item.code,
+            severity[item.status],
+            item.message,
+            path="docs/memory",
+            entry_id=item.entry_ids[0] if item.entry_ids else None,
+            details={
+                "entry_ids": list(item.entry_ids),
+                "subject_id": item.subject_id or None,
+                "facet": item.facet or None,
+                "scopes": list(item.scopes),
+                "origin": item.origin,
+                "status": item.status.value,
+            },
+            project_root=project_root,
+            memory_dir=memory_dir,
+        )
+        for item in result.findings
+    )
+    if not findings and result.status == ConflictStatus.CLEAR:
+        findings = (make_finding(
+            "MC-CONFLICT-000", "INFO", "No structural conflicts detected.",
+            path="docs/memory", project_root=project_root, memory_dir=memory_dir,
+        ),)
+    return CommandResult(
+        command="check",
+        protocol_version=None,
+        data={
+            "conflict_only": True,
+            "conflict_status": result.status.value,
+            "conflict_findings": [item.canonical() for item in findings],
+        },
+        findings=unique_findings(findings),
+    )
 
 
 def _read(path: Path) -> str:
@@ -158,47 +298,140 @@ def _check_protocol_metadata(
     return issues
 
 
-def run(args) -> int:
+_OVERLAY_UNSET = object()
+
+
+def overlay_for_snapshot(
+    snapshot: MemorySnapshot,
+    project_root: Path,
+) -> LocalOverlay | None:
+    """Capture the check/audit local view once for a shared snapshot."""
+
+    metadata = snapshot.manifest_contract.as_dict()
+    project_id = (
+        metadata.get("project_id")
+        if (
+            (
+                snapshot.manifest_contract.valid
+                or snapshot.manifest_contract.migration_available
+            )
+            and metadata.get("project_id")
+            and compare_versions(
+                metadata.get("protocol_version", "0.5"),
+                CURRENT_PROTOCOL_VERSION,
+            )
+            == 0
+        )
+        else None
+    )
+    if project_id is None:
+        return None
+    return inspect_overlay(
+        project_root,
+        project_id,
+        shared_ids={entry.entry_id for entry in snapshot.relation_entries},
+        entry_schema_version=snapshot.entry_schema_version,
+    )
+
+
+def collect(
+    args,
+    *,
+    snapshot: MemorySnapshot | None = None,
+    overlay: LocalOverlay | None | object = _OVERLAY_UNSET,
+) -> CommandResult:
     project_root = resolve_project_root(args.project_root)
     memory_dir = resolve_memory_dir(project_root, args.memory_dir)
     if not memory_dir.exists():
-        print(f"Memory directory missing: {memory_dir}")
-        return 1
+        return CommandResult(
+            command="check",
+            protocol_version=None,
+            data={"memory_directory": "docs/memory"},
+            findings=(make_finding(
+                "MC-ROUTING-001", "ERROR", "Memory directory is missing.",
+                path="docs/memory", project_root=project_root, memory_dir=memory_dir,
+            ),),
+        )
     # Capture every shared managed-memory input once.  All focused checks and
     # the ordinary diagnostics below consume this immutable view; in
     # particular, no preflight may reread manifest.md before this boundary.
-    snapshot = build_snapshot(memory_dir, project_root)
+    snapshot = snapshot or build_snapshot(memory_dir, project_root)
     if getattr(args, "conflicts", False):
         if not snapshot.manifest_contract.valid:
-            print("Conflict status: INVALID")
-            print(
-                "MC-ROUTING-007 INVALID: "
-                f"{snapshot.manifest_contract.error or 'manifest.md is missing.'}"
+            return CommandResult(
+                command="check",
+                protocol_version=None,
+                data={"conflict_only": True, "conflict_status": "INVALID"},
+                findings=(make_finding(
+                    "MC-ROUTING-007", "ERROR",
+                    snapshot.manifest_contract.error or "manifest.md is missing.",
+                    path="docs/memory/manifest.md",
+                    details={"status": "INVALID"},
+                    project_root=project_root, memory_dir=memory_dir,
+                ),),
             )
-            return 1
         result = analyze_snapshot(snapshot)
-        render_conflict_result(result)
+        structured = _conflict_result(
+            result,
+            protocol_version=snapshot.manifest_contract.as_dict().get("protocol_version"),
+            project_root=project_root,
+            memory_dir=memory_dir,
+        )
         if getattr(args, "merge_base", None):
             from .merge_review import merge_review
             merge_result = merge_review(project_root, memory_dir, args.merge_base)
-            print(merge_result.text)
-            if merge_result.blocking:
-                return 1
-        return 1 if result.status in {ConflictStatus.CONFLICT, ConflictStatus.INVALID} else 0
+            merge_data = dict(structured.data)
+            merge_data["merge_review_text"] = merge_result.text
+            merge_data["merge_review_blocking"] = merge_result.blocking
+            merge_data["merge_review"] = {
+                "status": merge_result.status,
+                "merge_base": merge_result.merge_base,
+                "conflicts": list(merge_result.conflicts),
+                "reviews": list(merge_result.reviews),
+            }
+            merge_findings = []
+            for severity, values in (
+                ("ERROR", merge_result.conflicts),
+                ("WARNING", merge_result.reviews),
+            ):
+                for value in values:
+                    code, separator, message = value.partition(" ")
+                    merge_findings.append(make_finding(
+                        code if separator and code.startswith("MC-") else "MC-CONFLICT-004",
+                        severity,
+                        message if separator else value,
+                        path="docs/memory",
+                        details={
+                            "merge_status": merge_result.status,
+                            "merge_base": merge_result.merge_base,
+                        },
+                        project_root=project_root,
+                        memory_dir=memory_dir,
+                    ))
+            structured = CommandResult(
+                command=structured.command,
+                protocol_version=structured.protocol_version,
+                data=merge_data,
+                findings=unique_findings((*structured.findings, *merge_findings)),
+            )
+        return structured
     if getattr(args, "routing", False):
-        return render_quality(
-            "routing check",
-            routing_findings(memory_dir, snapshot=snapshot),
+        return _quality_result(
+            "check", "routing check", routing_findings(memory_dir, snapshot=snapshot),
+            protocol_version=snapshot.manifest_contract.as_dict().get("protocol_version"),
+            project_root=project_root, memory_dir=memory_dir,
         )
     if getattr(args, "reachability", False):
-        return render_quality(
-            "reachability check",
-            reachability_findings(memory_dir, snapshot=snapshot),
+        return _quality_result(
+            "check", "reachability check", reachability_findings(memory_dir, snapshot=snapshot),
+            protocol_version=snapshot.manifest_contract.as_dict().get("protocol_version"),
+            project_root=project_root, memory_dir=memory_dir,
         )
     if getattr(args, "freshness", False):
-        return render_quality(
-            "freshness check",
-            freshness_findings(project_root, memory_dir, snapshot=snapshot),
+        return _quality_result(
+            "check", "freshness check", freshness_findings(project_root, memory_dir, snapshot=snapshot),
+            protocol_version=snapshot.manifest_contract.as_dict().get("protocol_version"),
+            project_root=project_root, memory_dir=memory_dir,
         )
     issues: list[str] = []
     warnings: list[str] = []
@@ -251,7 +484,7 @@ def run(args) -> int:
             continue
         if relative in {
             "decisions.md", "constraints.md", "do-not-use.md", "preferences.md", "inbox.md"
-        } or relative.startswith(("areas/", "rules/", "profiles/")):
+        } or relative.startswith("areas/"):
             units = parse_markdown_units(text).units
             legacy_h2 = sum(
                 1
@@ -266,9 +499,15 @@ def run(args) -> int:
             legacy_bullets = sum(1 for unit in units if unit.kind == "bullet")
             legacy_count = legacy_h2 + legacy_bullets
             if legacy_count:
-                warnings.append(
-                    f"{relative}: {legacy_count} legacy entr{'y' if legacy_count == 1 else 'ies'} "
-                    "remain readable without structured Evidence"
+                destination = (
+                    issues
+                    if snapshot.entry_schema_version == CURRENT_ENTRY_SCHEMA_VERSION
+                    and relative != "inbox.md"
+                    else warnings
+                )
+                destination.append(
+                    f"{relative}: {legacy_count} active legacy entr{'y' if legacy_count == 1 else 'ies'} "
+                    "remain readable but are not Protocol 0.8 compliant"
                 )
 
         ids = heading_entry_ids(text)
@@ -292,32 +531,9 @@ def run(args) -> int:
                 "shorten it semantically and move supporting detail outside the decision entry"
             )
 
-    metadata = snapshot.manifest_contract.as_dict()
-    overlay_project_id = (
-        metadata.get("project_id")
-        if (
-            (
-                snapshot.manifest_contract.valid
-                or snapshot.manifest_contract.migration_available
-            )
-            and metadata.get("project_id")
-        )
-        and compare_versions(
-            metadata.get("protocol_version", "0.5"),
-            CURRENT_PROTOCOL_VERSION,
-        ) == 0
-        else None
-    )
-    overlay = (
-        inspect_overlay(
-            project_root,
-            overlay_project_id,
-            shared_ids={entry.entry_id for entry in snapshot.relation_entries},
-            entry_schema_version=snapshot.entry_schema_version,
-        )
-        if overlay_project_id is not None
-        else None
-    )
+    if overlay is _OVERLAY_UNSET:
+        overlay = overlay_for_snapshot(snapshot, project_root)
+    overlay_project_id = overlay.project_id if isinstance(overlay, LocalOverlay) else None
     local_paths: set[Path] = set()
     if (
         overlay is not None
@@ -410,21 +626,90 @@ def run(args) -> int:
             "run `memory-custodian check --privacy` for redacted locations"
         )
 
-    if issues:
-        print("MemoryCustodian check: FAILED")
-        for issue in issues:
-            print(f"- {issue}")
+    findings = [
+        _issue_finding(item, "ERROR", project_root=project_root, memory_dir=memory_dir)
+        for item in issues
+    ] + [
+        _issue_finding(item, "WARNING", project_root=project_root, memory_dir=memory_dir)
+        for item in warnings
+    ]
+    metadata = snapshot.manifest_contract.as_dict()
+    files_data = [
+        {
+            "path": item.relative,
+            "canonical": item.canonical,
+            "archive": item.archive,
+            "entry_count": len(item.entries),
+        }
+        for item in snapshot.files
+    ]
+    data = {
+        "issues": list(issues),
+        "warnings": list(warnings),
+        "files": files_data,
+        "subjects": [
+            {
+                "subject_id": subject.subject_id,
+                "title": subject.title,
+                "status": subject.status,
+                "kind": subject.kind,
+                "canonical_ref": subject.canonical_ref,
+                "aliases": list(subject.aliases),
+            }
+            for subject in sorted(snapshot.subjects, key=lambda item: item.subject_id.casefold())
+        ],
+        "conflict_status": analyze_snapshot(snapshot).status.value,
+        "local_overlay": overlay.status.value if overlay is not None else "disabled",
+        "security_findings": len(security),
+        "privacy_findings": len(privacy),
+    }
+    return CommandResult(
+        command="check",
+        protocol_version=metadata.get("protocol_version"),
+        data=data,
+        findings=unique_findings(findings),
+    )
+
+
+def run(args) -> int:
+    result = collect(args)
+    data = result.data
+    if "check" in data:
+        title = str(data["check"])
+        print(f"MemoryCustodian {title}: {'FAILED' if result.status == 'FAIL' else 'OK'}")
+        for item in result.ordered_findings:
+            print(f"- {item.code} {item.severity}: {item.message}")
+        return result.return_code
+    if data.get("conflict_only"):
+        print(f"Conflict status: {data['conflict_status']}")
+        for item in result.ordered_findings:
+            if item.code != "MC-CONFLICT-000":
+                conflict_state = item.details.get("status", item.severity)
+                subject_id = item.details.get("subject_id")
+                facet = item.details.get("facet")
+                scopes = item.details.get("scopes", [])
+                identity = ""
+                if subject_id or facet or scopes:
+                    identity = (
+                        f" [Subject: {subject_id or '-'}; Facet: {facet or '-'}; "
+                        f"Scope: {', '.join(scopes) or '-'}]"
+                    )
+                entry_ids = item.details.get("entry_ids", [])
+                entries = f" Entries: {', '.join(entry_ids)}." if entry_ids else ""
+                print(f"- {item.code} {conflict_state}: {item.message}{identity}{entries}")
+        merge_review_text = data.get("merge_review_text")
+        if isinstance(merge_review_text, str) and merge_review_text:
+            print(merge_review_text)
     else:
-        print("MemoryCustodian check: OK")
-
-    if warnings:
-        print("Warnings:")
-        for warning in warnings:
-            print(f"- {warning}")
-
-    if getattr(args, "security", False):
-        print(f"Security findings: {len(security)}")
-    if getattr(args, "privacy", False):
-        print(f"Privacy findings: {len(privacy)}")
-
-    return 1 if issues else 0
+        print("MemoryCustodian check: FAILED" if result.status == "FAIL" else "MemoryCustodian check: OK")
+        for issue in data.get("issues", []):
+            print(f"- {issue}")
+        if data.get("warnings"):
+            print("Warnings:")
+            for warning in data["warnings"]:
+                print(f"- {warning}")
+        if getattr(args, "security", False):
+            print(f"Security findings: {data.get('security_findings', 0)}")
+        if getattr(args, "privacy", False):
+            print(f"Privacy findings: {data.get('privacy_findings', 0)}")
+    return result.return_code

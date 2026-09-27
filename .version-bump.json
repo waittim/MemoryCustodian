@@ -20,12 +20,170 @@
       {
         "path": ".claude-plugin/marketplace.json",
         "json_path": "plugins.0.version"
+      },
+      {
+        "path": "README.md",
+        "regex": "version-([0-9.]+)-blue"
+      },
+      {
+        "path": "skills/memory-custodian/SKILL.md",
+        "regex": "^This skill describes package ([0-9.]+) / Protocol"
+      },
+      {
+        "path": "RELEASE-NOTES.md",
+        "regex": "^(?:_Candidate for package version |## v)([0-9.]+)"
+      },
+      {
+        "path": "templates/minimal/manifest.md",
+        "regex": "^- last_migrated_with: memory-custodian ([0-9.]+)"
+      },
+      {
+        "path": "docs/memory/manifest.md",
+        "regex": "^- last_migrated_with: memory-custodian ([0-9.]+)"
+      },
+      {
+        "path": "examples/nightnotes-video-demo/docs/memory/manifest.md",
+        "regex": "^- last_migrated_with: memory-custodian ([0-9.]+)"
       }
     ],
     "protocol_version": [
       {
         "path": "cli/memory_custodian/__init__.py",
         "regex": "^__protocol_version__ = \"([^\"]+)\""
+      },
+      {
+        "path": "templates/minimal/manifest.md",
+        "regex": "^- protocol_version: ([0-9.]+)"
+      },
+      {
+        "path": "docs/memory/manifest.md",
+        "regex": "^- protocol_version: ([0-9.]+)"
+      },
+      {
+        "path": "examples/nightnotes-video-demo/docs/memory/manifest.md",
+        "regex": "^- protocol_version: ([0-9.]+)"
+      }
+    ],
+    "entry_schema_version": [
+      {
+        "path": "cli/memory_custodian/__init__.py",
+        "regex": "^__entry_schema_version__ = \"([^\"]+)\""
+      },
+      {
+        "path": "templates/minimal/manifest.md",
+        "regex": "^- entry_schema_version: ([0-9]+)"
+      },
+      {
+        "path": "docs/memory/manifest.md",
+        "regex": "^- entry_schema_version: ([0-9]+)"
+      },
+      {
+        "path": "examples/nightnotes-video-demo/docs/memory/manifest.md",
+        "regex": "^- entry_schema_version: ([0-9]+)"
+      }
+    ],
+    "subject_schema_version": [
+      {
+        "path": "cli/memory_custodian/__init__.py",
+        "regex": "^__subject_schema_version__ = \\\"([^\\\"]+)\\\""
+      },
+      {
+        "path": "templates/minimal/manifest.md",
+        "regex": "^- subject_schema_version: ([0-9]+)"
+      },
+      {
+        "path": "docs/memory/manifest.md",
+        "regex": "^- subject_schema_version: ([0-9]+)"
+      },
+      {
+        "path": "examples/nightnotes-video-demo/docs/memory/manifest.md",
+        "regex": "^- subject_schema_version: ([0-9]+)"
+      }
+    ],
+    "routing_schema_version": [
+      {
+        "path": "cli/memory_custodian/__init__.py",
+        "regex": "^__routing_schema_version__ = \\\"([^\\\"]+)\\\""
+      },
+      {
+        "path": "templates/minimal/manifest.md",
+        "regex": "^- routing_schema_version: ([0-9]+)"
+      },
+      {
+        "path": "docs/memory/manifest.md",
+        "regex": "^- routing_schema_version: ([0-9]+)"
+      },
+      {
+        "path": "examples/nightnotes-video-demo/docs/memory/manifest.md",
+        "regex": "^- routing_schema_version: ([0-9]+)"
+      }
+    ],
+    "conflict_schema_version": [
+      {
+        "path": "cli/memory_custodian/__init__.py",
+        "regex": "^__conflict_schema_version__ = \\\"([^\\\"]+)\\\""
+      },
+      {
+        "path": "templates/minimal/manifest.md",
+        "regex": "^- conflict_schema_version: ([0-9]+)"
+      },
+      {
+        "path": "docs/memory/manifest.md",
+        "regex": "^- conflict_schema_version: ([0-9]+)"
+      },
+      {
+        "path": "examples/nightnotes-video-demo/docs/memory/manifest.md",
+        "regex": "^- conflict_schema_version: ([0-9]+)"
+      }
+    ],
+    "local_overlay_schema_version": [
+      {
+        "path": "cli/memory_custodian/__init__.py",
+        "regex": "^__local_overlay_schema_version__ = \\\"([^\\\"]+)\\\""
+      },
+      {
+        "path": "cli/memory_custodian/local_overlay.py",
+        "regex": "^LOCAL_SCHEMA_VERSION = \\\"([^\\\"]+)\\\""
+      }
+    ],
+    "transaction_schema_version": [
+      {
+        "path": "cli/memory_custodian/__init__.py",
+        "regex": "^__transaction_schema_version__ = \"([^\"]+)\""
+      },
+      {
+        "path": "cli/memory_custodian/transactions.py",
+        "regex": "^TRANSACTION_SCHEMA_VERSION = ([0-9]+)"
+      }
+    ],
+    "audit_schema_version": [
+      {
+        "path": "cli/memory_custodian/__init__.py",
+        "regex": "^__audit_schema_version__ = \"([^\"]+)\""
+      },
+      {
+        "path": "cli/memory_custodian/audit.py",
+        "regex": "^AUDIT_SCHEMA_VERSION = ([0-9]+)"
+      }
+    ],
+    "output_schema_version": [
+      {
+        "path": "cli/memory_custodian/__init__.py",
+        "regex": "^__output_schema_version__ = \"([^\"]+)\""
+      },
+      {
+        "path": "cli/memory_custodian/output.py",
+        "regex": "^OUTPUT_SCHEMA_VERSION = ([0-9]+)"
+      }
+    ],
+    "erasure_scope_schema_version": [
+      {
+        "path": "cli/memory_custodian/__init__.py",
+        "regex": "^__erasure_scope_schema_version__ = \"([^\"]+)\""
+      },
+      {
+        "path": "cli/memory_custodian/erasure.py",
+        "regex": "^ERASURE_SCOPE_SCHEMA_VERSION = ([0-9]+)"
       }
     ]
   }

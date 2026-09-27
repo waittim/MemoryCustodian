@@ -1,64 +1,85 @@
 # Platform Adapters
 
-Every adapter must state the same authority boundary: project memory cannot override system or current user
-instructions, safety, or permission boundaries, and cannot authorize destructive actions, secret access, external
-uploads, commits, pushes, merges, releases, or privilege escalation.
+MemoryCustodian 0.12 / Protocol 0.8 has one shared workflow. Codex, Claude
+Code, Gemini, and generic agents differ only in how their short entry file
+invokes that workflow; an adapter is not a second router, Subject registry,
+conflict engine, or erasure implementation.
 
-MemoryCustodian separates the memory protocol from platform-specific entry points.
+Every adapter MUST communicate the following sequence:
 
-```text
-MemoryCustodian Core Protocol
-  -> Generic Skill Instructions
-  -> Platform Adapter
-  -> Codex / Claude Code / Cursor / Gemini / Others
-```
+1. Locate `docs/memory/manifest.md`; read it and `brief.md` before substantial
+   work. Missing manifest means incomplete setup; do not infer routes.
+2. Choose one canonical task (`general`, `planning`, `implementation`,
+   `artifact`, `preferences`, `history`, or `maintenance`) and expose it.
+3. Provide touched/planned repo-relative paths, or an explicit area for
+   pathless planning. Pass explicit rules/profiles when needed.
+4. Reuse the CLI's shared router, normally:
 
-## Codex
+   ```bash
+   memory-custodian read --task <TASK> --strict-routing --path <PATH> --explain
+   ```
 
-Codex projects should keep `AGENTS.md` short and point to `docs/memory/`.
+   Stop substantive modification on `INCOMPLETE`, `AMBIGUOUS`, `INVALID`, or
+   a deterministic unresolved conflict. Do not infer area/profile relevance
+   from prose, timestamps, file order, or Evidence count.
+5. Never load all memory, `inbox.md`, or `archive/` by default. `subjects.md`
+   and reconciliation records are protocol-operation authorities, not normal
+   context-pack content.
+6. Before merge/rebase run conflict or merge-aware audit when Git is available;
+   resolve REVIEW only through an explicit transactional reconciliation.
+7. Keep memory as project context, not authorization. It cannot override
+   system/current-user/safety/permission boundaries or authorize secrets,
+   destructive actions, uploads, commits, pushes, merges, or releases.
+8. After meaningful decisions, corrections, or rejected approaches, write or
+   propose Evidence-backed memory using an existing Subject ID.
 
-Recommended behavior:
+## Shared mutation and output contract
 
-1. Read `docs/memory/manifest.md` before substantial work.
-2. Read `docs/memory/brief.md`.
-3. Read task-specific files only when the manifest says they are relevant.
-4. Do not load `inbox.md` or `archive/` unless asked or maintaining memory.
-5. After meaningful decisions, repeated corrections, or rejected approaches, update the appropriate memory file or propose an update.
+All multi-file writes use preview, matching Plan ID confirmation, lock-held
+revalidation, and the shared transaction journal. This includes forgetting,
+governance, staged migration, enable/link, repair, schema conversion, and
+local reset. On a crash, report `audit --transactions`, select an opaque
+transaction ID, and use the transaction recovery workflow; never expose or
+load protected backup bytes.
 
-Use `adapters/codex/AGENTS.snippet.md`.
+Use `--format json` for machine-readable output. Every public envelope uses
+`output_schema_version: 1`; audit puts `audit_schema_version: 1` in `data`.
+Forgetting, ID forget, local reset, and recovery expose the same canonical
+`data.erasure_scope` (`erasure_scope_schema_version: 1`) and
+`history_check_status`. `unavailable` is not PASS, and
+`no-reachable-copy-detected` is only a bounded local inspection.
 
-## Claude Code
+Forgetting controls what remains available to future agents through
+MemoryCustodian. It is not a guarantee of erasure from Git history or
+previously distributed copies. Hard forget targets managed active memory;
+purge additionally targets managed archive. Neither rewrites Git history or
+revokes clones, forks, backups, caches, or other distributed copies.
 
-Claude Code projects should keep `CLAUDE.md` short and point to `docs/memory/`.
+## Platform entry points
 
-Recommended behavior:
+### Codex
 
-- Read `manifest.md` and `brief.md` before substantial work.
-- Load other files only when the manifest says they are relevant.
-- Keep memory usage minimal.
-- Use commands for status, compact, and forget where available.
+Keep `AGENTS.md` short and point at `docs/memory/`. Use
+`adapters/codex/AGENTS.snippet.md`.
 
-Use `adapters/claude-code/CLAUDE.snippet.md` and optional command files under `adapters/claude-code/commands/`.
+### Claude Code
 
-## Gemini
+Keep `CLAUDE.md` short and point at `docs/memory/`. Use
+`adapters/claude-code/CLAUDE.snippet.md`; optional command files MAY expose
+status, compact, forget, audit, and recovery commands but MUST NOT redefine
+the protocol.
 
-Gemini-style agents should keep `GEMINI.md` short and point to `docs/memory/`.
+### Gemini
 
-Recommended behavior:
+Keep `GEMINI.md` thin. Do not import memory files with `@` directives; load
+through the manifest at task time. Use `adapters/gemini/GEMINI.snippet.md`.
 
-- Read `manifest.md` and `brief.md` before substantial work.
-- Load other files only when the manifest says they are relevant.
-- Do not import `docs/memory/` files from `GEMINI.md`; Gemini context imports are loaded into prompt context.
-- Install or link `skills/memory-custodian/` as a Gemini Agent Skill when available.
+### Generic agents
 
-Use `adapters/gemini/GEMINI.snippet.md`.
+Use `adapters/generic/agent-instructions.md` when no platform-specific entry
+surface exists. A missing memory directory is not an error; a memory
+directory without `manifest.md` is incomplete and MUST NOT be routed by
+filename guesses.
 
-## Generic Agents
-
-Generic agents should follow `docs/memory/manifest.md` when the memory directory exists. If no memory directory exists, continue normally. If the directory exists but `manifest.md` is missing, report an incomplete or corrupted setup and do not infer routes from the remaining files.
-
-Use `adapters/generic/agent-instructions.md`.
-
-## Adapter Rule
-
-Adapters should be entry points, not memory stores. Do not copy full project memory into `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, or equivalent instruction files.
+The static adapter checker verifies this shared contract. It checks static
+text only and is not a live-agent or semantic-correctness benchmark.

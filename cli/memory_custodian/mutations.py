@@ -32,6 +32,14 @@ class PrivateTextMutation:
     text: str
 
 
+@dataclass(frozen=True)
+class PrivateDeleteMutation:
+    """One private-state deletion identified publicly only by a stable alias."""
+
+    path: Path
+    relative: str
+
+
 class PartialMutationError(OSError):
     """Report a failed write together with files already committed."""
 

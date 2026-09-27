@@ -255,9 +255,9 @@ class ErasureAndRoutingTests(unittest.TestCase):
 
     def test_erasure_scope_matrix_and_apply_boundary(self):
         for mode, archive_expected, retain_expected in (
-            ("soft", "no", "yes"),
-            ("hard", "no", "no"),
-            ("purge", "yes", "no"),
+            ("soft", "not-targeted", "yes"),
+            ("hard", "not-targeted", "no"),
+            ("purge", "pending-removal", "no"),
         ):
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmp:
                 self._fixture(tmp)
@@ -266,7 +266,7 @@ class ErasureAndRoutingTests(unittest.TestCase):
                     args.append("--allow-broad-match")
                 plan_id, output = preview(args)
                 self.assertIn("Removal scope:", output)
-                self.assertIn("- Active managed memory: yes", output)
+                self.assertIn("- Active managed memory: pending-removal", output)
                 self.assertIn(f"- Managed archive: {archive_expected}", output)
                 self.assertIn(f"- New tombstones/logs retain topic: {retain_expected}", output)
                 self.assertIn("- Git history modified: no", output)
@@ -358,7 +358,8 @@ Load:
                 manifest = manifest.replace(line, "")
             manifest_path.write_text(manifest, encoding="utf-8")
             (memory / "subjects.md").unlink()
-            apply_preview(["migrate", "--project-root", tmp])
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main(["init", "--repair", "--project-root", tmp]), 0)
             migrated = manifest_path.read_text(encoding="utf-8")
             self.assertIn(f"- project_id: {project_id}", migrated)
             self.assertIn("- subject_schema_version: 1", migrated)

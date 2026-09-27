@@ -1,5 +1,9 @@
 # Gemini Adapter Install
 
+The adapter targets MemoryCustodian 0.12 / Protocol 0.8. Keep `GEMINI.md`
+thin and let the manifest-selected Skill references define routing,
+transaction recovery, audit/JSON, staged migration, and ErasureScope.
+
 Gemini-style agents can use MemoryCustodian in two complementary ways:
 
 1. Use a thin `GEMINI.md` project context file to point at `docs/memory/`.
@@ -31,4 +35,9 @@ memory-custodian init --project-root <project> --with-gemini
 
 Or add the contents of `GEMINI.snippet.md` to the target project's `GEMINI.md`.
 
-Keep `GEMINI.md` as an entry point. Do not import `docs/memory/` files from `GEMINI.md`; store durable memory in `docs/memory/` and let the manifest control task-specific loading.
+Keep `GEMINI.md` as an entry point. Do not import `docs/memory/` files from
+`GEMINI.md`; store durable memory in `docs/memory/` and let the manifest
+control task-specific loading.
+
+For automation, use `memory-custodian audit --format json`; an interrupted
+write is handled through `audit --transactions` and opaque-ID `recover`.

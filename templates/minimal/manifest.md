@@ -3,14 +3,14 @@
 Loading map for local project memory. Load only the files listed for the current task plus explicitly requested optional modules.
 
 ## MemoryCustodian Protocol
-- protocol_version: 0.7
-- entry_schema_version: 2
+- protocol_version: 0.8
+- entry_schema_version: 3
 - subject_schema_version: 1
 - subject_registry: subjects.md
 - routing_schema_version: 1
 - conflict_schema_version: 1
-- initialized_with: memory-custodian 0.11.0
-- last_migrated_with: memory-custodian 0.11.0
+- initialized_with: memory-custodian 0.12.0
+- last_migrated_with: memory-custodian 0.12.0
 - project_id: <UUIDv4 generated once by memory-custodian init>
 - admission_policy: evidence-required
 - routing_policy: explicit-task-and-scope

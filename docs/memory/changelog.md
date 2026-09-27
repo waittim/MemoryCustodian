@@ -2,6 +2,9 @@
 
 Entries are newest first.
 
+## 2026-09-25
+- Compacted active memory, added current Evidence for six decisions, and archived superseded Protocol 0.7 governance.
+
 ## 2026-08-09
 - Closed v0.11 audit gaps across routing/migration, local overlay safety, ID and relation integrity, source-preserving
   writes, registry/reconciliation grammar, forgetting, cycle detection, and archive merges.

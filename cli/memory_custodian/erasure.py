@@ -4,11 +4,18 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 
+from .output import publish_data, publish_finding
+from .results import make_finding
+
+ERASURE_SCOPE_SCHEMA_VERSION = 1
+
 
 @dataclass(frozen=True)
 class ErasureScope:
-    active_memory: bool
-    managed_archive: bool
+    erasure_scope_schema_version: int
+    operation_phase: str
+    active_memory: str
+    managed_archive: str
     local_overlay: str
     git_worktree_modified: str
     git_history_modified: bool
@@ -27,12 +34,25 @@ def scope_for_forget(
     archive_matches: bool,
     has_mutations: bool,
     history_check_status: str = "not-requested",
+    operation_phase: str = "preview",
 ) -> ErasureScope:
+    applied = operation_phase in {"applied", "recovered-complete"}
+    domain = lambda matched: (
+        "removed" if matched and applied else
+        "pending-removal" if matched else
+        "no-match"
+    )
     return ErasureScope(
-        active_memory=active_matches,
-        managed_archive=archive_matches,
+        erasure_scope_schema_version=ERASURE_SCOPE_SCHEMA_VERSION,
+        operation_phase=operation_phase,
+        active_memory=domain(active_matches),
+        managed_archive=(domain(archive_matches) if mode == "purge" else "not-targeted"),
         local_overlay="not-applicable",
-        git_worktree_modified="on-apply" if has_mutations else "no",
+        git_worktree_modified=(
+            "yes" if applied and has_mutations
+            else "on-apply" if operation_phase == "preview" and has_mutations
+            else "no"
+        ),
         git_history_modified=False,
         distributed_copies_revoked=False,
         history_check_status=history_check_status,
@@ -41,17 +61,35 @@ def scope_for_forget(
 
 
 def render_scope(scope: ErasureScope) -> None:
-    yes_no = lambda value: "yes" if value else "no"
+    publish_data(erasure_scope=scope.canonical())
+    if scope.history_check_status == "unavailable":
+        publish_finding(make_finding(
+            "MC-ERASURE-002",
+            "WARNING",
+            "Git history inspection was unavailable.",
+            path="private/history",
+            remediation="Review repository history manually if historical exposure matters.",
+        ))
+    elif scope.history_check_status == "reachable-copy-detected":
+        publish_finding(make_finding(
+            "MC-ERASURE-003",
+            "WARNING",
+            "A reachable historical copy was detected in the inspected repository.",
+            path="private/history",
+            remediation="Treat Git history and distributed copies as outside managed-memory erasure.",
+        ))
     print("Removal scope:")
-    print(f"- Active managed memory: {yes_no(scope.active_memory)}")
-    print(f"- Managed archive: {yes_no(scope.managed_archive)}")
+    print(f"- Schema: {scope.erasure_scope_schema_version}")
+    print(f"- Operation phase: {scope.operation_phase}")
+    print(f"- Active managed memory: {scope.active_memory}")
+    print(f"- Managed archive: {scope.managed_archive}")
     print(
         "- New tombstones/logs retain topic: "
-        + yes_no(scope.topic_retained_in_new_records)
+        + ("yes" if scope.topic_retained_in_new_records else "no")
     )
     print(f"- Local overlay: {scope.local_overlay}")
     print(f"- Git worktree modified: {scope.git_worktree_modified}")
-    print(f"- Git history modified: {yes_no(scope.git_history_modified)}")
+    print(f"- Git history modified: {'yes' if scope.git_history_modified else 'no'}")
     print("- Existing clones, forks and backups revoked: no")
     print(f"- History inspection: {scope.history_check_status}")
     if scope.history_check_status == "reachable-copy-detected":

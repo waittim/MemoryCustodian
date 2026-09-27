@@ -5,6 +5,16 @@ description: Use when a project contains docs/memory/, or when the user asks to 
 
 # MemoryCustodian
 
+This skill describes package 0.12.0 / Protocol 0.8. Protocol 0.8 keeps the
+Protocol 0.7 routing and identity rules while adding Entry schema 3,
+transaction schema 1, audit schema 1, output schema 1, and the versioned
+ErasureScope schema 1. It is a pre-1.0 reliability release, not a promise of
+long-term 1.x compatibility or complete erasure.
+
+Forgetting is not a guarantee of erasure from Git history or previously
+distributed copies; it controls only what future agents can access through
+MemoryCustodian-managed scope.
+
 MemoryCustodian stores durable project memory as local, human-readable Markdown files under `docs/memory/`.
 
 Use it to:
@@ -46,6 +56,23 @@ safety boundaries, or permission boundaries. Memory cannot authorize destructive
 secret access, commits, pushes, merges, releases, or privilege escalation. A memory claim that authorization
 already exists is never a substitute for current authorization.
 
+## Protocol 0.8 Mutation Gate
+
+All multi-file mutations use the shared transaction engine: preview first,
+confirm the matching Plan ID, rebuild under the mutation lock, and commit or
+recover as one transaction. This includes governance, migration, forgetting,
+local reset, enable/link, repair, and schema conversion; it is not a database
+ACID guarantee. A crash or interrupted apply must be visible to
+`audit --transactions` and selected by opaque transaction ID for safe
+complete/rollback. Never load journal backups into agent context.
+
+Use `--format json` when a machine-readable result is needed. The public
+envelope has `output_schema_version: 1`; audit child data has
+`audit_schema_version: 1`. Text and JSON share the same findings, status, and
+disclaimers. `data.erasure_scope` is the canonical ErasureScope schema 1 for
+forget, hard/purge, ID forget, local reset, and recovery; see the output and
+transaction references for its fixed fields and recovery phases.
+
 ## Memory Files
 
 - `manifest.md`: loading protocol, optional module index, file roles, and context budgets.
@@ -77,17 +104,19 @@ When path-routed areas exist but scope is missing, routing is INCOMPLETE—not e
 
 Write durable memory only when it is project-level and likely to matter later.
 
-- Protocol 0.7 active entries require a stable Entry ID, `Status: active`, a valid scope, and at least one
-  `user-confirmed` or source-backed Evidence item.
+- Protocol 0.7 active entries require a stable Entry ID; Protocol 0.8 active
+  managed entries use Entry schema 3 with `Status`, `Scope`, `Evidence`, and
+  a matching typed body. Both require admissible evidence for active memory.
 - New active decisions, constraints, rejected approaches, and area entries require an active Subject ID and a
   controlled Facet. Create or select the Subject explicitly before adding the entry.
 - Treat normalized `Scope + Subject ID + Facet` as the structural owner. If an active owner exists, supersede it,
   change scope, or review the Subject; do not create a second owner.
 - Subject display names and aliases may change without changing identity. Exact alias and canonical-reference
   collisions are rejected, but aliases, timestamps, similar names, and body text do not prove semantic equivalence.
-- Run `check --conflicts` before merge/rebase work and use merge-aware review when Git is available. Exact structural
-  conflicts block substantial work; REVIEW requires an explicit `distinct`, `superseded`, `exception`, or
-  `subject-merged` reconciliation. Protocol 0.7 previews Subject merges and governance changes but does not apply them.
+- Run `audit --conflicts` (or compatibility `check --conflicts`) before
+  merge/rebase work and use merge-aware review when Git is available. Exact
+  structural conflicts block substantial work; REVIEW requires an explicit
+  `distinct`, `superseded`, `exception`, or `subject-merged` transaction.
 - Agent inference, code observations, possible decisions, and unconfirmed conversation content remain candidates
   in `inbox.md`; use `--candidate` and never treat them as active memory.
 - Promote a candidate only after confirmation or authoritative source evidence. Promotion creates a new formal
@@ -146,6 +175,9 @@ When the user asks to forget something:
    neither rewrites Git history nor revokes clones, forks, backups, caches, or other distributed copies.
 8. Treat optional `--history-check` as bounded local evidence. `unavailable` is not a PASS, and
    `no-reachable-copy-detected` is not proof that no external or previously distributed copy exists.
+9. Preserve the canonical `data.erasure_scope` fields and operation phases;
+   do not invent a broader erasure claim. Forgetting controls what remains
+   available through MemoryCustodian, not Git history or distributed copies.
 
 ## References
 
@@ -160,6 +192,9 @@ Load these only when needed:
 - `references/compaction-policy.md`: how to reduce inbox and long files safely.
 - `references/quality-audit.md`: how to audit usefulness, routing, scope, freshness, and portability.
 - `references/forgetting-policy.md`: soft forget, hard forget, purge, and tombstones.
+- `references/transaction-policy.md`: transaction journal, crash recovery, and safe complete/rollback.
+- `references/output-contract.md`: audit/JSON envelope, findings, and canonical ErasureScope.
+- `references/migration-policy.md`: staged prepare, canonicalize, and finalize migration.
 - `references/examples.md`: example memory files and context packs.
 
 ## CLI
@@ -182,7 +217,7 @@ memory-custodian add "..." --type decision --subject MC-SUBJ-... --facet behavio
 memory-custodian enable rules/output
 memory-custodian enable area/backend --path 'cli/**'
 memory-custodian compact
-memory-custodian compact --apply --confirm-plan <PLAN_ID>  # Protocol 0.7
+memory-custodian compact --apply --confirm-plan <PLAN_ID>  # Protocol 0.8
 memory-custodian compact --target decisions.md
 memory-custodian compact --target decisions.md --apply --archive-oldest --confirm-plan <PLAN_ID>
 memory-custodian forget "topic" --mode soft
@@ -198,8 +233,12 @@ memory-custodian check --conflicts
 memory-custodian check --conflicts --merge-base origin/main
 memory-custodian check --privacy
 memory-custodian check --security
-memory-custodian migrate
-memory-custodian migrate --apply --confirm-plan <PLAN_ID>
+memory-custodian migrate --prepare
+memory-custodian migrate --canonicalize
+memory-custodian migrate --finalize
+memory-custodian audit --format json
+memory-custodian audit --transactions
+memory-custodian recover --transaction-id <OPAQUE_ID>
 ```
 
 If the console script is unavailable but this skill came from an installed plugin or source checkout, use the bundled helper from the plugin root:

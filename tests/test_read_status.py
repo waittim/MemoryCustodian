@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "cli"))
 
 from tests.cli_test_support import main
+from memory_custodian.entries import render_active_entry
 
 
 class ReadStatusTests(unittest.TestCase):
@@ -78,8 +79,8 @@ class ReadStatusTests(unittest.TestCase):
                 code = main(["status", "--project-root", tmp])
             self.assertEqual(code, 1)
             text = out.getvalue()
-            self.assertIn("CLI version: 0.11.0", text)
-            self.assertIn("Protocol version: 0.7 (current)", text)
+            self.assertIn("CLI version: 0.12.0", text)
+            self.assertIn("Protocol version: 0.8 (current)", text)
             self.assertIn("brief.md: NEEDS CURATION", text)
             self.assertIn("inbox.md: OK", text)
             self.assertIn("preferences.md: not enabled", text)
@@ -193,7 +194,7 @@ class ReadStatusTests(unittest.TestCase):
                 self.assertEqual(main(["migrate", "--project-root", tmp, "--apply"]), 0)
             migrated = manifest.read_text(encoding="utf-8")
             self.assertIn("## MemoryCustodian Protocol", migrated)
-            self.assertIn("- protocol_version: 0.7", migrated)
+            self.assertIn("- protocol_version: 0.8", migrated)
             self.assertIn("- initialized_with: unknown", migrated)
             self.assertIn("## Optional module index", migrated)
 
@@ -214,7 +215,7 @@ class ReadStatusTests(unittest.TestCase):
             legacy = manifest.read_text(encoding="utf-8").replace(
                 "### Implementation / execution / debugging\nLoad:\n- decisions.md\n- do-not-use.md",
                 "### Implementation / execution / debugging\nLoad:\n- do-not-use.md",
-            ).replace("- protocol_version: 0.7", "- protocol_version: 0.4")
+            ).replace("- protocol_version: 0.8", "- protocol_version: 0.4")
             manifest.write_text(legacy, encoding="utf-8")
 
             out = StringIO()
@@ -231,7 +232,7 @@ class ReadStatusTests(unittest.TestCase):
             memory = Path(tmp) / "docs" / "memory"
             manifest = memory / "manifest.md"
             newer = manifest.read_text(encoding="utf-8").replace(
-                "- protocol_version: 0.7", "- protocol_version: 0.8"
+                "- protocol_version: 0.8", "- protocol_version: 0.9"
             )
             manifest.write_text(newer, encoding="utf-8")
 
@@ -248,7 +249,7 @@ class ReadStatusTests(unittest.TestCase):
             self.assertEqual(main(["init", "--project-root", tmp]), 0)
             manifest = Path(tmp) / "docs" / "memory" / "manifest.md"
             invalid = manifest.read_text(encoding="utf-8").replace(
-                "- protocol_version: 0.7", "- protocol_version: future"
+                "- protocol_version: 0.8", "- protocol_version: future"
             )
             manifest.write_text(invalid, encoding="utf-8")
 
@@ -266,7 +267,15 @@ class ReadStatusTests(unittest.TestCase):
             memory = Path(tmp) / "docs" / "memory"
             (memory / "brief.md").write_text("# Project Brief\n\nPurpose:\nPortable project.\n", encoding="utf-8")
             (memory / "preferences.md").write_text(
-                "# Preferences\n\n- Use /Volumes/Local/Xcode.app for builds.\n",
+                "# Preferences\n\n" + render_active_entry(
+                    "preference",
+                    "MC-PREF-20260921-abcdef12",
+                    "Local build tool",
+                    "Use /Volumes/Local/Xcode.app for builds.",
+                    None,
+                    "project",
+                    ("user-confirmed",),
+                ) + "\n",
                 encoding="utf-8",
             )
             out = StringIO()

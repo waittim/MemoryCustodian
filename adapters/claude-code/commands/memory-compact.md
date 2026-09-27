@@ -14,7 +14,7 @@ If the exact mechanical cleanup is appropriate, run:
 memory-custodian compact --apply --confirm-plan <PLAN_ID>
 ```
 
-This command does not classify or promote candidates. It only removes the exact duplicate complete units and tombstone matches shown in the preview; reviewed candidates remain in the inbox until handled explicitly. Run `memory-custodian check` after semantic updates.
+This command does not classify or promote candidates. It only removes the exact duplicate complete units and tombstone matches shown in the preview; reviewed candidates remain in the inbox until handled explicitly. Protocol 0.8 applies the multi-file write through the shared transaction journal; if it is interrupted, run `audit --transactions` and recover by opaque transaction ID. Run `memory-custodian check` after semantic updates.
 
 For an over-budget active file, run a target dry run:
 

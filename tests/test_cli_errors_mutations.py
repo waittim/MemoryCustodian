@@ -48,7 +48,7 @@ class CliErrorAndMutationTests(unittest.TestCase):
 
         return side_effect
 
-    def test_add_reports_partial_completion_when_manifest_write_fails(self):
+    def test_add_reports_transaction_failure_before_publish(self):
         with tempfile.TemporaryDirectory() as tmp:
             self.assertEqual(main(["init", "--project-root", tmp]), 0)
             memory = Path(tmp) / "docs" / "memory"
@@ -65,33 +65,36 @@ class CliErrorAndMutationTests(unittest.TestCase):
                 ]
             )
             err = StringIO()
-            with patch("memory_custodian.mutations.write_text", side_effect=self._fail_second_write()):
+            with patch(
+                "memory_custodian.transactions._same_filesystem_replace",
+                side_effect=OSError("simulated transaction write failure"),
+            ):
                 with redirect_stdout(StringIO()), redirect_stderr(err):
                     code = main(add_args)
 
             self.assertEqual(code, 1)
-            self.assertTrue((memory / "areas" / "backend.md").exists())
+            self.assertFalse((memory / "areas" / "backend.md").exists())
             self.assertNotIn("`areas/backend.md`", (memory / "manifest.md").read_text(encoding="utf-8"))
-            self.assertIn("Partial completion", err.getvalue())
-            self.assertIn("areas/backend.md", err.getvalue())
-            self.assertIn("memory-custodian check", err.getvalue())
+            self.assertIn("simulated transaction write failure", err.getvalue())
 
-    def test_enable_reports_partial_completion_when_manifest_write_fails(self):
+    def test_enable_reports_transaction_failure_before_publish(self):
         with tempfile.TemporaryDirectory() as tmp:
             self.assertEqual(main(["init", "--project-root", tmp]), 0)
             memory = Path(tmp) / "docs" / "memory"
             err = StringIO()
-            with patch("memory_custodian.mutations.write_text", side_effect=self._fail_second_write()):
+            with patch(
+                "memory_custodian.transactions._same_filesystem_replace",
+                side_effect=OSError("simulated transaction write failure"),
+            ):
                 with redirect_stdout(StringIO()), redirect_stderr(err):
                     code = main(["enable", "area/frontend", "--project-root", tmp])
 
             self.assertEqual(code, 1)
-            self.assertTrue((memory / "areas" / "frontend.md").exists())
+            self.assertFalse((memory / "areas" / "frontend.md").exists())
             self.assertNotIn("`areas/frontend.md`", (memory / "manifest.md").read_text(encoding="utf-8"))
-            self.assertIn("Partial completion", err.getvalue())
-            self.assertIn("areas/frontend.md", err.getvalue())
+            self.assertIn("simulated transaction write failure", err.getvalue())
 
-    def test_compact_reports_partial_completion_when_changelog_write_fails(self):
+    def test_compact_reports_transaction_failure_before_publish(self):
         with tempfile.TemporaryDirectory() as tmp:
             self.assertEqual(main(["init", "--project-root", tmp]), 0)
             self.assertEqual(main(["enable", "changelog", "--project-root", tmp]), 0)
@@ -102,15 +105,17 @@ class CliErrorAndMutationTests(unittest.TestCase):
                 encoding="utf-8",
             )
             err = StringIO()
-            with patch("memory_custodian.mutations.write_text", side_effect=self._fail_second_write()):
+            before = inbox.read_text(encoding="utf-8")
+            with patch(
+                "memory_custodian.transactions._same_filesystem_replace",
+                side_effect=OSError("simulated transaction write failure"),
+            ):
                 with redirect_stdout(StringIO()), redirect_stderr(err):
                     code = main(["compact", "--apply", "--project-root", tmp])
 
             self.assertEqual(code, 1)
-            self.assertEqual(inbox.read_text(encoding="utf-8").count("Exact duplicate"), 1)
-            self.assertIn("Candidate remains", inbox.read_text(encoding="utf-8"))
-            self.assertIn("Partial completion", err.getvalue())
-            self.assertIn("inbox.md", err.getvalue())
+            self.assertEqual(inbox.read_text(encoding="utf-8"), before)
+            self.assertIn("simulated transaction write failure", err.getvalue())
 
     def test_target_compaction_preflights_archive_parent_before_writing(self):
         with tempfile.TemporaryDirectory() as tmp:

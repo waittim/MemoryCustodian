@@ -1,7 +1,8 @@
 # Manifest Policy
 
-`manifest.md` is the sole shared runtime routing authority. Protocol 0.7 declares entry, Subject, routing, and
-conflict schema version 1; a persistent UUIDv4 `project_id`; `subject_registry: subjects.md`;
+`manifest.md` is the sole shared runtime routing authority. Protocol 0.8
+declares Entry schema 3, Subject/routing/conflict schema version 1, a
+persistent UUIDv4 `project_id`; `subject_registry: subjects.md`;
 `admission_policy: evidence-required`; `routing_policy: explicit-task-and-scope`; and
 `conflict_policy: canonical-subject-and-review`. The public project ID is a namespace identifier, not a secret or
 authorization token.
@@ -16,7 +17,7 @@ Choose one canonical task: `general`, `planning`, `implementation`, `artifact`, 
 `maintenance`. Aliases normalize deterministically. Never classify arbitrary task prose inside the CLI or
 supplement a valid custom manifest from an adapter, template, or remembered default.
 
-Normal loading combines always-load files, the canonical task route, and Protocol 0.7 optional declarations.
+Normal loading combines always-load files, the canonical task route, and Protocol 0.8 optional declarations.
 Candidates do not enter normal context. `inbox.md` is maintenance/candidate-review only; `archive/` is explicit or
 archive-maintenance only.
 

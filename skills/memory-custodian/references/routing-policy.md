@@ -8,7 +8,7 @@ The manifest routes a bounded context pack from explicit task and scope inputs. 
 - Touched or planned repo-relative paths supplied with repeatable `--path`.
 - Explicit enabled modules supplied with `--rule`, `--profile`, or `--area`.
 
-Protocol 0.7 uses case-sensitive POSIX globs. `*` and `?` stay within one segment; `**` spans complete segments.
+Protocol 0.8 uses case-sensitive POSIX globs. `*` and `?` stay within one segment; `**` spans complete segments.
 Paths are lexically contained in the project, checked against symlink escape, and need not exist yet. The CLI never
 reads touched-file content to infer an area.
 
@@ -21,7 +21,7 @@ neither; `exclusive-group` is an unknown key and therefore `INVALID`. `INVALID` 
 input violates the protocol.
 
 Use `--strict-routing` before substantial planning, implementation, debugging, or review. An incomplete inspection
-may show the shared safety baseline, but it is not an approved context pack.
+MAY show the shared safety baseline, but it is not an approved context pack.
 
 ## Explain
 

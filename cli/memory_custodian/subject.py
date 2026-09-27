@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
+import re
 
 from .entries import (
     parse_structured_entries,
@@ -24,7 +25,9 @@ from .plans import (
     digest_text,
     pending_plan_directory,
     print_plan,
+    publish_plan,
 )
+from .transactions import apply_plan_transaction
 from .protocol import (
     CURRENT_PROTOCOL_VERSION,
     compare_versions,
@@ -35,6 +38,7 @@ from .protocol import (
     read_managed_text,
     resolve_memory_dir,
     resolve_project_root,
+    today,
 )
 from .subjects import (
     SUBJECT_ID_RE,
@@ -69,7 +73,7 @@ def _project(args) -> tuple[Path, Path, str]:
     memory_dir = resolve_memory_dir(project_root, args.memory_dir)
     manifest = memory_dir / "manifest.md"
     if not manifest.exists():
-        raise ValueError("manifest.md is missing; Subject operations require Protocol 0.7 metadata.")
+        raise ValueError("manifest.md is missing; Subject operations require Protocol 0.8 metadata.")
     manifest_text = read_managed_text(memory_dir, manifest)
     metadata = manifest_contract_metadata(manifest_text)
     comparison = compare_versions(
@@ -79,7 +83,7 @@ def _project(args) -> tuple[Path, Path, str]:
     if comparison is None:
         raise ValueError("Project manifest has an invalid protocol version.")
     if comparison != 0:
-        raise ValueError("Subject operations require Protocol 0.7.")
+        raise ValueError("Subject operations require Protocol 0.8.")
     if metadata.get("subject_schema_version") != "1":
         raise ValueError("Subject schema is not initialized; run `memory-custodian migrate`.")
     registry_issues = validate_subject_registry(memory_dir, project_root)
@@ -234,7 +238,7 @@ def _apply_preview(
             != 0
         ):
             raise ValueError(
-                "Subject mutation requires Protocol 0.7; project protocol changed "
+                "Subject mutation requires Protocol 0.8; project protocol changed "
                 "before apply."
             )
         current = build()
@@ -244,7 +248,7 @@ def _apply_preview(
                 f"Stale or mismatched plan: confirmed {args.confirm_plan}, "
                 f"current Plan ID is {current.plan_id}. No files written."
             )
-        completed = apply_mutations(list(current.mutations))
+        completed = apply_plan_transaction(current, manifest_path.parent)
     if seed_path:
         discard_private_file(seed_path)
     print("Applied Subject registry plan. Written files:")
@@ -482,11 +486,11 @@ def _add_alias(args) -> int:
 
 
 def _merge(args) -> int:
-    """Inventory and preview only; Protocol 0.8 supplies the transaction journal."""
+    """Preview and transactionally apply one exact Subject merge."""
 
     from .conflicts import canonical_entries
 
-    _project_root, memory_dir, project_id = _project(args)
+    project_root, memory_dir, project_id = _project(args)
     subjects = load_subjects(memory_dir)
     source = _find(subjects, args.subject_id)
     target = _find(subjects, args.target_subject_id)
@@ -595,9 +599,99 @@ def _merge(args) -> int:
         )
     for item in blockers or ([] if current else ["none"]):
         print(f"- {item}")
-    print(f"Plan ID: {hashlib.sha256(seed).hexdigest()[:16]}")
+    registry_path = memory_dir / "subjects.md"
+    registry_text = read_managed_text(memory_dir, registry_path)
+    merged_source = render_subject(
+        source.subject_id, source.title, source.kind, source.canonical_ref,
+        source.aliases, source.evidence, status="merged",
+        merged_into=target.subject_id, merged_from=source.merged_from,
+    )
+    merged_target = render_subject(
+        target.subject_id, target.title, target.kind, target.canonical_ref,
+        tuple(dict.fromkeys((*target.aliases, *source.aliases))), target.evidence,
+        status="active", merged_from=tuple(dict.fromkeys((*target.merged_from, source.subject_id))),
+    )
+    # Replace the later source range first so that a replacement with a
+    # different line count cannot invalidate the earlier subject's captured
+    # offsets.  Both Subject objects are intentionally bound to the same
+    # registry preimage.
+    replacements = sorted(
+        ((source, merged_source), (target, merged_target)),
+        key=lambda item: item[0].start_line,
+        reverse=True,
+    )
+    registry_updated = registry_text
+    for subject, replacement in replacements:
+        registry_updated = _replace_subject(registry_updated, subject, replacement)
+    documents: dict[Path, str] = {}
+    current_ids: list[str] = []
+    for entry in canonical_entries(memory_dir):
+        reference_field = "Subject" if entry.fields.get("Subject", "").casefold() == source.subject_id.casefold() else (
+            "Provisional-Subject" if entry.fields.get("Provisional-Subject", "").casefold() == source.subject_id.casefold() else None
+        )
+        if reference_field is None or entry.status not in {"active", "candidate"}:
+            continue
+        original_document = documents.get(entry.path) or read_managed_text(memory_dir, entry.path)
+        updated_unit, count = re.subn(
+            rf"(?m)^{re.escape(reference_field)}:[ \t]*{re.escape(source.subject_id)}[ \t]*$",
+            f"{reference_field}: {target.subject_id}", entry.text, count=1,
+        )
+        if count != 1 or original_document.count(entry.text) != 1:
+            blockers.append(f"{entry.entry_id}: Subject reference source is ambiguous")
+            continue
+        documents[entry.path] = original_document.replace(entry.text, updated_unit, 1)
+        current_ids.append(entry.entry_id)
+    record_id = f"MC-REC-{today().replace('-', '')}-{hashlib.sha256(seed).hexdigest()[:8]}"
+    evidence = tuple(dict.fromkeys((*source.evidence, *target.evidence)))
+    record = (
+        f"## {record_id} — Merge {source.title} into {target.title}\n\n"
+        "Status: active\nEntries:\n"
+        + "\n".join(f"- {value}" for value in sorted(current_ids, key=str.casefold))
+        + "\nResolution: subject-merged\nEvidence:\n"
+        + "\n".join(f"- {value}" for value in evidence)
+    )
+    reconciliation_path = memory_dir / "reconciliations.md"
+    reconciliation_text = read_managed_text(memory_dir, reconciliation_path, required=False)
+    reconciliation_updated = (
+        reconciliation_text.rstrip() + "\n\n" + record + "\n"
+        if reconciliation_text else
+        "# Reconciliations\n\nRecords are append-only governance evidence.\n\n" + record + "\n"
+    )
+    mutations = [TextMutation(registry_path, registry_updated)]
+    mutations.extend(TextMutation(path, text) for path, text in sorted(documents.items(), key=lambda item: item[0].as_posix()))
+    mutations.append(TextMutation(reconciliation_path, reconciliation_updated))
+    plan = MutationPlan(
+        "subject merge", {"subject_id": source.subject_id, "into": target.subject_id},
+        project_id, CURRENT_PROTOCOL_VERSION, tuple(mutations) if not blockers else (),
+        blockers=tuple(sorted(set(blockers))),
+        private_context={"dependency_sha256": hashlib.sha256(seed).hexdigest()},
+        project_root=project_root,
+        dependency_paths=tuple(dict.fromkeys((
+            memory_dir / "manifest.md",
+            registry_path,
+            reconciliation_path,
+            *(entry.path for entry in canonical_entries(memory_dir, include_archive=True)),
+        ))),
+    )
+    public_plan = publish_plan(plan)
+    print(f"Plan ID: {public_plan['plan_id']}")
     print("Future semantics: current active/candidate references mutate; source gains Merged-Into; historical entries retain their original Subject ID.")
-    print("Transactional Subject merge apply requires Protocol 0.8.")
+    if not args.apply:
+        print("Dry run only. Re-run with --apply --confirm-plan <PLAN_ID>.")
+        return 0
+    if blockers:
+        print("Refusing Subject merge while blockers remain.")
+        return 1
+    if args.confirm_plan != plan.plan_id:
+        raise ValueError("Stale or mismatched Subject merge plan. No files written.")
+    with project_mutation_guard(
+        project_root, memory_dir / "manifest.md", "subject merge",
+        timeout=args.lock_timeout, break_stale=args.break_stale_lock,
+    ):
+        if plan.plan_id != args.confirm_plan:
+            raise ValueError("Subject merge inputs changed before apply; preview again. No files written.")
+        apply_plan_transaction(plan, memory_dir, force_journal=True)
+    print(f"Merged {source.subject_id} into {target.subject_id}.")
     return 0
 
 
