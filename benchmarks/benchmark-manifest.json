@@ -1,0 +1,95 @@
+{
+  "benchmark_format": "1",
+  "task_format": "1",
+  "result_format": "1",
+  "name": "memory-custodian-core",
+  "suite": "core",
+  "protocol": "0.8",
+  "entry_schema": "3",
+  "changes_shared_protocol": false,
+  "conditions": [
+    "NO_MEMORY",
+    "PLATFORM_FILE_ONLY",
+    "EQUIVALENT_MANUAL_DOCS",
+    "MEMORYCUSTODIAN"
+  ],
+  "primary_comparison": [
+    "EQUIVALENT_MANUAL_DOCS",
+    "MEMORYCUSTODIAN"
+  ],
+  "standard_hide": {
+    "NO_MEMORY": ["docs/manual", "docs/memory"],
+    "PLATFORM_FILE_ONLY": ["docs/manual", "docs/memory"],
+    "EQUIVALENT_MANUAL_DOCS": ["docs/memory"],
+    "MEMORYCUSTODIAN": ["docs/manual"]
+  },
+  "failure_labels": [
+    "MEMORY_OMISSION",
+    "MEMORY_FALSE_POSITIVE",
+    "MEMORY_STALE_USE",
+    "MEMORY_AUTHORITY_VIOLATION",
+    "MEMORY_CONFLICT_MISSED",
+    "MEMORY_CONTEXT_OVERLOAD",
+    "MEMORY_NONE"
+  ],
+  "runtime_labels": [
+    "offline-fixture",
+    "codex",
+    "claude-code",
+    "gemini",
+    "generic-reference"
+  ],
+  "metrics": [
+    "task_success",
+    "hard_constraint_violation",
+    "memory_dependent_requirement_satisfied",
+    "stale_memory_used",
+    "unsupported_memory_used",
+    "routing_complete",
+    "context_memory_tokens",
+    "total_input_tokens",
+    "total_output_tokens",
+    "wall_clock_seconds",
+    "tool_calls",
+    "repeated_file_reads",
+    "tests_run",
+    "final_test_status"
+  ],
+  "outcome_hierarchy": [
+    "deterministic-tests",
+    "static-repository-checks",
+    "exact-expected-artifacts",
+    "structured-rubric",
+    "blinded-human-adjudication"
+  ],
+  "statuses": ["PASS", "REVIEW", "FAIL", "BLOCKER"],
+  "pilot": {
+    "min_tasks": 12,
+    "max_tasks": 18,
+    "min_repositories": 2,
+    "repositories": ["field-ledger", "route-notes"],
+    "split": "pilot-development",
+    "held_out_authored": false
+  },
+  "held_out_expansion": {
+    "status": "not-authored",
+    "target_repositories": 3,
+    "target_paired_tasks": 36,
+    "rule": "Do not tune the harness on held-out outcomes. The pilot-development split cannot support a comparative claim."
+  },
+  "future_claim_analysis": {
+    "status": "prespecified-not-run",
+    "primary_outcome": "task_success",
+    "comparison": ["EQUIVALENT_MANUAL_DOCS", "MEMORYCUSTODIAN"],
+    "analysis_unit": "task",
+    "smallest_meaningful_effect": null,
+    "note": "Set the smallest meaningful effect before any claim-bearing run. This pilot is not that run."
+  },
+  "evidence_classes": [
+    "plan",
+    "offline-fixture",
+    "command-adapter",
+    "live-runtime-unavailable",
+    "live-runtime"
+  ]
+}

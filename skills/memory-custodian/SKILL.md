@@ -5,7 +5,7 @@ description: Use when a project contains docs/memory/, or when the user asks to 
 
 # MemoryCustodian
 
-This skill describes package 0.12.0 / Protocol 0.8. Protocol 0.8 keeps the
+This skill describes package 0.13.0 / Protocol 0.8. Protocol 0.8 keeps the
 Protocol 0.7 routing and identity rules while adding Entry schema 3,
 transaction schema 1, audit schema 1, output schema 1, and the versioned
 ErasureScope schema 1. It is a pre-1.0 reliability release, not a promise of

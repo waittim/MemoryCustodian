@@ -27,6 +27,7 @@ MemoryCustodian/
   scripts/memory-custodian         # Plugin-safe CLI wrapper
   scripts/package-codex-plugin.py  # Deterministic Codex plugin archive builder
   evals/memory-custodian/          # Static skill contract scenarios
+  benchmarks/                      # Offline agent-benchmark fixtures and runner
   templates/minimal/               # Core protocol templates
   templates/extended/              # Optional memory module scaffolding
   docs/memory/                     # Dogfood memory for this repository
@@ -45,6 +46,12 @@ Run the static skill contract checks. They validate required instructions, scena
 
 ```bash
 PYTHONPATH=cli python3 scripts/check-skill-evals.py
+```
+
+Check the offline benchmark fixtures. This does not launch a live agent:
+
+```bash
+python3 scripts/run-memory-bench.py --check-integrity
 ```
 
 Check the current memory set:

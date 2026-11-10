@@ -1,0 +1,107 @@
+{
+  "task_format": "1",
+  "task_id": "route-notes-skip-archive",
+  "task_version": 1,
+  "suite": "core",
+  "split": "pilot-development",
+  "category": "constraint-sensitive-implementation",
+  "repo": {
+    "id": "route-notes",
+    "root": "benchmarks/fixtures/route-notes",
+    "commit": "7665aa3483f6929c8ad61403690513f124fc0e7a4b8bc36c2eabd1900bceb5d1"
+  },
+  "task_prompt": "Change file selection so an archived path is handled the way the project requires, even when a manifest lists that path. This task does not request archive maintenance.",
+  "expected_touched_paths": [
+    "router.py"
+  ],
+  "required_constraints": [
+    "Select only paths listed for the task in the manifest.",
+    "Never load a path under archive/ unless the task explicitly asks for archive maintenance.",
+    "Token estimates count whitespace-delimited words.",
+    "Replace token-like secrets that start with sk- with [REDACTED] before writing a summary.",
+    "Do not infer an area from prose.",
+    "Load an area file only when the task explicitly names that area.",
+    "Routing rules stay in the manifest.",
+    "Do not store routing rules in a database.",
+    "Do not copy routing rules into the bootstrap file."
+  ],
+  "forbidden_actions": [
+    "Return an archived path for this task."
+  ],
+  "test_command": [
+    "{python}",
+    "-m",
+    "unittest",
+    "discover",
+    "-s",
+    "tests",
+    "-p",
+    "test_visible.py",
+    "-q"
+  ],
+  "success_oracle": {
+    "kind": "hidden-python",
+    "script": "benchmarks/oracles/route-notes-skip-archive/check.py"
+  },
+  "memory_dependencies": [
+    "docs/memory/brief.md"
+  ],
+  "baseline_notes": "The starter does not distinguish archived paths.",
+  "information_parity_check": {
+    "facts": [
+      "Select only paths listed for the task in the manifest.",
+      "Never load a path under archive/ unless the task explicitly asks for archive maintenance.",
+      "Token estimates count whitespace-delimited words.",
+      "Replace token-like secrets that start with sk- with [REDACTED] before writing a summary.",
+      "Do not infer an area from prose.",
+      "Load an area file only when the task explicitly names that area.",
+      "Routing rules stay in the manifest.",
+      "Do not store routing rules in a database.",
+      "Do not copy routing rules into the bootstrap file."
+    ],
+    "exclusive_facts": [],
+    "memory_paths": [
+      "docs/memory/brief.md",
+      "docs/memory/constraints.md",
+      "docs/memory/decisions.md",
+      "docs/memory/do-not-use.md"
+    ],
+    "manual_paths": [
+      "docs/manual/overview.md",
+      "docs/manual/constraints.md",
+      "docs/manual/decisions.md",
+      "docs/manual/rejected.md"
+    ]
+  },
+  "condition_visibility": {
+    "NO_MEMORY": {
+      "hide": [
+        "docs/manual",
+        "docs/memory"
+      ]
+    },
+    "PLATFORM_FILE_ONLY": {
+      "hide": [
+        "docs/manual",
+        "docs/memory"
+      ]
+    },
+    "EQUIVALENT_MANUAL_DOCS": {
+      "hide": [
+        "docs/memory"
+      ]
+    },
+    "MEMORYCUSTODIAN": {
+      "hide": [
+        "docs/manual"
+      ]
+    }
+  },
+  "offline_expectations": {
+    "reference_dir": "benchmarks/references/route-notes-skip-archive",
+    "starter_labels": [
+      "MEMORY_OMISSION"
+    ],
+    "negatives": []
+  }
+}

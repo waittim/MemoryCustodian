@@ -347,12 +347,10 @@ class SnapshotValidationArchitectureTests(unittest.TestCase):
             self.assertNotIn("MC-CONFLICT-005", output)
 
             table = Path(
-                "docs/MemoryCustodian-plan-0.11.0-erasure-aligned-revised.md"
+                "skills/memory-custodian/references/memory-file-protocol.md"
             ).read_text(encoding="utf-8")
-            self.assertIn(
-                "MC-CONFLICT-010  Invalid Subject registry syntax or schema",
-                table,
-            )
+            self.assertIn("`MC-CONFLICT-010 INVALID`", table)
+            self.assertIn("MUST NOT be mapped to a collision", table)
 
     def test_check_builds_one_entry_inventory_for_all_downstream_validation(self):
         with tempfile.TemporaryDirectory() as root:

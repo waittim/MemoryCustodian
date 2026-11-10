@@ -1,0 +1,100 @@
+{
+  "task_format": "1",
+  "task_id": "field-ledger-rounding",
+  "task_version": 1,
+  "suite": "core",
+  "split": "pilot-development",
+  "category": "bug-fixing",
+  "repo": {
+    "id": "field-ledger",
+    "root": "benchmarks/fixtures/field-ledger",
+    "commit": "3c53494ae0e974bc8e5e4e59988b22e1ccfd372752f1ca01522c40ea3c992a5b"
+  },
+  "task_prompt": "Change ratio rounding to the rule the project currently requires. Keep exact integer ratios unchanged.",
+  "expected_touched_paths": [
+    "ledger.py"
+  ],
+  "required_constraints": [
+    "Production export stays on the local machine and does not use the network.",
+    "Round half values away from zero.",
+    "Banker's rounding is rejected."
+  ],
+  "forbidden_actions": [
+    "Leave halfway cases on the language default."
+  ],
+  "test_command": [
+    "{python}",
+    "-m",
+    "unittest",
+    "discover",
+    "-s",
+    "tests",
+    "-p",
+    "test_visible.py",
+    "-q"
+  ],
+  "success_oracle": {
+    "kind": "hidden-python",
+    "script": "benchmarks/oracles/field-ledger-rounding/check.py"
+  },
+  "memory_dependencies": [
+    "docs/memory/brief.md",
+    "docs/memory/constraints.md",
+    "docs/memory/do-not-use.md"
+  ],
+  "baseline_notes": "The starter uses the language default for halfway cases.",
+  "information_parity_check": {
+    "facts": [
+      "Production export stays on the local machine and does not use the network.",
+      "Round half values away from zero.",
+      "Banker's rounding is rejected."
+    ],
+    "exclusive_facts": [
+      "Round half values away from zero.",
+      "Banker's rounding is rejected."
+    ],
+    "memory_paths": [
+      "docs/memory/brief.md",
+      "docs/memory/constraints.md",
+      "docs/memory/decisions.md",
+      "docs/memory/do-not-use.md"
+    ],
+    "manual_paths": [
+      "docs/manual/overview.md",
+      "docs/manual/constraints.md",
+      "docs/manual/decisions.md",
+      "docs/manual/rejected.md"
+    ]
+  },
+  "condition_visibility": {
+    "NO_MEMORY": {
+      "hide": [
+        "docs/manual",
+        "docs/memory"
+      ]
+    },
+    "PLATFORM_FILE_ONLY": {
+      "hide": [
+        "docs/manual",
+        "docs/memory"
+      ]
+    },
+    "EQUIVALENT_MANUAL_DOCS": {
+      "hide": [
+        "docs/memory"
+      ]
+    },
+    "MEMORYCUSTODIAN": {
+      "hide": [
+        "docs/manual"
+      ]
+    }
+  },
+  "offline_expectations": {
+    "reference_dir": "benchmarks/references/field-ledger-rounding",
+    "starter_labels": [
+      "MEMORY_OMISSION"
+    ],
+    "negatives": []
+  }
+}

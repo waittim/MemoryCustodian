@@ -1,0 +1,97 @@
+{
+  "task_format": "1",
+  "task_id": "field-ledger-split-export",
+  "task_version": 1,
+  "suite": "core",
+  "split": "pilot-development",
+  "category": "refactoring",
+  "repo": {
+    "id": "field-ledger",
+    "root": "benchmarks/fixtures/field-ledger",
+    "commit": "3c53494ae0e974bc8e5e4e59988b22e1ccfd372752f1ca01522c40ea3c992a5b"
+  },
+  "task_prompt": "Move export into the module the project asks for, and preserve the rows that export returns today.",
+  "expected_touched_paths": [
+    "ledger.py",
+    "export.py"
+  ],
+  "required_constraints": [
+    "Production export stays on the local machine and does not use the network.",
+    "Move export into export.py and preserve the current export result."
+  ],
+  "forbidden_actions": [
+    "Change which rows export returns."
+  ],
+  "test_command": [
+    "{python}",
+    "-m",
+    "unittest",
+    "discover",
+    "-s",
+    "tests",
+    "-p",
+    "test_visible.py",
+    "-q"
+  ],
+  "success_oracle": {
+    "kind": "hidden-python",
+    "script": "benchmarks/oracles/field-ledger-split-export/check.py"
+  },
+  "memory_dependencies": [
+    "docs/memory/brief.md",
+    "docs/memory/constraints.md"
+  ],
+  "baseline_notes": "Export currently lives on the ledger type and returns every row.",
+  "information_parity_check": {
+    "facts": [
+      "Production export stays on the local machine and does not use the network.",
+      "Move export into export.py and preserve the current export result."
+    ],
+    "exclusive_facts": [
+      "Move export into export.py and preserve the current export result."
+    ],
+    "memory_paths": [
+      "docs/memory/brief.md",
+      "docs/memory/constraints.md",
+      "docs/memory/decisions.md",
+      "docs/memory/do-not-use.md"
+    ],
+    "manual_paths": [
+      "docs/manual/overview.md",
+      "docs/manual/constraints.md",
+      "docs/manual/decisions.md",
+      "docs/manual/rejected.md"
+    ]
+  },
+  "condition_visibility": {
+    "NO_MEMORY": {
+      "hide": [
+        "docs/manual",
+        "docs/memory"
+      ]
+    },
+    "PLATFORM_FILE_ONLY": {
+      "hide": [
+        "docs/manual",
+        "docs/memory"
+      ]
+    },
+    "EQUIVALENT_MANUAL_DOCS": {
+      "hide": [
+        "docs/memory"
+      ]
+    },
+    "MEMORYCUSTODIAN": {
+      "hide": [
+        "docs/manual"
+      ]
+    }
+  },
+  "offline_expectations": {
+    "reference_dir": "benchmarks/references/field-ledger-split-export",
+    "starter_labels": [
+      "MEMORY_OMISSION"
+    ],
+    "negatives": []
+  }
+}

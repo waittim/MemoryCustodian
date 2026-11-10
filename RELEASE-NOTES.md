@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+## v0.13.0 - 2026-11-09
+
+Package 0.13.0 adds an offline benchmark harness. Protocol stays 0.8 and
+Entry schema stays 3.
+
+### Evidence and benchmark foundation
+
+- Added a standard-library benchmark runner, task schema, four isolated
+  conditions, information-parity checks, and a mechanical hidden-oracle
+  grader. The runner is `scripts/run-memory-bench.py`; it does not extend
+  the production CLI or authoritative routing.
+- Vendored two fixture repositories, `field-ledger` and `route-notes`, with
+  18 pilot-development tasks. Fixture commits are content hashes. CI checks
+  those hashes, condition isolation, and parity.
+- Result records are append-only and refuse to overwrite an existing result
+  ID. `--mode live` returns `BLOCKER` until a real runtime adapter is
+  configured. A local command adapter is not a named-runtime result.
+
+This release does not claim that MemoryCustodian improves task success,
+reliability, or token use. No live four-condition agent comparison is included.
+
 ## v0.12.0 - 2026-09-26
 
 Protocol 0.8 is a pre-1.0 reliability release focused on recovery,
