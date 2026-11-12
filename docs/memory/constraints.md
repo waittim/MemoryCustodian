@@ -1,5 +1,20 @@
 # Constraints
 
+## MC-CON-20261110-b07a3269 — Do not claim MemoryCustodian improves task success, reliability, or toke
+
+Status: active
+Scope: project
+Subject: MC-SUBJ-20260801-60000006
+Facet: adoption-policy
+Evidence:
+- user-confirmed
+- doc:RELEASE-NOTES.md
+- doc:docs/evaluations/benchmark/README.md
+- repo:scripts/run-memory-bench.py
+
+Constraint:
+Do not claim MemoryCustodian improves task success, reliability, or token efficiency until real headless runtime comparisons are run across the benchmark conditions; v0.13.0 provides only offline harness and parity infrastructure, and --mode live returns BLOCKER until a live runtime adapter is configured.
+
 ## MC-CON-20260921-10000001 — Offline core operations
 
 Status: active
