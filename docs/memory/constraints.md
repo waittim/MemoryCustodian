@@ -1,19 +1,16 @@
 # Constraints
 
-## MC-CON-20261110-b07a3269 — Do not claim MemoryCustodian improves task success, reliability, or toke
+## MC-CON-20261110-b07a3269 — No premature benchmark claims
 
 Status: active
 Scope: project
 Subject: MC-SUBJ-20260801-60000006
 Facet: adoption-policy
 Evidence:
-- user-confirmed
 - doc:RELEASE-NOTES.md
-- doc:docs/evaluations/benchmark/README.md
-- repo:scripts/run-memory-bench.py
 
 Constraint:
-Do not claim MemoryCustodian improves task success, reliability, or token efficiency until real headless runtime comparisons are run across the benchmark conditions; v0.13.0 provides only offline harness and parity infrastructure, and --mode live returns BLOCKER until a live runtime adapter is configured.
+Do not claim task gains until live runs complete; v0.13.0 is offline parity only.
 
 ## MC-CON-20260921-10000001 — Offline core operations
 
@@ -25,7 +22,7 @@ Evidence:
 - repo:pyproject.toml
 
 Constraint:
-Core memory operations must be network-independent; distribution may use the network.
+Core operations are network-independent; distribution may use network.
 
 ## MC-CON-20260921-10000002 — Repo-native plain-text storage
 
@@ -37,7 +34,7 @@ Evidence:
 - user-confirmed
 
 Constraint:
-Keep project memory as reviewable Markdown under docs/, defaulting to docs/memory/; keep RAG, embeddings, vector databases, and cloud memory out of the default architecture.
+Store memory as Markdown in docs/memory/; keep RAG, vector DBs, and cloud memory out.
 
 ## MC-CON-20260921-10000003 — Cross-agent compatibility
 
@@ -49,7 +46,7 @@ Evidence:
 - repo:adapters
 
 Constraint:
-Keep the protocol reusable across Codex, Claude Code, Gemini, and generic agents.
+Keep protocol reusable across Codex, Claude Code, Gemini, and generic agents.
 
 ## MC-CON-20260921-10000010 — Transactional multi-file mutation
 
@@ -73,4 +70,4 @@ Evidence:
 - repo:cli/memory_custodian/protocol.py
 
 Constraint:
-Repair and migration never downgrade newer protocols or accept malformed versions.
+Repair and migration never downgrade protocols or accept malformed versions.

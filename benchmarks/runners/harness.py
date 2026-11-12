@@ -657,6 +657,7 @@ def grade_mode(
     tool_policy: str,
     model_version: str,
     command: list[str] | None,
+    timeout: int = 30,
 ) -> list[dict]:
     records = []
     scratch = root / "benchmarks" / ".tmp"
@@ -667,17 +668,35 @@ def grade_mode(
             checkout = temp_root / task["task_id"]
             prepare_checkout(root, task, condition, checkout)
             if command:
-                completed = subprocess.run(
-                    command,
-                    cwd=checkout,
-                    text=True,
-                    input=task["task_prompt"],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    timeout=30,
-                    check=False,
-                )
-                if completed.returncode != 0:
+                try:
+                    completed = subprocess.run(
+                        command,
+                        cwd=checkout,
+                        text=True,
+                        input=task["task_prompt"],
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        timeout=timeout,
+                        check=False,
+                    )
+                    if completed.returncode != 0:
+                        records.append(
+                            _environment_record(
+                                root,
+                                task,
+                                condition,
+                                runtime,
+                                repetition,
+                                evidence_class,
+                                "BLOCKER",
+                                [],
+                                None,
+                                f"command adapter exit {completed.returncode}",
+                                checkout,
+                            )
+                        )
+                        continue
+                except subprocess.TimeoutExpired:
                     records.append(
                         _environment_record(
                             root,
@@ -689,7 +708,7 @@ def grade_mode(
                             "BLOCKER",
                             [],
                             None,
-                            f"command adapter exit {completed.returncode}",
+                            f"command adapter timed out after {timeout}s",
                             checkout,
                         )
                     )
@@ -756,6 +775,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--agent-cmd")
     parser.add_argument("--model-version", default="")
     parser.add_argument("--tool-policy", default="")
+    parser.add_argument("--timeout", type=int, default=30)
     args = parser.parse_args(argv)
     root = repo_root_from_here()
     try:
@@ -824,6 +844,7 @@ def main(argv: list[str] | None = None) -> int:
             tool_policy=args.tool_policy or evidence,
             model_version=args.model_version,
             command=command,
+            timeout=args.timeout,
         )
         _emit(records, args.record_dir)
         if any(record["status"] == "BLOCKER" for record in records):
