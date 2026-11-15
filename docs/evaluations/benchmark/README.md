@@ -73,3 +73,13 @@ Fix the smallest meaningful effect before collecting claim-bearing data; use
 independent repetitions to measure runtime variation. General or named
 cross-runtime claims require corresponding held-out live evidence. Publish
 inconclusive or negative results when uncertainty or outcomes warrant it.
+
+## Interruption development screen — 2026-11-15
+
+The [fixed interruption plan](INTERRUPTION-2026-11-15.md) and
+[results](INTERRUPTION-RESULTS.md) compare fresh restart, an observable progress
+summary, and native Codex continuation from six paired interrupted snapshots.
+All three conditions passed 4/6 blocks; there were no blockers and no summary
+wins over native continuation. This short-task screen does not satisfy the
+0.14 checkpoint prerequisites or isolate interruption as the cause of failure.
+The existing 0.13 pilot and its method hashes remain unchanged.
