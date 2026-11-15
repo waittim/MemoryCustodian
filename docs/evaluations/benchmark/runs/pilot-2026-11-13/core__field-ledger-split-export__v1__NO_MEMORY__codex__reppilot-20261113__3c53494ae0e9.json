@@ -1,0 +1,183 @@
+{
+  "budget": {
+    "time_seconds": 180,
+    "token_limit": null
+  },
+  "checkout_id": "5843fb1018d03e352ec5841aad3f52d54c53e5f77dcd37fdabf8a14be9f8e5b8",
+  "condition": "NO_MEMORY",
+  "detail": "",
+  "evidence_class": "live-runtime",
+  "failure_labels": [
+    "MEMORY_OMISSION"
+  ],
+  "fixture_sha256": "3c53494ae0e974bc8e5e4e59988b22e1ccfd372752f1ca01522c40ea3c992a5b",
+  "git_commit": "e4bcf922f46bccd2f66bf15e0eaf574a0157c501",
+  "git_dirty": true,
+  "memory_label": "MEMORY_OMISSION",
+  "metrics": {
+    "context_memory_tokens": null,
+    "final_test_status": "PASS",
+    "hard_constraint_violation": false,
+    "memory_dependent_requirement_satisfied": false,
+    "repeated_file_reads": null,
+    "routing_complete": null,
+    "stale_memory_used": false,
+    "task_success": false,
+    "tests_run": true,
+    "tool_calls": 6,
+    "total_input_tokens": 103053,
+    "total_output_tokens": 406,
+    "unsupported_memory_used": false,
+    "wall_clock_seconds": 21.162412
+  },
+  "model_version": "gpt-6.1-sol",
+  "os": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+  "package_version": "0.13.0",
+  "prompt_sha256": "2cb022c5b61aed21af77ddb2bb8832ca01a9247fb01f0fb8af03cd904128ed18",
+  "protocol_version": "0.8",
+  "repetition_id": "pilot-20261113",
+  "result_format": "1",
+  "result_id": "core__field-ledger-split-export__v1__NO_MEMORY__codex__reppilot-20261113__3c53494ae0e9",
+  "runner_source_sha256": {
+    "benchmarks/graders/mechanical.py": "228586fa06c1b7c65b8e10dd01eb2b86bc6c03005610c591c177db276718d234",
+    "benchmarks/runners/codex_runtime.py": "0735c9cd3d9fbcce264e27cfbc7c853e5a90fd75ebe0c5b8e9baec0abc9c4dc7",
+    "benchmarks/runners/harness.py": "8907a1ab2d254d8813a8677f46c1babe6e1073c7a68fcaf72ffc40e3382b2007",
+    "scripts/run-batch-benchmark.py": "1a46ea736e3c7371a7703b3186f1ad8d28bfe9632ea6c71a7119b93d5e396595"
+  },
+  "runtime": "codex",
+  "runtime_metadata": {
+    "action_trace": [
+      {
+        "event": "item.completed",
+        "id": "item_1",
+        "text_sha256": "f185a84a22f0bc0492eab3922651cfa7bc0e4c6233d1ca7a0abb7e502cf30a7e",
+        "type": "agent_message"
+      },
+      {
+        "aggregated_output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "event": "item.started",
+        "id": "item_2",
+        "source_path_mentions": [
+          "docs/memory"
+        ],
+        "status": "in_progress",
+        "type": "command_execution"
+      },
+      {
+        "aggregated_output_sha256": "9c93f22b13820764892da4d9f9cc099a354efee3bf73b15d67b8a793d6283e8d",
+        "event": "item.completed",
+        "exit_code": 0,
+        "id": "item_2",
+        "source_path_mentions": [
+          "docs/memory"
+        ],
+        "status": "completed",
+        "type": "command_execution"
+      },
+      {
+        "aggregated_output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "event": "item.started",
+        "id": "item_3",
+        "status": "in_progress",
+        "type": "command_execution"
+      },
+      {
+        "aggregated_output_sha256": "15d20afcbe7fed2a887ee4e8006e4480247fc0adb59becdff51b49267d6526d2",
+        "event": "item.completed",
+        "exit_code": 0,
+        "id": "item_3",
+        "status": "completed",
+        "type": "command_execution"
+      },
+      {
+        "aggregated_output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "event": "item.started",
+        "id": "item_4",
+        "status": "in_progress",
+        "type": "command_execution"
+      },
+      {
+        "aggregated_output_sha256": "26846e9fcb5989c358909a7a6d21cce0dcc662c03859d66cdec1ea859a532e3e",
+        "event": "item.completed",
+        "exit_code": 128,
+        "id": "item_4",
+        "status": "failed",
+        "type": "command_execution"
+      },
+      {
+        "aggregated_output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "event": "item.started",
+        "id": "item_5",
+        "status": "in_progress",
+        "type": "command_execution"
+      },
+      {
+        "aggregated_output_sha256": "662fbc87969f216c32d5f219b9a4651f27b2d693b53467c9d3b265976f242763",
+        "event": "item.completed",
+        "exit_code": 0,
+        "id": "item_5",
+        "status": "completed",
+        "type": "command_execution"
+      },
+      {
+        "aggregated_output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "event": "item.started",
+        "id": "item_6",
+        "status": "in_progress",
+        "type": "command_execution"
+      },
+      {
+        "aggregated_output_sha256": "5e4e795afaf7b2ac3694348801079911c9a51af17a801a9a9ee5368403a2d58a",
+        "event": "item.completed",
+        "exit_code": 127,
+        "id": "item_6",
+        "status": "failed",
+        "type": "command_execution"
+      },
+      {
+        "aggregated_output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "event": "item.started",
+        "id": "item_7",
+        "status": "in_progress",
+        "type": "command_execution"
+      },
+      {
+        "aggregated_output_sha256": "5a5c3dfb095be7ab3438f9c6210b9279a25af0108550c85091195677420d869c",
+        "event": "item.completed",
+        "exit_code": 0,
+        "id": "item_7",
+        "status": "completed",
+        "type": "command_execution"
+      },
+      {
+        "event": "item.completed",
+        "id": "item_8",
+        "text_sha256": "044296235cad34f1d5c13195909bb2f1d658e7348b337e670b6a96111162674e",
+        "type": "agent_message"
+      }
+    ],
+    "adapter": "codex-exec-jsonl-v1",
+    "cached_input_tokens": 91008,
+    "cli_version": "codex-cli 0.167.0-alpha.4.1",
+    "completion_events": 1,
+    "effective_prompt_sha256": "90c9adf5c4695e6821a1c0bfaaf8065db19d9334be60de3aca7a4aa46a2bfb6f",
+    "event_count": 18,
+    "event_stream_sha256": "12c275a210ac8ea05a8ab01b1968f17043658c1a7b19cbd33fcfcc79fa2e342b",
+    "exit_code": 0,
+    "prompt_prefix_sha256": "babbaf31a27274e8d0fd0fe7bbea081856f2165a9a9336dbec5fe22fa6578754",
+    "raw_trace_retained": false,
+    "requested_model": "gpt-6.1-sol",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "thread_id": "01a1d8b2-c65a-7791-aac9-4e72a7d68597",
+    "tool_calls": 6,
+    "tool_policy": "codex-workspace-write;network=off;approval=never;user-config=ignored;ephemeral;reasoning=low;host-skills=off;plugins=off;memories=off",
+    "total_input_tokens": 103053,
+    "total_output_tokens": 406
+  },
+  "status": "FAIL",
+  "suite": "core",
+  "task_id": "field-ledger-split-export",
+  "task_version": 1,
+  "tool_policy": "codex-workspace-write;network=off;approval=never;user-config=ignored;ephemeral;reasoning=low;host-skills=off;plugins=off;memories=off",
+  "visible_source_sha256": "5843fb1018d03e352ec5841aad3f52d54c53e5f77dcd37fdabf8a14be9f8e5b8"
+}

@@ -14,9 +14,11 @@ from pathlib import Path
 import platform
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 
 
 from benchmarks.graders.mechanical import grade_script, run_visible_tests
@@ -79,6 +81,12 @@ TASK_OVERLAY_FILES = {"ledger.py", "router.py"}
 SOLUTION_FILES = {"CONFLICT_REPORT.txt", "PLAN.md", "export.py", "ledger.py", "router.py"}
 RESULT_ID_RE = re.compile(r"^[A-Za-z0-9_.-]{8,240}$")
 HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
+RUNNER_SOURCE_PATHS = (
+    "benchmarks/graders/mechanical.py",
+    "benchmarks/runners/codex_runtime.py",
+    "benchmarks/runners/harness.py",
+    "scripts/run-batch-benchmark.py",
+)
 
 
 class HarnessError(RuntimeError):
@@ -160,6 +168,35 @@ def git_head(root: Path) -> str | None:
     return value
 
 
+def git_dirty(root: Path) -> bool | None:
+    """Report tracked and untracked work; unavailable Git is unknown, not clean."""
+    try:
+        completed = subprocess.run(
+            ["git", "--no-optional-locks", "-c", "core.fsmonitor=false", "status",
+             "--porcelain=v1", "--untracked-files=all"],
+            cwd=root,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return bool(completed.stdout.strip()) if completed.returncode == 0 else None
+
+
+def runner_source_hashes(root: Path) -> dict[str, str | None]:
+    """Bind method provenance to exact source bytes without publishing them."""
+    hashes = {}
+    for relative in RUNNER_SOURCE_PATHS:
+        path = root / relative
+        if path.is_symlink():
+            raise HarnessError(f"runner source must not be a symlink: {relative}")
+        hashes[relative] = hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None
+    return hashes
+
+
 def tree_hash(root: Path, skip_prefixes: tuple[str, ...] = ()) -> str:
     rows = []
     for path in iter_files(root, skip_prefixes):
@@ -174,10 +211,10 @@ def iter_files(root: Path, skip_prefixes: tuple[str, ...]) -> list[Path]:
         return []
     files = []
     for path in root.rglob("*"):
-        if not path.is_file():
-            continue
         if path.is_symlink():
             raise HarnessError(f"symlink is not allowed: {path}")
+        if not path.is_file():
+            continue
         relative_path = path.relative_to(root)
         if any(part in SKIP_PARTS for part in relative_path.parts):
             continue
@@ -478,6 +515,8 @@ def build_record(
         "package_version": package_version(root),
         "protocol_version": host_protocol(root),
         "git_commit": git_head(root),
+        "git_dirty": git_dirty(root),
+        "runner_source_sha256": runner_source_hashes(root),
         "os": platform.platform(),
         "prompt_sha256": hashlib.sha256(task["task_prompt"].encode("utf-8")).hexdigest(),
         "visible_source_sha256": visible_hash,
@@ -645,6 +684,45 @@ def plan_payload(root: Path, tasks: list[dict], runtime: str, conditions: list[s
     }
 
 
+def _run_command(command: list[str], checkout: Path, prompt: str, timeout: int) -> int:
+    """Bound the complete POSIX process group, not just the adapter parent."""
+    process = subprocess.Popen(
+        command,
+        cwd=checkout,
+        text=True,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=(os.name == "posix"),
+    )
+    try:
+        process.communicate(input=prompt, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        if os.name == "posix":
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        else:
+            process.kill()
+        process.communicate()
+        raise
+    return process.returncode
+
+
+def fixture_pin_issues(root: Path, tasks: list[dict]) -> list[str]:
+    """Ordinary execution must validate the same immutable inputs as CI."""
+    issues = []
+    hashes = {}
+    for task in tasks:
+        fixture = task["repo"]["root"]
+        if fixture not in hashes:
+            hashes[fixture] = tree_hash(root / fixture)
+        if hashes[fixture] != task["repo"]["commit"]:
+            issues.append(f"{task['task_id']}: fixture hash does not match the pinned commit")
+    return issues
+
+
 def grade_mode(
     root: Path,
     tasks: list[dict],
@@ -658,83 +736,107 @@ def grade_mode(
     model_version: str,
     command: list[str] | None,
     timeout: int = 30,
+    codex_executable: str | None = None,
 ) -> list[dict]:
+    issues = fixture_pin_issues(root, tasks)
+    if issues:
+        raise HarnessError("; ".join(issues))
     records = []
-    scratch = root / "benchmarks" / ".tmp"
-    scratch.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(dir=scratch, prefix="grade-") as name:
+    # Runtime checkouts must not have fixtures, references or hidden graders in
+    # their ancestors. Only the pinned visible checkout is supplied to the agent.
+    with tempfile.TemporaryDirectory(prefix="memory-custodian-grade-") as name:
         temp_root = Path(name)
         for task in tasks:
-            checkout = temp_root / task["task_id"]
+            checkout = temp_root / ("checkout" if codex_executable else task["task_id"])
+            if checkout.exists():
+                shutil.rmtree(checkout)
             prepare_checkout(root, task, condition, checkout)
-            if command:
+            issues = isolation_issues(checkout, condition) + parity_issues(task, condition, checkout)
+            if issues:
+                raise HarnessError("; ".join(issues))
+            visible_hash = tree_hash(checkout)
+            started = time.monotonic()
+            runtime_metrics = {}
+            runtime_metadata = None
+            blocked = None
+            record_evidence = evidence_class
+            if codex_executable:
+                from benchmarks.runners.codex_runtime import run_codex
+
+                outcome = run_codex(
+                    checkout,
+                    task["task_prompt"],
+                    executable=codex_executable,
+                    model=model_version,
+                    timeout=timeout,
+                )
+                if outcome.get("status") != "completed":
+                    blocked = outcome.get("detail") or "live runtime did not complete"
+                    record_evidence = "live-runtime-unavailable"
+                else:
+                    runtime_metrics = outcome.get("metrics", {})
+                    runtime_metadata = outcome.get("runtime_metadata", {})
+            elif command:
                 try:
-                    completed = subprocess.run(
-                        command,
-                        cwd=checkout,
-                        text=True,
-                        input=task["task_prompt"],
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.PIPE,
-                        timeout=timeout,
-                        check=False,
-                    )
-                    if completed.returncode != 0:
-                        records.append(
-                            _environment_record(
-                                root,
-                                task,
-                                condition,
-                                runtime,
-                                repetition,
-                                evidence_class,
-                                "BLOCKER",
-                                [],
-                                None,
-                                f"command adapter exit {completed.returncode}",
-                                checkout,
-                            )
-                        )
-                        continue
+                    returncode = _run_command(command, checkout, task["task_prompt"], timeout)
+                    if returncode != 0:
+                        blocked = f"command adapter exit {returncode}"
                 except subprocess.TimeoutExpired:
-                    records.append(
-                        _environment_record(
-                            root,
-                            task,
-                            condition,
-                            runtime,
-                            repetition,
-                            evidence_class,
-                            "BLOCKER",
-                            [],
-                            None,
-                            f"command adapter timed out after {timeout}s",
-                            checkout,
-                        )
-                    )
-                    continue
+                    blocked = f"command adapter timed out after {timeout}s"
+                except OSError:
+                    blocked = "command adapter could not start"
             elif grade == "reference":
                 apply_solution(root / task["offline_expectations"]["reference_dir"], checkout)
+            elapsed = round(time.monotonic() - started, 6)
+            if blocked is not None:
+                record = _environment_record(
+                    root, task, condition, runtime, repetition, record_evidence,
+                    "BLOCKER", [], None, blocked, checkout,
+                    visible_hash=visible_hash,
+                    model_version=model_version,
+                    tool_policy=tool_policy,
+                )
+                record["metrics"]["task_success"] = None
+                record["metrics"]["memory_dependent_requirement_satisfied"] = None
+                record["metrics"]["wall_clock_seconds"] = elapsed
+                record["budget"]["time_seconds"] = timeout
+                records.append(record)
+                continue
+            # Reject symlink output before executing generated code in either
+            # visible tests or the hidden grader.
+            iter_files(checkout, ())
             graded = grade_checkout(root, task, checkout)
             visible = run_visible_tests(checkout, command_for(task))
+            if visible != "PASS":
+                graded["status"] = "BLOCKER" if visible == "BLOCKER" else "FAIL"
+                graded["detail"] = "; ".join(
+                    part for part in (graded["detail"], f"visible tests: {visible}") if part
+                )
+            graded["metrics"]["task_success"] = graded["status"] == "PASS"
             graded["metrics"]["tests_run"] = True
             graded["metrics"]["final_test_status"] = visible
             record = _environment_record(
-                root,
-                task,
-                condition,
-                runtime,
-                repetition,
-                evidence_class,
-                graded["status"],
-                graded["failure_labels"],
-                graded["memory_label"],
-                graded["detail"],
-                checkout,
+                root, task, condition, runtime, repetition, record_evidence,
+                graded["status"], graded["failure_labels"], graded["memory_label"],
+                graded["detail"], checkout,
+                visible_hash=visible_hash,
+                model_version=model_version,
+                tool_policy=tool_policy,
             )
             record["metrics"] = graded["metrics"]
-            record["tool_policy"] = tool_policy
-            record["model_version"] = model_version or None
+            # Runtime observations may fill only execution metrics; the hidden
+            # oracle remains the authority for outcome and memory labels.
+            for key in (
+                "total_input_tokens", "total_output_tokens", "tool_calls",
+                "repeated_file_reads", "context_memory_tokens", "routing_complete",
+            ):
+                if key in runtime_metrics:
+                    record["metrics"][key] = runtime_metrics[key]
+            if command or codex_executable:
+                record["metrics"]["wall_clock_seconds"] = elapsed
+                record["budget"]["time_seconds"] = timeout
+            if runtime_metadata is not None:
+                record["runtime_metadata"] = runtime_metadata
             records.append(record)
     return records
 
@@ -773,12 +875,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--record-dir")
     parser.add_argument("--repetition-id", default="1")
     parser.add_argument("--agent-cmd")
+    parser.add_argument("--codex-executable", help="Explicit opt-in to the native Codex live adapter")
     parser.add_argument("--model-version", default="")
     parser.add_argument("--tool-policy", default="")
     parser.add_argument("--timeout", type=int, default=30)
     args = parser.parse_args(argv)
     root = repo_root_from_here()
     try:
+        if args.timeout <= 0:
+            raise HarnessError("timeout must be positive")
+        if args.codex_executable and (args.mode != "live" or args.runtime != "codex"):
+            raise HarnessError("--codex-executable requires --mode live --runtime codex")
         if args.check_integrity:
             return _print_integrity(root)
         if args.suite != "core":
@@ -794,6 +901,8 @@ def main(argv: list[str] | None = None) -> int:
                 return 1
         for task in tasks:
             issues.extend(validate_task(task, root, manifest))
+        if not issues:
+            issues.extend(fixture_pin_issues(root, tasks))
         if issues:
             print("\n".join(issues), file=sys.stderr)
             return 1
@@ -810,7 +919,13 @@ def main(argv: list[str] | None = None) -> int:
             print("grade and live modes take one --condition", file=sys.stderr)
             return 1
         condition = conditions[0]
-        if args.mode == "live":
+        for task in tasks:
+            result_id = make_result_id(task, condition, args.runtime, args.repetition_id, task["repo"]["commit"])
+            if not RESULT_ID_RE.fullmatch(result_id):
+                raise HarnessError("runtime or repetition produces an unsafe result id")
+            if args.record_dir and os.path.lexists(Path(args.record_dir) / f"{result_id}.json"):
+                raise FileExistsError(f"result already exists: {result_id}.json")
+        if args.mode == "live" and not args.codex_executable:
             records = [
                 blocker_record(
                     root,
@@ -822,17 +937,31 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 for task in tasks
             ]
+            for record in records:
+                record["model_version"] = args.model_version or None
+                record["tool_policy"] = args.tool_policy or None
+                record["budget"]["time_seconds"] = args.timeout
             _emit(records, args.record_dir)
             return 2
+        if args.mode == "live" and not args.model_version:
+            raise HarnessError("native live mode requires --model-version")
         if args.mode == "command" and not args.agent_cmd:
             print("command mode requires --agent-cmd", file=sys.stderr)
             return 1
         command = _split_command(args.agent_cmd) if args.mode == "command" else None
-        evidence = "command-adapter" if command else "offline-fixture"
-        runtime = args.runtime if command else "offline-fixture"
-        if not command and args.runtime != "offline-fixture":
+        live = args.mode == "live"
+        evidence = "live-runtime" if live else ("command-adapter" if command else "offline-fixture")
+        runtime = args.runtime if command or live else "offline-fixture"
+        if not command and not live and args.runtime != "offline-fixture":
             print("offline-fixture mode records runtime offline-fixture", file=sys.stderr)
             return 1
+        tool_policy = args.tool_policy or evidence
+        if live:
+            from benchmarks.runners.codex_runtime import TOOL_POLICY
+
+            if args.tool_policy and args.tool_policy != TOOL_POLICY:
+                raise HarnessError("native live --tool-policy must match the configured Codex policy")
+            tool_policy = TOOL_POLICY
         records = grade_mode(
             root,
             tasks,
@@ -841,10 +970,11 @@ def main(argv: list[str] | None = None) -> int:
             repetition=args.repetition_id,
             grade=args.grade,
             evidence_class=evidence,
-            tool_policy=args.tool_policy or evidence,
+            tool_policy=tool_policy,
             model_version=args.model_version,
             command=command,
             timeout=args.timeout,
+            codex_executable=args.codex_executable,
         )
         _emit(records, args.record_dir)
         if any(record["status"] == "BLOCKER" for record in records):
@@ -900,6 +1030,10 @@ def _environment_record(
     memory_label: str | None,
     detail: str,
     checkout: Path,
+    *,
+    visible_hash: str | None = None,
+    model_version: str = "",
+    tool_policy: str = "",
 ) -> dict:
     return build_record(
         root=root,
@@ -929,9 +1063,9 @@ def _environment_record(
         },
         detail=detail,
         fixture_hash=task["repo"]["commit"],
-        visible_hash=tree_hash(checkout),
-        model_version="",
-        tool_policy="",
+        visible_hash=visible_hash if visible_hash is not None else tree_hash(checkout),
+        model_version=model_version,
+        tool_policy=tool_policy,
     )
 
 

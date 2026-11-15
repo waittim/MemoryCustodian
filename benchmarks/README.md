@@ -1,4 +1,4 @@
-# Offline benchmark harness
+# Controlled benchmark harness
 
 This directory is the v0.13 measurement foundation. It does not change Protocol 0.8, Entry schema 3, or the production CLI. A passing integrity check is not evidence that MemoryCustodian improves agent task success, reliability, or token use.
 
@@ -13,7 +13,7 @@ The harness prepares the same pinned task under four isolated conditions:
 | `EQUIVALENT_MANUAL_DOCS` | The same project facts as MemoryCustodian, written as ordinary documents under `docs/manual/`, plus a short map. |
 | `MEMORYCUSTODIAN` | Those facts under `docs/memory/`, plus a bootstrap that points at the manifest. `docs/manual/` is removed. |
 
-The primary comparison, once a live pilot exists, is `EQUIVALENT_MANUAL_DOCS` versus `MEMORYCUSTODIAN`. The other two conditions answer different questions and are not the incremental-value comparison.
+The primary comparison is `EQUIVALENT_MANUAL_DOCS` versus `MEMORYCUSTODIAN`. The other two conditions answer different questions and are not the incremental-value comparison.
 
 Task files are JSON, not YAML. The runner stays on the Python standard library. The pinned fields are the roadmap task fields: repository, commit, prompt, touched paths, constraints, forbidden actions, test command, success oracle, memory dependencies, baseline notes, information parity, and condition visibility.
 
@@ -48,7 +48,13 @@ python3 scripts/run-memory-bench.py \
   --grade reference
 ```
 
-`--mode live` does not launch Codex, Claude Code, Gemini, or a generic agent. It returns status `BLOCKER` and evidence class `live-runtime-unavailable`. A local `--mode command --agent-cmd ...` run is evidence class `command-adapter`. It is not a named-runtime result.
+`--mode live --runtime codex --codex-executable codex --model-version <model>`
+explicitly enables the real Codex adapter. It uses a fresh sandboxed session
+per task and records successful JSONL turn completion before grading. Without
+that opt-in, live mode returns `BLOCKER` and evidence class
+`live-runtime-unavailable`. A local `--mode command --agent-cmd ...` run is
+evidence class `command-adapter`; a runtime label alone does not make it a
+named-runtime result. See the [operator guide](../docs/evaluations/benchmark/RUNNING-BENCHMARKS.md).
 
 Result files are append-only. The writer uses exclusive create and refuses to overwrite an existing result ID. Pass `--record-dir` only when a normalized record should be kept. Do not commit raw traces. Do not point an agent at the MemoryCustodian checkout; the harness builds a temp checkout that excludes other tasks, hidden oracles, and reference solutions.
 
@@ -63,7 +69,7 @@ Eighteen development-set tasks, nine in `field-ledger` and nine in `route-notes`
 - 2 history / prior-decision
 - 2 stale or conflicting memory
 
-At least half of the tasks depend on a fact that is not stated in the implementation file. Hidden oracles live under `benchmarks/oracles/` and are not copied into the checkout. `MEMORY_CONTEXT_OVERLOAD` is part of the label vocabulary and is not emitted, because this harness does not measure tokens.
+At least half of the tasks depend on a fact that is not stated in the implementation file. Hidden oracles live under `benchmarks/oracles/` and are not copied into the checkout. `MEMORY_CONTEXT_OVERLOAD` is part of the label vocabulary and is not emitted, because the harness does not measure memory-context tokens or classify overload. Native Codex records observed total token usage, tool counts, and execution time separately from oracle outcomes.
 
 ## Claims
 
@@ -84,4 +90,26 @@ Publish inconclusive results when the interval is wide. `PASS` means the request
 
 ## Package 0.13.0 boundary
 
-The schema, task fixtures, offline runner, mechanical grader, four-condition isolation, parity checks, and CI integrity check ship in package 0.13.0. A live runtime has not completed the four conditions. That absence blocks a comparative claim; it does not change Protocol 0.8.
+The schema, fixtures, mechanical grader, isolation/parity checks, native Codex
+adapter, batch runner, and [completed controlled pilot](../docs/evaluations/benchmark/RESULTS.md)
+ship in package 0.13.0. All 18 tasks were run in four conditions, with 72
+independent real sessions and no runtime blockers. The primary comparison did
+not demonstrate incremental benefit over equivalent manual documents.
+
+The pilot exercises each fixture's manifest/bootstrap path with host skills
+disabled uniformly; it is not validation of a complete installed Skill/CLI
+workflow, other agent runtimes, or production repositories. This development
+split does not authorize a general effectiveness claim. Protocol stays 0.8.
+
+Validate the checked-in normalized evidence and reproduced report without
+launching a runtime or grader:
+
+```bash
+python3 scripts/check-benchmark-evidence.py \
+  --report-file docs/evaluations/benchmark/RESULTS.md
+```
+
+Add `--check-current-source` to verify that the current runner/grader source
+bytes still match this historical pilot's method hashes. The validator checks
+record consistency, not cryptographic runtime attestation or independent
+regrading of discarded checkouts.

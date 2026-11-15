@@ -2,6 +2,21 @@
 
 Entries are newest first.
 
+## 2026-11-14
+
+- Prepared 0.13.0 for publication with independent code review, a clean-tree
+  packaging gate, and required remote CI before the release tag.
+
+## 2026-11-13
+
+- Completed the 18-task, four-condition real Codex development pilot with 72
+  independent sessions; retained all failures and documented no demonstrated
+  incremental benefit over equivalent manual documents in the pilot report.
+- Added native runtime provenance, hardened adapters and batch resume/statistics,
+  and added static pilot-evidence checks to CI.
+- Updated the benchmark evidence constraint for held-out claims and shortened
+  existing constraints without dropping their identities or policies.
+
 ## 2026-11-10
 - Added constraint memory to constraints.md.
 

@@ -352,9 +352,11 @@ not a live Codex, Claude Code, Gemini, or generic-agent benchmark. See
 [`live-evaluation.md`](evals/memory-custodian/live-evaluation.md) for the
 reproducible live-evaluation procedure. The benchmark harness under
 `benchmarks/` checks fixture integrity, condition isolation, and information
-parity offline. It does not show that MemoryCustodian improves task success,
-reliability, or token use. Live four-condition results are not recorded yet.
-See [`benchmarks/README.md`](benchmarks/README.md).
+parity offline. A separate [controlled Codex pilot](docs/evaluations/benchmark/RESULTS.md)
+records all 72 real sessions across 18 tasks and four conditions, including
+failures. This development pilot does not establish improved task success,
+reliability, or token use. See [`benchmarks/README.md`](benchmarks/README.md)
+for the evidence boundary and reproduction instructions.
 
 ---
 

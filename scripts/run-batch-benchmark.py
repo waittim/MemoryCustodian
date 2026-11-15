@@ -9,12 +9,18 @@ and detailed Markdown/JSON reports.
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 import json
-import os
 from pathlib import Path
+import random
 import subprocess
 import sys
+
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from benchmarks.runners.harness import HarnessError, load_tasks, make_result_id
+from benchmarks.runners.codex_runtime import TOOL_POLICY as CODEX_TOOL_POLICY
 
 
 CONDITIONS = (
@@ -30,16 +36,7 @@ def repo_root_from_here() -> Path:
 
 
 def load_task_list(root: Path, suite: str = "core") -> list[str]:
-    tasks_dir = root / "benchmarks" / "tasks"
-    task_ids = []
-    for path in sorted(tasks_dir.glob("*.json")):
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-            if data.get("suite") == suite:
-                task_ids.append(data.get("task_id"))
-        except Exception:
-            continue
-    return task_ids
+    return [task["task_id"] for task in load_tasks(root) if task.get("suite") == suite]
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -56,17 +53,21 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help=f"Comma-separated conditions (default: {','.join(CONDITIONS)})",
     )
     parser.add_argument("--runtime", default="headless-agent", help="Runtime name label")
+    parser.add_argument("--mode", choices=("command", "live"), default="command")
+    parser.add_argument("--codex-executable", help="Explicit native Codex executable for live mode")
     parser.add_argument(
         "--agent-cmd",
-        required=True,
         help="Command string used by the runner to invoke the agent in each checkout",
     )
     parser.add_argument("--record-dir", help="Directory where individual result records are persisted (append-only)")
     parser.add_argument("--repetition-id", default="1", help="Repetition ID (default: 1)")
     parser.add_argument("--timeout", type=int, default=60, help="Per-task subprocess timeout in seconds (default: 60)")
+    parser.add_argument("--jobs", type=int, default=1, help="Maximum concurrent isolated runs (default: 1)")
     parser.add_argument("--model-version", default="", help="Model version label")
     parser.add_argument("--tool-policy", default="", help="Tool policy label")
     parser.add_argument("--resume", action="store_true", help="Skip runs whose result record already exists in --record-dir")
+    parser.add_argument("--condition-order", choices=("balanced", "fixed"), default="balanced",
+                        help="Rotate condition order by task index, or preserve the supplied order")
     parser.add_argument("--dry-run", action="store_true", help="Print plan and exit without running")
     parser.add_argument("--report-file", help="Path to write the aggregated markdown report")
     parser.add_argument(
@@ -78,18 +79,49 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def get_existing_result_ids(record_dir: Path) -> set[str]:
+def get_existing_records(record_dir: Path) -> dict[str, dict]:
     if not record_dir.is_dir():
-        return set()
-    existing = set()
-    for path in record_dir.glob("*.json"):
+        return {}
+    existing = {}
+    for path in sorted(record_dir.glob("*.json")):
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
-            if isinstance(data, dict) and "result_id" in data:
-                existing.add(data["result_id"])
-        except Exception:
-            continue
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError(f"cannot read existing result: {path.name}") from exc
+        if not isinstance(data, dict) or data.get("result_id") != path.stem:
+            raise ValueError(f"existing result identity does not match filename: {path.name}")
+        existing[path.stem] = data
     return existing
+
+
+def execution_plan(task_ids: list[str], conditions: list[str], order: str) -> list[tuple[str, str]]:
+    plan = []
+    for index, task_id in enumerate(task_ids):
+        offset = index % len(conditions) if order == "balanced" else 0
+        for condition in conditions[offset:] + conditions[:offset]:
+            plan.append((task_id, condition))
+    return plan
+
+
+def validate_record(record: dict, task: dict, condition: str, args: argparse.Namespace) -> None:
+    expected = {
+        "result_id": make_result_id(task, condition, args.runtime, args.repetition_id, task["repo"]["commit"]),
+        "suite": task["suite"], "task_id": task["task_id"], "task_version": task["task_version"],
+        "condition": condition, "runtime": args.runtime, "repetition_id": args.repetition_id,
+        "fixture_sha256": task["repo"]["commit"], "model_version": args.model_version or None,
+        "tool_policy": args.tool_policy or (CODEX_TOOL_POLICY if args.mode == "live" else "command-adapter"),
+    }
+    for field, value in expected.items():
+        if record.get(field) != value:
+            raise ValueError(f"result {expected['result_id']} has mismatched {field}; use a new repetition or record directory")
+    if record.get("status") not in {"PASS", "FAIL", "BLOCKER", "REVIEW"}:
+        raise ValueError(f"result {expected['result_id']} has an invalid status")
+    evidence = "live-runtime" if args.mode == "live" else "command-adapter"
+    allowed_evidence = {evidence}
+    if args.mode == "live" and record.get("status") == "BLOCKER":
+        allowed_evidence.add("live-runtime-unavailable")
+    if record.get("evidence_class") not in allowed_evidence:
+        raise ValueError(f"result {expected['result_id']} has mismatched evidence_class")
 
 
 def run_single_task(
@@ -103,26 +135,30 @@ def run_single_task(
     record_dir: Path | None,
     model_version: str,
     tool_policy: str,
+    mode: str = "command",
+    codex_executable: str | None = None,
 ) -> dict | None:
     runner_script = root / "scripts" / "run-memory-bench.py"
     cmd = [
         sys.executable,
         str(runner_script),
         "--mode",
-        "command",
+        mode,
         "--runtime",
         runtime,
         "--condition",
         condition,
         "--task",
         task_id,
-        "--agent-cmd",
-        agent_cmd,
         "--repetition-id",
         repetition_id,
         "--timeout",
         str(timeout),
     ]
+    if agent_cmd:
+        cmd.extend(["--agent-cmd", agent_cmd])
+    if codex_executable:
+        cmd.extend(["--codex-executable", codex_executable])
     if record_dir:
         cmd.extend(["--record-dir", str(record_dir)])
     if model_version:
@@ -141,7 +177,7 @@ def run_single_task(
     if res.stdout:
         try:
             records = json.loads(res.stdout)
-            if isinstance(records, list) and records:
+            if res.returncode in (0, 2) and isinstance(records, list) and len(records) == 1 and isinstance(records[0], dict):
                 return records[0]
         except json.JSONDecodeError:
             pass
@@ -172,10 +208,13 @@ def aggregate_results(
         t = record.get("task_id")
         c = record.get("condition")
         st = record.get("status", "BLOCKER")
-        if t in matrix and c in matrix[t]:
-            pass
-        if t in matrix:
-            matrix[t][c] = record
+        if t not in matrix or c not in by_condition:
+            raise ValueError("result is outside the requested task/condition matrix")
+        if c in matrix[t]:
+            raise ValueError(f"duplicate result for {t} [{c}]")
+        if st not in {"PASS", "FAIL", "BLOCKER", "REVIEW"}:
+            raise ValueError(f"invalid result status for {t} [{c}]")
+        matrix[t][c] = record
 
         if c in by_condition:
             by_condition[c]["total"] += 1
@@ -199,13 +238,19 @@ def aggregate_results(
         "mc_only_pass": 0,
         "manual_only_pass": 0,
         "neither_run": 0,
+        "incomplete_pairs": 0,
+        "success_rate_difference": None,
+        "bootstrap_95_interval": None,
+        "uncertainty_method": "paired task bootstrap, 10000 resamples, seed 0; descriptive pilot only",
     }
+    differences = []
     if "EQUIVALENT_MANUAL_DOCS" in conditions and "MEMORYCUSTODIAN" in conditions:
         for t in task_ids:
             man = matrix[t].get("EQUIVALENT_MANUAL_DOCS", {}).get("status")
             mc = matrix[t].get("MEMORYCUSTODIAN", {}).get("status")
-            if man and mc:
+            if man in {"PASS", "FAIL"} and mc in {"PASS", "FAIL"}:
                 paired["total_pairs"] += 1
+                differences.append(int(mc == "PASS") - int(man == "PASS"))
                 if man == "PASS" and mc == "PASS":
                     paired["both_pass"] += 1
                 elif man != "PASS" and mc != "PASS":
@@ -214,6 +259,16 @@ def aggregate_results(
                     paired["mc_only_pass"] += 1
                 elif man == "PASS" and mc != "PASS":
                     paired["manual_only_pass"] += 1
+            else:
+                paired["incomplete_pairs"] += 1
+                if not man and not mc:
+                    paired["neither_run"] += 1
+    if differences:
+        count = len(differences)
+        paired["success_rate_difference"] = sum(differences) / count
+        rng = random.Random(0)
+        samples = sorted(sum(rng.choices(differences, k=count)) / count for _ in range(10000))
+        paired["bootstrap_95_interval"] = [samples[249], samples[9749]]
 
     return {
         "matrix": matrix,
@@ -238,6 +293,7 @@ def format_markdown_report(
         f"- Model version: `{model_version or 'unspecified'}`",
         f"- Tasks evaluated: {len(task_ids)}",
         f"- Conditions: {', '.join(f'`{c}`' for c in conditions)}",
+        "- Evidence boundary: pilot-development results are descriptive; no comparative effectiveness claim.",
         "",
         "## 1. Condition Summary",
         "",
@@ -266,9 +322,14 @@ def format_markdown_report(
             f"- **Both FAIL**: {p['both_fail']} ({p['both_fail'] / p['total_pairs'] * 100:.1f}%)",
             f"- **MEMORYCUSTODIAN only PASS**: {p['mc_only_pass']}",
             f"- **EQUIVALENT_MANUAL_DOCS only PASS**: {p['manual_only_pass']}",
+            f"- **Incomplete pairs excluded**: {p['incomplete_pairs']} (missing, BLOCKER, or REVIEW)",
+            f"- **Paired success-rate difference (MC − manual)**: {p['success_rate_difference'] * 100:.1f} percentage points",
+            f"- **95% paired bootstrap interval**: [{p['bootstrap_95_interval'][0] * 100:.1f}, {p['bootstrap_95_interval'][1] * 100:.1f}] percentage points",
+            f"- Uncertainty method: {p['uncertainty_method']}.",
+            "- This resamples the observed tasks, not new repositories or independent runtime repetitions. Small, related fixture tasks and one repetition cannot establish a general benefit.",
         ])
     else:
-        lines.append("*Both conditions were not present in this run.*")
+        lines.append(f"*No complete, gradeable pairs; {p['incomplete_pairs']} pairs excluded.*")
 
     lines.extend([
         "",
@@ -317,7 +378,28 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     root = repo_root_from_here()
 
-    all_tasks = load_task_list(root, args.suite)
+    if args.timeout <= 0 or args.jobs <= 0:
+        print("timeout and jobs must be positive", file=sys.stderr)
+        return 1
+    if args.mode == "command" and not args.agent_cmd:
+        print("command mode requires --agent-cmd", file=sys.stderr)
+        return 1
+    if args.mode == "live" and (args.runtime != "codex" or not args.codex_executable or not args.model_version):
+        print("native live mode requires --runtime codex, --codex-executable, and --model-version", file=sys.stderr)
+        return 1
+    if args.mode == "live" and args.agent_cmd:
+        print("native live mode cannot use --agent-cmd", file=sys.stderr)
+        return 1
+    if args.resume and not args.record_dir:
+        print("--resume requires --record-dir", file=sys.stderr)
+        return 1
+    try:
+        tasks = [task for task in load_tasks(root) if task.get("suite") == args.suite]
+    except HarnessError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    all_tasks = [task["task_id"] for task in tasks]
+    task_by_id = {task["task_id"]: task for task in tasks}
     if args.tasks == "all":
         selected_tasks = all_tasks
     else:
@@ -333,61 +415,80 @@ def main(argv: list[str] | None = None) -> int:
     if invalid_conds:
         print(f"invalid conditions: {', '.join(invalid_conds)}", file=sys.stderr)
         return 1
+    if not selected_tasks or not selected_conditions:
+        print("at least one task and condition are required", file=sys.stderr)
+        return 1
+    if len(set(selected_conditions)) != len(selected_conditions):
+        print("duplicate conditions are not allowed", file=sys.stderr)
+        return 1
+    if args.tasks != "all" and len(set(requested)) != len(requested):
+        print("duplicate tasks are not allowed", file=sys.stderr)
+        return 1
 
     record_dir = Path(args.record_dir).resolve() if args.record_dir else None
-    if record_dir:
-        record_dir.mkdir(parents=True, exist_ok=True)
-
+    progress = sys.stderr if args.format == "json" else sys.stdout
     total_runs = len(selected_tasks) * len(selected_conditions)
-    print(f"MemoryCustodian Batch Benchmark: {len(selected_tasks)} tasks x {len(selected_conditions)} conditions = {total_runs} runs.")
+    print(f"MemoryCustodian Batch Benchmark: {len(selected_tasks)} tasks x {len(selected_conditions)} conditions = {total_runs} runs.", file=progress)
+    plan = execution_plan(selected_tasks, selected_conditions, args.condition_order)
 
     if args.dry_run:
-        print("Dry run requested. Planned execution matrix:")
+        print("Dry run requested. Planned execution matrix:", file=progress)
         for t in selected_tasks:
-            print(f"- {t}: {', '.join(selected_conditions)}")
+            order = [c for task_id, c in plan if task_id == t]
+            print(f"- {t}: {', '.join(order)}", file=progress)
+        if args.format == "json":
+            print(json.dumps({"plan": plan, "condition_order": args.condition_order, "jobs": args.jobs}))
         return 0
 
-    existing_ids = get_existing_result_ids(record_dir) if (record_dir and args.resume) else set()
+    try:
+        existing = get_existing_records(record_dir) if record_dir else {}
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
     records = []
-    run_idx = 0
-
-    for task_id in selected_tasks:
-        for condition in selected_conditions:
-            run_idx += 1
-            expected_prefix = f"{args.suite}__{task_id}__"
-            # If resume requested, check if already recorded
-            if args.resume and record_dir:
-                matching = any(
-                    (condition in rid and task_id in rid and f"rep{args.repetition_id}" in rid)
-                    for rid in existing_ids
-                )
-                if matching:
-                    print(f"[{run_idx}/{total_runs}] Skip (already recorded): {task_id} [{condition}]")
-                    continue
-
-            print(f"[{run_idx}/{total_runs}] Running: {task_id} [{condition}] ...", end="", flush=True)
-            record = run_single_task(
-                root,
-                task_id,
-                condition,
-                args.runtime,
-                args.agent_cmd,
-                args.repetition_id,
-                args.timeout,
-                record_dir,
-                args.model_version,
-                args.tool_policy,
-            )
-            if record:
+    pending = []
+    # Preflight the complete matrix before launching any new runtime.
+    try:
+        for run_idx, (task_id, condition) in enumerate(plan, 1):
+            task = task_by_id[task_id]
+            result_id = make_result_id(task, condition, args.runtime, args.repetition_id, task["repo"]["commit"])
+            if result_id in existing:
+                if not args.resume:
+                    raise ValueError(f"result already exists: {result_id}; use --resume or a new repetition")
+                record = existing[result_id]
+                validate_record(record, task, condition, args)
                 records.append(record)
-                status = record.get("status", "BLOCKER")
-                labels = record.get("failure_labels", [])
-                label_str = f" ({', '.join(labels)})" if labels else ""
-                print(f" {status}{label_str}")
+                print(f"[{run_idx}/{total_runs}] Resume: {task_id} [{condition}] {record['status']}", file=progress)
             else:
-                print(" ERROR (no record)")
+                pending.append((run_idx, task_id, condition))
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    def run(item: tuple[int, str, str]) -> dict:
+        _, task_id, condition = item
+        return run_single_task(root, task_id, condition, args.runtime, args.agent_cmd,
+                               args.repetition_id, args.timeout, record_dir, args.model_version,
+                               args.tool_policy, args.mode, args.codex_executable)
+
+    with ThreadPoolExecutor(max_workers=args.jobs) as pool:
+        for item in pending:
+            print(f"[{item[0]}/{total_runs}] Queued: {item[1]} [{item[2]}]", file=progress, flush=True)
+        for item, record in zip(pending, pool.map(run, pending)):
+            run_idx, task_id, condition = item
+            if record.get("result_id"):
+                try:
+                    validate_record(record, task_by_id[task_id], condition, args)
+                except ValueError as exc:
+                    print(str(exc), file=sys.stderr)
+                    return 1
+            records.append(record)
+            labels = ", ".join(record.get("failure_labels", []))
+            print(f"[{run_idx}/{total_runs}] {task_id} [{condition}]: {record['status']} {labels}", file=progress, flush=True)
 
     summary = aggregate_results(selected_tasks, selected_conditions, records)
+    summary["execution"] = {"condition_order": args.condition_order, "jobs": args.jobs,
+                            "repetition_id": args.repetition_id, "planned_runs": total_runs}
 
     if args.format == "json":
         output = json.dumps(summary, indent=2)
@@ -406,9 +507,9 @@ def main(argv: list[str] | None = None) -> int:
         rf = Path(args.report_file)
         rf.parent.mkdir(parents=True, exist_ok=True)
         rf.write_text(output + "\n", encoding="utf-8")
-        print(f"\nReport written to: {rf}")
+        print(f"\nReport written to: {rf}", file=progress)
 
-    return 0
+    return 2 if any(record["status"] in {"BLOCKER", "REVIEW"} for record in records) else 0
 
 
 if __name__ == "__main__":

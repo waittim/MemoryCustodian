@@ -1,0 +1,229 @@
+{
+  "budget": {
+    "time_seconds": 180,
+    "token_limit": null
+  },
+  "checkout_id": "cf675b959c422a8a5ed988e836e0ab1f354457e50835a1b2a4216aacfbc3b8a7",
+  "condition": "MEMORYCUSTODIAN",
+  "detail": "",
+  "evidence_class": "live-runtime",
+  "failure_labels": [],
+  "fixture_sha256": "7665aa3483f6929c8ad61403690513f124fc0e7a4b8bc36c2eabd1900bceb5d1",
+  "git_commit": "e4bcf922f46bccd2f66bf15e0eaf574a0157c501",
+  "git_dirty": true,
+  "memory_label": "MEMORY_NONE",
+  "metrics": {
+    "context_memory_tokens": null,
+    "final_test_status": "PASS",
+    "hard_constraint_violation": false,
+    "memory_dependent_requirement_satisfied": true,
+    "repeated_file_reads": null,
+    "routing_complete": null,
+    "stale_memory_used": false,
+    "task_success": true,
+    "tests_run": true,
+    "tool_calls": 7,
+    "total_input_tokens": 93496,
+    "total_output_tokens": 786,
+    "unsupported_memory_used": false,
+    "wall_clock_seconds": 32.319124
+  },
+  "model_version": "gpt-6.1-sol",
+  "os": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+  "package_version": "0.13.0",
+  "prompt_sha256": "9b9e496b0540d417575ca3f7f00e4b0ce6f5a898cba4dac2cd32ce9d9b9ad70e",
+  "protocol_version": "0.8",
+  "repetition_id": "pilot-20261113",
+  "result_format": "1",
+  "result_id": "core__route-notes-storage-choice__v1__MEMORYCUSTODIAN__codex__reppilot-20261113__7665aa3483f6",
+  "runner_source_sha256": {
+    "benchmarks/graders/mechanical.py": "228586fa06c1b7c65b8e10dd01eb2b86bc6c03005610c591c177db276718d234",
+    "benchmarks/runners/codex_runtime.py": "0735c9cd3d9fbcce264e27cfbc7c853e5a90fd75ebe0c5b8e9baec0abc9c4dc7",
+    "benchmarks/runners/harness.py": "8907a1ab2d254d8813a8677f46c1babe6e1073c7a68fcaf72ffc40e3382b2007",
+    "scripts/run-batch-benchmark.py": "1a46ea736e3c7371a7703b3186f1ad8d28bfe9632ea6c71a7119b93d5e396595"
+  },
+  "runtime": "codex",
+  "runtime_metadata": {
+    "action_trace": [
+      {
+        "event": "item.completed",
+        "id": "item_1",
+        "text_sha256": "d2b9f6c4706cd7f1e908c8b82fa6e9b6a3e59ec11573f87f1b9d3a272f340fce",
+        "type": "agent_message"
+      },
+      {
+        "aggregated_output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "event": "item.started",
+        "id": "item_2",
+        "source_path_mentions": [
+          "docs/memory"
+        ],
+        "status": "in_progress",
+        "type": "command_execution"
+      },
+      {
+        "aggregated_output_sha256": "8761efcf0e7749e20421adafe0fbf6db5abdc6fd280424c393a7ba29eeb9d8d7",
+        "event": "item.completed",
+        "exit_code": 0,
+        "id": "item_2",
+        "source_path_mentions": [
+          "docs/memory"
+        ],
+        "status": "completed",
+        "type": "command_execution"
+      },
+      {
+        "aggregated_output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "event": "item.started",
+        "id": "item_3",
+        "source_path_mentions": [
+          "docs/memory/brief.md",
+          "docs/memory/manifest.md"
+        ],
+        "status": "in_progress",
+        "type": "command_execution"
+      },
+      {
+        "aggregated_output_sha256": "da1d5e76a8dca912b4031977de58cdfd607f8d2398eaee5d8b95ae058870dd93",
+        "event": "item.completed",
+        "exit_code": 0,
+        "id": "item_3",
+        "source_path_mentions": [
+          "docs/memory/brief.md",
+          "docs/memory/manifest.md"
+        ],
+        "status": "completed",
+        "type": "command_execution"
+      },
+      {
+        "aggregated_output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "event": "item.started",
+        "id": "item_4",
+        "source_path_mentions": [
+          "docs/memory/constraints.md",
+          "docs/memory/decisions.md",
+          "docs/memory/do-not-use.md"
+        ],
+        "status": "in_progress",
+        "type": "command_execution"
+      },
+      {
+        "aggregated_output_sha256": "eea7a3eaba5f560e1af06697f3018b8e3aa7526390518c78b7bc95a3b58748d9",
+        "event": "item.completed",
+        "exit_code": 0,
+        "id": "item_4",
+        "source_path_mentions": [
+          "docs/memory/constraints.md",
+          "docs/memory/decisions.md",
+          "docs/memory/do-not-use.md"
+        ],
+        "status": "completed",
+        "type": "command_execution"
+      },
+      {
+        "changes": [
+          {
+            "kind": "add",
+            "path": "PLAN.md"
+          }
+        ],
+        "event": "item.started",
+        "id": "item_5",
+        "status": "in_progress",
+        "type": "file_change"
+      },
+      {
+        "changes": [
+          {
+            "kind": "add",
+            "path": "PLAN.md"
+          }
+        ],
+        "event": "item.completed",
+        "id": "item_5",
+        "status": "completed",
+        "type": "file_change"
+      },
+      {
+        "aggregated_output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "event": "item.started",
+        "id": "item_6",
+        "status": "in_progress",
+        "type": "command_execution"
+      },
+      {
+        "aggregated_output_sha256": "5e4e795afaf7b2ac3694348801079911c9a51af17a801a9a9ee5368403a2d58a",
+        "event": "item.completed",
+        "exit_code": 127,
+        "id": "item_6",
+        "status": "failed",
+        "type": "command_execution"
+      },
+      {
+        "aggregated_output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "event": "item.started",
+        "id": "item_7",
+        "status": "in_progress",
+        "type": "command_execution"
+      },
+      {
+        "aggregated_output_sha256": "c3e1ddce61edf2c7aef01bc5620358a6b439bf3ee37cd3d943f9dffcda5efb8e",
+        "event": "item.completed",
+        "exit_code": 129,
+        "id": "item_7",
+        "status": "failed",
+        "type": "command_execution"
+      },
+      {
+        "aggregated_output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "event": "item.started",
+        "id": "item_8",
+        "source_path_mentions": [
+          "docs/memory/brief.md"
+        ],
+        "status": "in_progress",
+        "type": "command_execution"
+      },
+      {
+        "aggregated_output_sha256": "ed7d3a42ed7e6dd1dd12e3b3848271ed1fe408911cbadccbd461095316be2cb2",
+        "event": "item.completed",
+        "exit_code": 0,
+        "id": "item_8",
+        "source_path_mentions": [
+          "docs/memory/brief.md"
+        ],
+        "status": "completed",
+        "type": "command_execution"
+      },
+      {
+        "event": "item.completed",
+        "id": "item_9",
+        "text_sha256": "1b2d80bb54ff7dc2e3b49b925e91713e6c1cacf218ab0cccafba6ca1e4f1fccd",
+        "type": "agent_message"
+      }
+    ],
+    "adapter": "codex-exec-jsonl-v1",
+    "cached_input_tokens": 78080,
+    "cli_version": "codex-cli 0.167.0-alpha.4.1",
+    "completion_events": 1,
+    "effective_prompt_sha256": "3b5e34c3b7d1e8c0abfa73ea742455a17d1f7ee9a8b43c935b2b075b343d3e54",
+    "event_count": 20,
+    "event_stream_sha256": "3844fd0347e226db378f571cfe0ef438b062da02b34dbff6efc6af8954f25662",
+    "exit_code": 0,
+    "prompt_prefix_sha256": "babbaf31a27274e8d0fd0fe7bbea081856f2165a9a9336dbec5fe22fa6578754",
+    "raw_trace_retained": false,
+    "requested_model": "gpt-6.1-sol",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "thread_id": "01a1d8b5-a813-7063-9dc7-75fb8d1e317d",
+    "tool_calls": 7,
+    "tool_policy": "codex-workspace-write;network=off;approval=never;user-config=ignored;ephemeral;reasoning=low;host-skills=off;plugins=off;memories=off",
+    "total_input_tokens": 93496,
+    "total_output_tokens": 786
+  },
+  "status": "PASS",
+  "suite": "core",
+  "task_id": "route-notes-storage-choice",
+  "task_version": 1,
+  "tool_policy": "codex-workspace-write;network=off;approval=never;user-config=ignored;ephemeral;reasoning=low;host-skills=off;plugins=off;memories=off",
+  "visible_source_sha256": "cf675b959c422a8a5ed988e836e0ab1f354457e50835a1b2a4216aacfbc3b8a7"
+}

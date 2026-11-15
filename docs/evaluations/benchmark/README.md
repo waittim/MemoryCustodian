@@ -1,51 +1,75 @@
 # Benchmark evidence
 
-This note records the state of the v0.13 measurement harness. It is not a live agent result and it is not a claim that MemoryCustodian changes task success.
+## Completed development pilot — 2026-11-13
 
-- Date: 2026-11-09
-- Package: 0.13.0
-- Protocol: 0.8
-- Entry schema: 3
-- Evidence class: offline fixture integrity
-- Suite: `core`
-- Split: `pilot-development`
-- Tasks defined: 18 across `field-ledger` and `route-notes`
-- Live runtimes completed: none
+- Package: 0.13.0; Protocol: 0.8; Entry schema: 3.
+- Suite: `core`; split: `pilot-development`.
+- Tasks: 18 version-1 definitions across the pinned `field-ledger` and
+  `route-notes` fixtures.
+- Live runtime: Codex CLI `0.167.0-alpha.4.1`, requested model `gpt-6.1-sol`,
+  reasoning `low`.
+- Completed: all four conditions, 72 independent ephemeral sessions, no
+  infrastructure blockers. All 35 PASS and 37 FAIL outcomes are retained.
 
-## What was checked
+The [fixed plan](PILOT-2026-11-13.md) records the method and limitations. The
+[full report](RESULTS.md) contains the condition summaries, 18 paired outcomes,
+failure labels, uncertainty, and the complete matrix. The
+[normalized records](runs/pilot-2026-11-13/) retain input/method/runtime hashes,
+independent session IDs, observed usage, and sanitized action traces. The source
+worktree was modified relative to base commit `e4bcf92`; the exact runner source
+hashes, not that base commit alone, identify the evaluated implementation.
 
-`python3 scripts/run-memory-bench.py --check-integrity` checks the benchmark schema, fixture hashes, four-condition isolation, task-by-task information parity, reference solutions, starter failure labels, and the negative solutions that are pinned. The command does not launch an agent and does not write authoritative project memory.
+The primary comparison is 14/18 for MemoryCustodian and 15/18 for equivalent
+manual documents, a paired difference of -5.6 percentage points with a
+descriptive 95% task-bootstrap interval of [-16.7, 0.0]. This pilot does not
+demonstrate incremental benefit. It is not evidence of general effectiveness,
+population equivalence, token savings, or latency improvements.
 
-## What was not run
+## Scope and observations
 
-These conditions have not been executed by Codex, Claude Code, Gemini, or a generic agent:
+The real subprocess follows each fixture's bootstrap and visible documents;
+the MemoryCustodian condition maps `AGENTS.md` to its manifest and brief.
+Host skills, plugins, external memories and delegation are disabled uniformly.
+This tests the vendored manifest/bootstrap fixture path, not a full installed
+Skill/CLI workflow or production repositories. Only Codex ran live; the
+separate four-label adapter contract checker remains an offline CLI check.
 
-```text
-NO_MEMORY
-PLATFORM_FILE_ONLY
-EQUIVALENT_MANUAL_DOCS
-MEMORYCUSTODIAN
-```
+Observed total input/output tokens, tool-event counts, and runtime durations
+are recorded. Authoritative routing completeness, memory-context tokens and
+repeated file reads are not measured and remain `null`. Source-path mentions
+in normalized action traces do not prove a file was successfully read. Raw
+commands, output, prompts, reasoning and machine paths are not retained.
 
-No paired comparison, token measurement, or latency measurement exists. Metrics that the harness cannot observe are recorded as null rather than filled in.
+Tasks, fixtures and hidden-oracle rules were not changed in response to these
+outcomes. Three tasks failed in both information-matched conditions; one
+additional task failed only in MemoryCustodian. These failures are published,
+not replaced by known solutions or outcome-driven retries.
 
-## Prespecified comparison
+## Reproduction and static verification
 
-The future primary outcome is `task_success`. The comparison is `EQUIVALENT_MANUAL_DOCS` versus `MEMORYCUSTODIAN`. The analysis unit is the task. The smallest meaningful effect is unset on purpose. Set it before collecting a claim-bearing sample. The 18 pilot-development tasks stay out of that sample.
-
-Held-out tasks are not authored. The expansion target remains 36 paired tasks across 3 repositories. That target is a planning floor, not a result.
-
-## Reproduction
-
-From a clean checkout:
+See [the operator guide](RUNNING-BENCHMARKS.md) for authentication checks,
+native runtime flags, generic command adapters, dry runs and validated resume.
+Use a fresh repetition ID and record directory for a new sample.
 
 ```bash
 python3 scripts/run-memory-bench.py --check-integrity
-python3 scripts/run-memory-bench.py \
-  --suite core \
-  --runtime codex \
-  --condition MEMORYCUSTODIAN \
-  --dry-run
+python3 scripts/check-benchmark-evidence.py \
+  --report-file docs/evaluations/benchmark/RESULTS.md
 ```
 
-The dry run prints prompt and visible-source hashes. It does not write a result file. `--mode live` returns `BLOCKER` until a real runtime adapter exists.
+The first command checks schemas, hashes, isolation, parity, reference
+solutions, starter failures and negative solutions. The second checks the 72
+normalized records and report rows without launching an agent or grader.
+Add `--check-current-source` to verify that the current method source bytes
+still match the historical pilot. Static evidence consistency is not
+cryptographic runtime attestation or independent regrading of discarded
+checkouts. Result records are append-only.
+
+## Claim-bearing expansion
+
+Held-out tasks are not authored. The expansion plan remains 36 paired tasks
+across at least three pinned repositories, separate from the development set.
+Fix the smallest meaningful effect before collecting claim-bearing data; use
+independent repetitions to measure runtime variation. General or named
+cross-runtime claims require corresponding held-out live evidence. Publish
+inconclusive or negative results when uncertainty or outcomes warrant it.

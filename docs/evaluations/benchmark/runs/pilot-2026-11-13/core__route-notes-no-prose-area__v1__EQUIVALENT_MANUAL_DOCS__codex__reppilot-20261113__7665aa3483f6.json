@@ -1,0 +1,196 @@
+{
+  "budget": {
+    "time_seconds": 180,
+    "token_limit": null
+  },
+  "checkout_id": "f53bfffdd375aa18bf35d5c35dfbf90744902f6b43ea490baa3a3c6d7cb9003a",
+  "condition": "EQUIVALENT_MANUAL_DOCS",
+  "detail": "",
+  "evidence_class": "live-runtime",
+  "failure_labels": [],
+  "fixture_sha256": "7665aa3483f6929c8ad61403690513f124fc0e7a4b8bc36c2eabd1900bceb5d1",
+  "git_commit": "e4bcf922f46bccd2f66bf15e0eaf574a0157c501",
+  "git_dirty": true,
+  "memory_label": "MEMORY_NONE",
+  "metrics": {
+    "context_memory_tokens": null,
+    "final_test_status": "PASS",
+    "hard_constraint_violation": false,
+    "memory_dependent_requirement_satisfied": true,
+    "repeated_file_reads": null,
+    "routing_complete": null,
+    "stale_memory_used": false,
+    "task_success": true,
+    "tests_run": true,
+    "tool_calls": 6,
+    "total_input_tokens": 73578,
+    "total_output_tokens": 376,
+    "unsupported_memory_used": false,
+    "wall_clock_seconds": 16.544381
+  },
+  "model_version": "gpt-6.1-sol",
+  "os": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+  "package_version": "0.13.0",
+  "prompt_sha256": "df5130078133e7cf5ccee4bd7612269f36eb25fde0e4ff9b91868ba3916062db",
+  "protocol_version": "0.8",
+  "repetition_id": "pilot-20261113",
+  "result_format": "1",
+  "result_id": "core__route-notes-no-prose-area__v1__EQUIVALENT_MANUAL_DOCS__codex__reppilot-20261113__7665aa3483f6",
+  "runner_source_sha256": {
+    "benchmarks/graders/mechanical.py": "228586fa06c1b7c65b8e10dd01eb2b86bc6c03005610c591c177db276718d234",
+    "benchmarks/runners/codex_runtime.py": "0735c9cd3d9fbcce264e27cfbc7c853e5a90fd75ebe0c5b8e9baec0abc9c4dc7",
+    "benchmarks/runners/harness.py": "8907a1ab2d254d8813a8677f46c1babe6e1073c7a68fcaf72ffc40e3382b2007",
+    "scripts/run-batch-benchmark.py": "1a46ea736e3c7371a7703b3186f1ad8d28bfe9632ea6c71a7119b93d5e396595"
+  },
+  "runtime": "codex",
+  "runtime_metadata": {
+    "action_trace": [
+      {
+        "event": "item.completed",
+        "id": "item_1",
+        "text_sha256": "9c24305f619e35818d4efa9969e1787eeb8773e8ca7c0abfe9f4d8e4a123c8da",
+        "type": "agent_message"
+      },
+      {
+        "aggregated_output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "event": "item.started",
+        "id": "item_2",
+        "status": "in_progress",
+        "type": "command_execution"
+      },
+      {
+        "aggregated_output_sha256": "d6e231d42a15a147f035ab17fe05c6bcdb8cc2d509174c9d2439cb4a7fffbeac",
+        "event": "item.completed",
+        "exit_code": 0,
+        "id": "item_2",
+        "status": "completed",
+        "type": "command_execution"
+      },
+      {
+        "aggregated_output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "event": "item.started",
+        "id": "item_3",
+        "source_path_mentions": [
+          "docs/manual/constraints.md",
+          "docs/manual/decisions.md",
+          "docs/manual/overview.md",
+          "docs/manual/rejected.md"
+        ],
+        "status": "in_progress",
+        "type": "command_execution"
+      },
+      {
+        "aggregated_output_sha256": "ccdff90ce566631093aaaf63e83f03c424083e2eb7cd6b00c556e56c0d6bbae1",
+        "event": "item.completed",
+        "exit_code": 0,
+        "id": "item_3",
+        "source_path_mentions": [
+          "docs/manual/constraints.md",
+          "docs/manual/decisions.md",
+          "docs/manual/overview.md",
+          "docs/manual/rejected.md"
+        ],
+        "status": "completed",
+        "type": "command_execution"
+      },
+      {
+        "changes": [
+          {
+            "kind": "add",
+            "path": "PLAN.md"
+          }
+        ],
+        "event": "item.started",
+        "id": "item_4",
+        "status": "in_progress",
+        "type": "file_change"
+      },
+      {
+        "changes": [
+          {
+            "kind": "add",
+            "path": "PLAN.md"
+          }
+        ],
+        "event": "item.completed",
+        "id": "item_4",
+        "status": "completed",
+        "type": "file_change"
+      },
+      {
+        "aggregated_output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "event": "item.started",
+        "id": "item_5",
+        "status": "in_progress",
+        "type": "command_execution"
+      },
+      {
+        "aggregated_output_sha256": "5e4e795afaf7b2ac3694348801079911c9a51af17a801a9a9ee5368403a2d58a",
+        "event": "item.completed",
+        "exit_code": 127,
+        "id": "item_5",
+        "status": "failed",
+        "type": "command_execution"
+      },
+      {
+        "aggregated_output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "event": "item.started",
+        "id": "item_6",
+        "status": "in_progress",
+        "type": "command_execution"
+      },
+      {
+        "aggregated_output_sha256": "46bba50cffbfe34e83a48ac3e0289396eb411161dfda57b104f93e57ec064948",
+        "event": "item.completed",
+        "exit_code": 0,
+        "id": "item_6",
+        "status": "completed",
+        "type": "command_execution"
+      },
+      {
+        "aggregated_output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "event": "item.started",
+        "id": "item_7",
+        "status": "in_progress",
+        "type": "command_execution"
+      },
+      {
+        "aggregated_output_sha256": "a41604093db37057cd455eaa614428ce0f3b37399d4d7fc4d04710a53d22ba5d",
+        "event": "item.completed",
+        "exit_code": 128,
+        "id": "item_7",
+        "status": "failed",
+        "type": "command_execution"
+      },
+      {
+        "event": "item.completed",
+        "id": "item_8",
+        "text_sha256": "f1761ae09adb5feb65965a43d7a36a9d713c27542ec17cb0525761a89c930e2e",
+        "type": "agent_message"
+      }
+    ],
+    "adapter": "codex-exec-jsonl-v1",
+    "cached_input_tokens": 67456,
+    "cli_version": "codex-cli 0.167.0-alpha.4.1",
+    "completion_events": 1,
+    "effective_prompt_sha256": "34c7470769b8acfdd2a1c81eecdf0940052ddb08cf468a2c2a2b25ba5514ccde",
+    "event_count": 18,
+    "event_stream_sha256": "c391469699726d6e55da9b947f702df452d0c4bb6060dfcd3f06698bcad5d7f8",
+    "exit_code": 0,
+    "prompt_prefix_sha256": "babbaf31a27274e8d0fd0fe7bbea081856f2165a9a9336dbec5fe22fa6578754",
+    "raw_trace_retained": false,
+    "requested_model": "gpt-6.1-sol",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "thread_id": "01a1d8b4-6f87-7580-80fb-94e47238c00c",
+    "tool_calls": 6,
+    "tool_policy": "codex-workspace-write;network=off;approval=never;user-config=ignored;ephemeral;reasoning=low;host-skills=off;plugins=off;memories=off",
+    "total_input_tokens": 73578,
+    "total_output_tokens": 376
+  },
+  "status": "PASS",
+  "suite": "core",
+  "task_id": "route-notes-no-prose-area",
+  "task_version": 1,
+  "tool_policy": "codex-workspace-write;network=off;approval=never;user-config=ignored;ephemeral;reasoning=low;host-skills=off;plugins=off;memories=off",
+  "visible_source_sha256": "f53bfffdd375aa18bf35d5c35dfbf90744902f6b43ea490baa3a3c6d7cb9003a"
+}

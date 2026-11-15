@@ -2,9 +2,9 @@
 
 ## Unreleased
 
-## v0.13.0 - 2026-11-09
+## v0.13.0 - 2026-11-14
 
-Package 0.13.0 adds an offline benchmark harness. Protocol stays 0.8 and
+Package 0.13.0 adds a controlled benchmark harness and development pilot. Protocol stays 0.8 and
 Entry schema stays 3.
 
 ### Evidence and benchmark foundation
@@ -17,11 +17,31 @@ Entry schema stays 3.
   18 pilot-development tasks. Fixture commits are content hashes. CI checks
   those hashes, condition isolation, and parity.
 - Result records are append-only and refuse to overwrite an existing result
-  ID. `--mode live` returns `BLOCKER` until a real runtime adapter is
-  configured. A local command adapter is not a named-runtime result.
+  ID. Native Codex live execution requires explicit `--codex-executable`
+  opt-in and a pinned `--model-version`; an unconfigured live runtime remains
+  `BLOCKER`. A generic local command adapter is not a named-runtime result.
+- Added a batch runner with balanced condition order, bounded concurrency,
+  exact validated resume, complete failure accounting, and descriptive paired
+  uncertainty. BLOCKER and REVIEW never become paired task failures.
+- Completed the [controlled Codex development pilot](docs/evaluations/benchmark/RESULTS.md):
+  18 tasks across four conditions, 72 independent real sessions, no runtime
+  blockers. The primary comparison is 14/18 MemoryCustodian versus 15/18
+  equivalent manual documents; it does not demonstrate an incremental benefit.
+  [The fixed plan](docs/evaluations/benchmark/PILOT-2026-11-13.md) documents
+  settings, limitations, and reproduction. Claude Code and Gemini were not
+  evaluated live in this pilot.
+- Bound normalized records to pre-agent visible-source hashes, actual CLI
+  completion events, source-byte provenance, and observed execution metrics.
+  CI checks all 72 records and report consistency without launching an agent.
+  Unobserved routing and memory-context metrics remain null.
+- Hardened generated-file boundaries, symlink handling, prompt argument
+  handling, and error redaction in the headless adapter. Timed-out POSIX
+  command/runtime groups are terminated before grading or cleanup.
 
 This release does not claim that MemoryCustodian improves task success,
-reliability, or token use. No live four-condition agent comparison is included.
+reliability, or token use. The small development split, one repetition, and
+fixture bootstrap scope cannot support general comparative claims; held-out
+live evidence remains required.
 
 ## v0.12.0 - 2026-09-26
 

@@ -1,146 +1,113 @@
-# Running Headless Agent Benchmarks
+# Running controlled agent benchmarks
 
-This guide explains how to run and verify the MemoryCustodian benchmark matrix across the four isolated conditions:
+The core suite has 18 pinned development tasks across two fixture repositories.
+Each task runs independently under `NO_MEMORY`, `PLATFORM_FILE_ONLY`,
+`EQUIVALENT_MANUAL_DOCS`, and `MEMORYCUSTODIAN`. Hidden oracles and reference
+solutions are never copied into runtime checkouts.
 
-1. `NO_MEMORY`
-2. `PLATFORM_FILE_ONLY`
-3. `EQUIVALENT_MANUAL_DOCS`
-4. `MEMORYCUSTODIAN`
+## Verify inputs
 
-## Architecture Overview
+Use Python 3.10 or newer. Core operations use only the standard library.
 
-```
-                        [run-batch-benchmark.py]
-                                   │
-               ┌───────────────────┴───────────────────┐
-               ▼                                       ▼
-  [scripts/run-memory-bench.py]           [Aggregate & Generate Report]
-               │                                       ▲
-               ├───────────────────┐                   │
-               ▼                   ▼                   │
-    [Prepare Temp Checkout]  [Mechanical Grader]───────┘
-               │                   ▲
-               ▼                   │
-    [headless-agent-adapter.py] ───┘
-         (mock / api / cli)
+```bash
+python3 scripts/run-memory-bench.py --check-integrity
 ```
 
-1. **`scripts/run-memory-bench.py`**: Pinned runner providing checkout preparation, integrity checks, isolation enforcement, and mechanical hidden-oracle grading.
-2. **`scripts/headless-agent-adapter.py`**: Bridges task prompts and checkouts to an agent runtime (mock heuristic, LLM API, or external CLI).
-3. **`scripts/run-batch-benchmark.py`**: Executes the matrix across tasks and conditions, records append-only results, and calculates paired statistics.
+This verifies task schemas, fixture hashes, condition isolation, information
+parity, starter failures, negative solutions, and reference solutions. It does
+not launch an agent or establish an effectiveness claim.
 
----
+## Run the native Codex pilot
 
-## 1. Quick Verification (Offline Mock Agent)
+Use an already-authenticated Codex CLI with `exec --json`, `--ephemeral`, and
+`--ignore-user-config` support. Check availability without displaying credentials:
 
-To verify the entire evaluation harness without API keys or network access, use the built-in heuristic mock adapter:
+```bash
+codex --version
+codex login status
+```
 
-### Run a Single Task Across All 4 Conditions
+The native adapter requires explicit opt-in and a pinned model. It launches a
+fresh session in an external temporary checkout for each matrix cell. The
+subprocess uses `workspace-write`, no agent shell network access, and approval
+policy `never`; actions requiring more permission fail. User config, host
+skills, plugins, web search, external memory, and delegation are disabled for
+the session. Authentication remains with the existing CLI; do not copy keys or
+authentication files into a fixture.
 
 ```bash
 python3 scripts/run-batch-benchmark.py \
-  --tasks field-ledger-export-cap \
-  --agent-cmd "python3 $(pwd)/scripts/headless-agent-adapter.py --provider mock --mock-strategy heuristic"
+  --mode live --runtime codex --codex-executable codex \
+  --model-version gpt-6.1-sol --timeout 180 --jobs 4 \
+  --condition-order balanced --repetition-id my-pilot-1 \
+  --record-dir /tmp/my-memory-pilot-1 \
+  --report-file /tmp/my-memory-pilot-1.md
 ```
 
-### Run the Full 18-Task Core Suite (Dry-Run)
+Use `--tasks field-ledger-export-cap` for a four-condition preflight. Use
+`--dry-run` to inspect the schedule without launching agents or creating
+records. A model label is a requested model identifier, not an immutable server
+snapshot. Record the observed CLI version and method hashes when comparing
+samples. [The formal pilot plan](PILOT-2026-11-13.md) fixes this release's settings.
+
+Without explicit `--codex-executable`, `--mode live` remains a `BLOCKER` with
+evidence class `live-runtime-unavailable`. Other named runtimes require their
+own native integrations; giving a command an arbitrary runtime label does not
+make it a verified named-runtime run.
+
+## Run a generic command adapter
+
+The runner supplies the task prompt on stdin and sets the working directory to
+the isolated checkout. The command must perform its own edits in that checkout.
+Arguments use shell-style tokenization, but no shell is executed. Pipes,
+redirection, and shell substitution are not supported inside `--agent-cmd` or
+`--cli-cmd`. With the headless CLI bridge, `{prompt}` is one literal argv value;
+stdin carries the prompt when that placeholder is absent.
 
 ```bash
 python3 scripts/run-batch-benchmark.py \
-  --agent-cmd "python3 $(pwd)/scripts/headless-agent-adapter.py --provider mock" \
-  --dry-run
+  --mode command --runtime local-command \
+  --agent-cmd 'python3 /absolute/path/to/my-agent.py' \
+  --record-dir /tmp/my-command-pilot
 ```
 
----
+`scripts/headless-agent-adapter.py` also supports direct API calls and
+`--provider cli --cli-cmd ...`. API context contains only the visible checkout;
+API runs send all visible files in one request and therefore do not test a
+runtime's incremental file-routing behavior. Those runs remain evidence class
+`command-adapter`. A real runtime-specific integration is required for stronger
+provenance. Generated file paths are checked before any response edits are
+written; symlinks and paths outside the checkout are rejected.
 
-## 2. Running with Real LLM APIs
+For offline wiring checks, use `--provider mock --mock-strategy starter` with the
+headless adapter. The `reference` and `heuristic` mocks can use known solutions;
+their scores are never live-agent evidence. Always keep mock results in a
+separate directory from real evaluations.
 
-`scripts/headless-agent-adapter.py` supports direct HTTP calls using Python standard library:
+## Resume and interpret results
 
-### OpenAI / Compatible Endpoint
+Records are append-only: an existing result ID is never overwritten. Use
+`--resume` with exactly the original record directory, repetition, model, tool
+policy, runtime, and mode. The batch validates metadata and includes saved
+records in the rebuilt report. Use a fresh repetition ID for an independent
+sample, and document any infrastructure reruns without discarding failures.
 
-```bash
-export OPENAI_API_KEY="your-api-key"
-# Optional: export OPENAI_BASE_URL="https://api.openai.com/v1"
+`--format json` keeps progress on stderr and emits a machine-readable summary.
+The batch exits nonzero for missing, blocked, or review-required cells; a graded
+task failure is a valid experimental result. PASS requires both the existing
+hidden oracle and visible tests to pass. BLOCKER/REVIEW cells are excluded from
+paired success comparisons and counted explicitly.
 
-python3 scripts/run-batch-benchmark.py \
-  --tasks "field-ledger-export-cap" \
-  --runtime "openai-api" \
-  --model-version "gpt-4o" \
-  --timeout 120 \
-  --record-dir "benchmarks/results/gpt4o" \
-  --agent-cmd "python3 $(pwd)/scripts/headless-agent-adapter.py --provider api --api-type openai --model gpt-4o"
-```
+Reports contain the full outcome matrix, failure labels, discordant pairs, and
+a reproducible paired-task bootstrap interval. This small development split
+and one repetition do not establish general benefits, population equivalence,
+token savings, or latency improvements. Unobserved metrics stay `null`.
+Normalized action traces contain statuses, relative source-path mentions and
+hashes, not raw reasoning, commands, output, credentials, or machine paths.
+Regenerate a new sample to inspect raw runtime behavior locally; raw traces
+must not be committed.
 
-### Anthropic Claude
-
-```bash
-export ANTHROPIC_API_KEY="your-api-key"
-
-python3 scripts/run-batch-benchmark.py \
-  --tasks "field-ledger-export-cap" \
-  --runtime "anthropic-api" \
-  --model-version "claude-3-5-sonnet-20241022" \
-  --timeout 120 \
-  --record-dir "benchmarks/results/claude-sonnet" \
-  --agent-cmd "python3 $(pwd)/scripts/headless-agent-adapter.py --provider api --api-type anthropic --model claude-3-5-sonnet-20241022"
-```
-
-### Google Gemini
-
-```bash
-export GEMINI_API_KEY="your-api-key"
-
-python3 scripts/run-batch-benchmark.py \
-  --tasks "field-ledger-export-cap" \
-  --runtime "gemini-api" \
-  --model-version "gemini-1.5-pro" \
-  --timeout 120 \
-  --record-dir "benchmarks/results/gemini-pro" \
-  --agent-cmd "python3 $(pwd)/scripts/headless-agent-adapter.py --provider api --api-type gemini --model gemini-1.5-pro"
-```
-
----
-
-## 3. Running with Local Agent CLIs
-
-If you have an interactive coding CLI configured (e.g. `claude`, `codex`, `aider`):
-
-```bash
-python3 scripts/run-batch-benchmark.py \
-  --tasks "field-ledger-export-cap" \
-  --runtime "claude-cli" \
-  --agent-cmd "python3 $(pwd)/scripts/headless-agent-adapter.py --provider cli --cli-cmd 'claude -p \"{prompt}\"'"
-```
-
----
-
-## 4. Resuming Interrupted Batch Runs
-
-Because results are append-only and immutable, pass `--resume` and `--record-dir` to resume without repeating finished runs:
-
-```bash
-python3 scripts/run-batch-benchmark.py \
-  --record-dir "benchmarks/results/run-1" \
-  --resume \
-  --agent-cmd "..."
-```
-
----
-
-## 5. Output and Reports
-
-Add `--report-file <path>` to save a Markdown evaluation report:
-
-```bash
-python3 scripts/run-batch-benchmark.py \
-  --tasks all \
-  --report-file docs/evaluations/benchmark/RESULTS.md \
-  --agent-cmd "..."
-```
-
-The report includes:
-- Condition summary with pass rates.
-- Prespecified primary paired comparison (`EQUIVALENT_MANUAL_DOCS` vs `MEMORYCUSTODIAN`).
-- Detailed breakdown of failure labels (`MEMORY_OMISSION`, `MEMORY_STALE_USE`, etc.).
-- Complete per-task outcome matrix.
+Native isolation is a fresh visible fixture plus sandbox and prompt
+confinement, not an adversarial filesystem read jail. Agents must not inspect
+other workspaces, hidden grading sources, or prior results. Invalid isolation
+or source hashes invalidate a sample rather than improving its score.

@@ -15,8 +15,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -36,9 +37,9 @@ def read_checkout_files(checkout: Path, max_bytes: int = 100_000) -> dict[str, s
     files = {}
     ignored_parts = {".git", "__pycache__", ".DS_Store", "node_modules", ".tmp"}
     for path in sorted(checkout.rglob("*")):
-        if path.is_file():
+        if path.is_file() and not path.is_symlink():
             rel = path.relative_to(checkout).as_posix()
-            if any(part in ignored_parts for part in path.parts):
+            if any(part in ignored_parts for part in path.relative_to(checkout).parts):
                 continue
             try:
                 content = path.read_text(encoding="utf-8")
@@ -51,7 +52,7 @@ def read_checkout_files(checkout: Path, max_bytes: int = 100_000) -> dict[str, s
 
 def apply_edits_from_text(checkout: Path, response_text: str) -> list[str]:
     """Parse FILE: <path> or markdown fences from text and write files."""
-    modified = []
+    edits: list[tuple[str, str]] = []
 
     # Pattern 1: Explicit header:
     # *** FILE: <path> ***
@@ -66,13 +67,7 @@ def apply_edits_from_text(checkout: Path, response_text: str) -> list[str]:
         code = match.group(2)
         if not code.endswith("\n"):
             code += "\n"
-        target = checkout / rel_path
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(code, encoding="utf-8")
-        modified.append(rel_path)
-
-    if modified:
-        return modified
+        edits.append((rel_path, code))
 
     # Pattern 2: Markdown fence with path header:
     # File: `path` or `path`:
@@ -83,17 +78,52 @@ def apply_edits_from_text(checkout: Path, response_text: str) -> list[str]:
         r"(?:File:\s*`?([^\n\r`]+?)`?|###\s*`?([^\n\r`]+?)`?)\s*\n```[a-zA-Z0-9_-]*\n(.*?)\n```",
         re.DOTALL,
     )
-    for match in pattern_fence.finditer(response_text):
-        rel_path = (match.group(1) or match.group(2)).strip()
-        code = match.group(3)
-        if not code.endswith("\n"):
-            code += "\n"
-        target = checkout / rel_path
+    if not edits:
+        for match in pattern_fence.finditer(response_text):
+            rel_path = (match.group(1) or match.group(2)).strip()
+            code = match.group(3)
+            if not code.endswith("\n"):
+                code += "\n"
+            edits.append((rel_path, code))
+
+    # Validate the whole response before making the first write. Model output
+    # is untrusted even when the agent command itself was explicitly selected.
+    targets = [_edit_target(checkout, rel_path) for rel_path, _ in edits]
+    if len(set(targets)) != len(targets):
+        raise ValueError("model response contains duplicate edit paths")
+    target_set = set(targets)
+    if any(parent in target_set for target in targets for parent in target.parents):
+        raise ValueError("model response contains conflicting file and directory paths")
+    for target, (_, code) in zip(targets, edits):
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(code, encoding="utf-8")
-        modified.append(rel_path)
+    return [rel_path for rel_path, _ in edits]
 
-    return modified
+
+def _edit_target(checkout: Path, rel_path: str) -> Path:
+    """Accept only normalized, non-symlink paths inside the checkout."""
+    path = PurePosixPath(rel_path)
+    if (
+        not rel_path
+        or "\\" in rel_path
+        or "\x00" in rel_path
+        or path.is_absolute()
+        or PureWindowsPath(rel_path).drive
+        or any(part.casefold() in {"", ".", "..", ".git"} for part in rel_path.split("/"))
+    ):
+        raise ValueError("model edit path must be a normalized checkout-relative path")
+    root = checkout.resolve()
+    target = root.joinpath(*path.parts)
+    current = root
+    for index, part in enumerate(path.parts):
+        current = current / part
+        if current.is_symlink():
+            raise ValueError("model edit path must not traverse a symlink")
+        if index < len(path.parts) - 1 and current.exists() and not current.is_dir():
+            raise ValueError("model edit ancestor must be a directory")
+    if target.exists() and not target.is_file():
+        raise ValueError("model edit target must be a regular file")
+    return target
 
 
 def run_mock(
@@ -105,6 +135,9 @@ def run_mock(
     """Offline heuristic or canned solution application."""
     if not task_id:
         task_id = checkout.name
+    if not re.fullmatch(r"[a-z0-9][a-z0-9_-]*", task_id):
+        print("mock: invalid task id", file=sys.stderr)
+        return 1
 
     ref_dir = repo_root / "benchmarks" / "references" / task_id
     neg_dir = repo_root / "benchmarks" / "negatives" / task_id
@@ -154,7 +187,9 @@ def _copy_tree(src: Path, dst: Path) -> None:
     for path in src.rglob("*"):
         if path.is_file():
             rel = path.relative_to(src)
-            target = dst / rel
+            if path.is_symlink():
+                raise ValueError("mock source must not contain symlinks")
+            target = _edit_target(dst, rel.as_posix())
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(path, target)
 
@@ -276,33 +311,44 @@ def run_api(
             return 1
 
     except urllib.error.HTTPError as exc:
-        error_msg = exc.read().decode("utf-8", errors="replace")
-        print(f"api request failed (HTTP {exc.code}): {error_msg}", file=sys.stderr)
+        # Provider error bodies and request URLs can contain credential values.
+        print(f"api request failed (HTTP {exc.code})", file=sys.stderr)
         return 1
     except Exception as exc:
-        print(f"api request exception: {exc}", file=sys.stderr)
+        print(f"api request exception: {type(exc).__name__}", file=sys.stderr)
         return 1
 
-    applied = apply_edits_from_text(checkout, response_text)
+    try:
+        if not isinstance(response_text, str):
+            raise ValueError("model response must contain text")
+        applied = apply_edits_from_text(checkout, response_text)
+    except (OSError, ValueError) as exc:
+        print(f"model edits rejected: {type(exc).__name__}", file=sys.stderr)
+        return 1
     if not applied:
         print("warning: no file modifications parsed from model response", file=sys.stderr)
     return 0
 
 
 def run_cli(checkout: Path, prompt: str, cli_cmd: str) -> int:
-    """Execute a local agent CLI command."""
+    """Execute an argv command; supply prompt on stdin and optional argv slot."""
     if not cli_cmd:
         print("cli provider requires --cli-cmd", file=sys.stderr)
         return 1
-    cmd = cli_cmd.format(prompt=prompt)
-    proc = subprocess.run(
-        cmd,
-        shell=True,
-        cwd=checkout,
-        text=True,
-        input=prompt,
-        check=False,
-    )
+    try:
+        cmd = [arg.replace("{prompt}", prompt) for arg in shlex.split(cli_cmd)]
+        if not cmd:
+            raise ValueError("empty command")
+        proc = subprocess.run(
+            cmd,
+            cwd=checkout,
+            text=True,
+            input=prompt,
+            check=False,
+        )
+    except (OSError, ValueError) as exc:
+        print(f"cli command failed: {type(exc).__name__}", file=sys.stderr)
+        return 1
     return proc.returncode
 
 
@@ -332,6 +378,10 @@ def main(argv: list[str] | None = None) -> int:
         prompt = sys.stdin.read()
 
     if args.provider == "mock":
+        if not args.repo_root and not (repo_root / "benchmarks" / "benchmark-manifest.json").is_file():
+            installed_root = Path(__file__).resolve().parents[1]
+            if (installed_root / "benchmarks" / "benchmark-manifest.json").is_file():
+                repo_root = installed_root
         return run_mock(checkout, repo_root, args.task_id, args.mock_strategy)
     elif args.provider == "api":
         return run_api(checkout, prompt, args.api_type, args.model, args.api_key, args.api_base)
