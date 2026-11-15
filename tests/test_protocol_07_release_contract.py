@@ -49,7 +49,7 @@ def capture(argv: list[str]) -> tuple[int, str, str]:
 
 class Protocol07ReleaseContractTests(unittest.TestCase):
     def test_schema_2_is_current_and_public_legacy_boundary_is_documented(self):
-        self.assertEqual(__version__, "0.12.0")
+        self.assertEqual(__version__, "0.13.0")
         self.assertEqual(__protocol_version__, "0.8")
         self.assertEqual(__entry_schema_version__, "3")
         self.assertEqual(ENTRY_SCHEMA_VERSION, "3")

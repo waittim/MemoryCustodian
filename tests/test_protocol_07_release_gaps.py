@@ -3862,8 +3862,8 @@ class MergeAndDeterminismReleaseTests(unittest.TestCase):
             original_manifest = manifest.read_text(encoding="utf-8")
             manifest.write_text(
                 original_manifest.replace(
-                    "initialized_with: memory-custodian 0.12.0",
-                    "initialized_with: memory-custodian 0.12.0-audit",
+                    "initialized_with: memory-custodian 0.13.0",
+                    "initialized_with: memory-custodian 0.13.0-audit",
                 ),
                 encoding="utf-8",
             )

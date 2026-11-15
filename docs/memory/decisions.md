@@ -10,7 +10,7 @@ Subject: MC-SUBJ-20260729-7e5c3a91
 Facet: architecture
 Evidence:
 - user-confirmed
-- doc:docs/MemoryCustodian-plan-0.12.0-erasure-aligned-revised.md
+- doc:RELEASE-NOTES.md
 Supersedes: MC-DEC-20260801-07000007
 
 Decision:

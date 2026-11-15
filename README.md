@@ -8,7 +8,7 @@ It stores memory as plain Markdown in your repo and routes a bounded context pac
 
 **Durable memory. Minimal context.**
 
-[![Version](https://img.shields.io/badge/version-0.12.0-blue.svg)](https://github.com/waittim/MemoryCustodian/releases/latest)
+[![Version](https://img.shields.io/badge/version-0.13.0-blue.svg)](https://github.com/waittim/MemoryCustodian/releases/latest)
 [![CI](https://github.com/waittim/MemoryCustodian/actions/workflows/ci.yml/badge.svg)](https://github.com/waittim/MemoryCustodian/actions/workflows/ci.yml)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
@@ -316,7 +316,7 @@ MemoryCustodian was developed prior to OpenAI Build Week (v0.7.0 baseline) and e
 ## Upgrading & Versioning
 
 MemoryCustodian tracks related package and protocol schemas:
-- **Package version** (`0.12.0`): CLI, skill bundle, and plugin metadata.
+- **Package version** (`0.13.0`): CLI, skill bundle, and plugin metadata.
 - **Protocol version** (`0.8`): manifest/routing rules, Entry schema 3, transaction schema 1, audit schema 1, and output envelope schema 1.
 - **Erasure scope** (`1`): the canonical `data.erasure_scope` child object shared by forget, purge, ID forget, local reset, and recovery.
 - **Project memory version**: Protocol metadata declared in your repository's `manifest.md`.
@@ -350,7 +350,13 @@ contract checks on Python 3.10 through 3.14. The cross-agent fixture runner is
 an offline deterministic CLI check executed once for each named adapter; it is
 not a live Codex, Claude Code, Gemini, or generic-agent benchmark. See
 [`live-evaluation.md`](evals/memory-custodian/live-evaluation.md) for the
-reproducible live-evaluation procedure.
+reproducible live-evaluation procedure. The benchmark harness under
+`benchmarks/` checks fixture integrity, condition isolation, and information
+parity offline. A separate [controlled Codex pilot](docs/evaluations/benchmark/RESULTS.md)
+records all 72 real sessions across 18 tasks and four conditions, including
+failures. This development pilot does not establish improved task success,
+reliability, or token use. See [`benchmarks/README.md`](benchmarks/README.md)
+for the evidence boundary and reproduction instructions.
 
 ---
 

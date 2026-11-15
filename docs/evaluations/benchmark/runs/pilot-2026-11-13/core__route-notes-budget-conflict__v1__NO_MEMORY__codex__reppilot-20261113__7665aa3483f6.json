@@ -1,0 +1,192 @@
+{
+  "budget": {
+    "time_seconds": 180,
+    "token_limit": null
+  },
+  "checkout_id": "f6810bce661b6d5de3453a408a24e1df418d389470822d33345a073e84542013",
+  "condition": "NO_MEMORY",
+  "detail": "",
+  "evidence_class": "live-runtime",
+  "failure_labels": [
+    "MEMORY_CONFLICT_MISSED"
+  ],
+  "fixture_sha256": "7665aa3483f6929c8ad61403690513f124fc0e7a4b8bc36c2eabd1900bceb5d1",
+  "git_commit": "e4bcf922f46bccd2f66bf15e0eaf574a0157c501",
+  "git_dirty": true,
+  "memory_label": "MEMORY_CONFLICT_MISSED",
+  "metrics": {
+    "context_memory_tokens": null,
+    "final_test_status": "PASS",
+    "hard_constraint_violation": false,
+    "memory_dependent_requirement_satisfied": false,
+    "repeated_file_reads": null,
+    "routing_complete": null,
+    "stale_memory_used": false,
+    "task_success": false,
+    "tests_run": true,
+    "tool_calls": 6,
+    "total_input_tokens": 88035,
+    "total_output_tokens": 589,
+    "unsupported_memory_used": false,
+    "wall_clock_seconds": 26.011458
+  },
+  "model_version": "gpt-6.1-sol",
+  "os": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+  "package_version": "0.13.0",
+  "prompt_sha256": "9a2d576f77db13b635ea4c6a1450e52bb7a66062368e8c19b58972f2c883864b",
+  "protocol_version": "0.8",
+  "repetition_id": "pilot-20261113",
+  "result_format": "1",
+  "result_id": "core__route-notes-budget-conflict__v1__NO_MEMORY__codex__reppilot-20261113__7665aa3483f6",
+  "runner_source_sha256": {
+    "benchmarks/graders/mechanical.py": "228586fa06c1b7c65b8e10dd01eb2b86bc6c03005610c591c177db276718d234",
+    "benchmarks/runners/codex_runtime.py": "0735c9cd3d9fbcce264e27cfbc7c853e5a90fd75ebe0c5b8e9baec0abc9c4dc7",
+    "benchmarks/runners/harness.py": "8907a1ab2d254d8813a8677f46c1babe6e1073c7a68fcaf72ffc40e3382b2007",
+    "scripts/run-batch-benchmark.py": "1a46ea736e3c7371a7703b3186f1ad8d28bfe9632ea6c71a7119b93d5e396595"
+  },
+  "runtime": "codex",
+  "runtime_metadata": {
+    "action_trace": [
+      {
+        "event": "item.completed",
+        "id": "item_1",
+        "text_sha256": "81595f5d37991c900d108b4bcdc32251400fe2764c0da844d929863a1074f804",
+        "type": "agent_message"
+      },
+      {
+        "aggregated_output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "event": "item.started",
+        "id": "item_2",
+        "status": "in_progress",
+        "type": "command_execution"
+      },
+      {
+        "aggregated_output_sha256": "1dd9161dbc6a2dc3d0bcb8587d3d05bcac42f696431dffe1491c3b6bb2fdfeed",
+        "event": "item.completed",
+        "exit_code": 0,
+        "id": "item_2",
+        "status": "completed",
+        "type": "command_execution"
+      },
+      {
+        "aggregated_output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "event": "item.started",
+        "id": "item_3",
+        "status": "in_progress",
+        "type": "command_execution"
+      },
+      {
+        "aggregated_output_sha256": "abc69158eb00b810aa58fe88a86220fe9f99dcba1f6360124c6d3e5f46eef2d6",
+        "event": "item.completed",
+        "exit_code": 0,
+        "id": "item_3",
+        "status": "completed",
+        "type": "command_execution"
+      },
+      {
+        "aggregated_output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "event": "item.started",
+        "id": "item_4",
+        "status": "in_progress",
+        "type": "command_execution"
+      },
+      {
+        "aggregated_output_sha256": "d9dca269f9e707f250649db6387c6e5206c23748f3c4c5223751cd59f564bd13",
+        "event": "item.completed",
+        "exit_code": 128,
+        "id": "item_4",
+        "status": "failed",
+        "type": "command_execution"
+      },
+      {
+        "aggregated_output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "event": "item.started",
+        "id": "item_5",
+        "status": "in_progress",
+        "type": "command_execution"
+      },
+      {
+        "aggregated_output_sha256": "54f77ca71739f28f932ba4538112f1e0deeec3c7ad573e33c2db60ab23eeef74",
+        "event": "item.completed",
+        "exit_code": 0,
+        "id": "item_5",
+        "status": "completed",
+        "type": "command_execution"
+      },
+      {
+        "event": "item.completed",
+        "id": "item_6",
+        "text_sha256": "183d4b975a8c19ea0fbdc33c49368a7b6d44a249bd63deef2a9bf3145ad944f6",
+        "type": "agent_message"
+      },
+      {
+        "changes": [
+          {
+            "kind": "add",
+            "path": "CONFLICT_REPORT.txt"
+          }
+        ],
+        "event": "item.started",
+        "id": "item_7",
+        "status": "in_progress",
+        "type": "file_change"
+      },
+      {
+        "changes": [
+          {
+            "kind": "add",
+            "path": "CONFLICT_REPORT.txt"
+          }
+        ],
+        "event": "item.completed",
+        "id": "item_7",
+        "status": "completed",
+        "type": "file_change"
+      },
+      {
+        "aggregated_output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "event": "item.started",
+        "id": "item_8",
+        "status": "in_progress",
+        "type": "command_execution"
+      },
+      {
+        "aggregated_output_sha256": "9c2534cd77c964d1e5320b7ace56d717b0950e9eadb885a3e90d6aff9e5304d1",
+        "event": "item.completed",
+        "exit_code": 0,
+        "id": "item_8",
+        "status": "completed",
+        "type": "command_execution"
+      },
+      {
+        "event": "item.completed",
+        "id": "item_9",
+        "text_sha256": "1e2e364e58acc8c3374febd6f6f1afec3418485520a72d82f99a6ce7e0f9376e",
+        "type": "agent_message"
+      }
+    ],
+    "adapter": "codex-exec-jsonl-v1",
+    "cached_input_tokens": 77568,
+    "cli_version": "codex-cli 0.167.0-alpha.4.1",
+    "completion_events": 1,
+    "effective_prompt_sha256": "1062174f7d1e57cd628ee66fc573e1ac62f5cf3b85c5c11fd970ce0b7d794a6c",
+    "event_count": 19,
+    "event_stream_sha256": "92a37b05e5a043df69ef061c6347564295db9f122bcc6a63a13b738fca0aead6",
+    "exit_code": 0,
+    "prompt_prefix_sha256": "babbaf31a27274e8d0fd0fe7bbea081856f2165a9a9336dbec5fe22fa6578754",
+    "raw_trace_retained": false,
+    "requested_model": "gpt-6.1-sol",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "thread_id": "01a1d8b3-af61-7740-b3c1-309e31e2edfe",
+    "tool_calls": 6,
+    "tool_policy": "codex-workspace-write;network=off;approval=never;user-config=ignored;ephemeral;reasoning=low;host-skills=off;plugins=off;memories=off",
+    "total_input_tokens": 88035,
+    "total_output_tokens": 589
+  },
+  "status": "FAIL",
+  "suite": "core",
+  "task_id": "route-notes-budget-conflict",
+  "task_version": 1,
+  "tool_policy": "codex-workspace-write;network=off;approval=never;user-config=ignored;ephemeral;reasoning=low;host-skills=off;plugins=off;memories=off",
+  "visible_source_sha256": "f6810bce661b6d5de3453a408a24e1df418d389470822d33345a073e84542013"
+}

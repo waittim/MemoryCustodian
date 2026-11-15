@@ -15,3 +15,4 @@ Current direction:
 - Keep optional preferences, changelog, rules, profiles, areas, and archive disabled until needed.
 - Keep context packs small and manifest-driven; substantial work uses `brief.md` plus root constraints and explicit scope.
 - Keep memory useful through real project briefs, concise scope-first decisions, and semantic review before decision archival.
+- Evaluate governed memory with controlled, information-matched pilots before adding recall, checkpoints, or memory formation. Require held-out evidence for general effectiveness claims; keep Protocol 0.8.

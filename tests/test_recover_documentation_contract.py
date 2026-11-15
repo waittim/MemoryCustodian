@@ -12,7 +12,6 @@ from memory_custodian.main import build_parser
 ROOT = Path(__file__).resolve().parents[1]
 CURRENT_DOCUMENTATION = (
     ROOT / "README.md",
-    ROOT / "docs" / "MemoryCustodian-plan-0.12.0-erasure-aligned-revised.md",
 )
 CURRENT_DOCUMENTATION_TREES = (
     ROOT / "skills",

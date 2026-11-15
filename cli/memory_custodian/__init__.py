@@ -1,6 +1,6 @@
 """MemoryCustodian CLI package."""
 
-__version__ = "0.12.0"
+__version__ = "0.13.0"
 __protocol_version__ = "0.8"
 __entry_schema_version__ = "3"
 __subject_schema_version__ = "1"

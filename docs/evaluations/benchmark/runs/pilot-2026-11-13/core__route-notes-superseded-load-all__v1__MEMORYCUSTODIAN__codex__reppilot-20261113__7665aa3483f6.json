@@ -1,0 +1,216 @@
+{
+  "budget": {
+    "time_seconds": 180,
+    "token_limit": null
+  },
+  "checkout_id": "54d634296a84f6e9c8524900a92374fc4aee0cb80118cfc834184c6ded086103",
+  "condition": "MEMORYCUSTODIAN",
+  "detail": "",
+  "evidence_class": "live-runtime",
+  "failure_labels": [],
+  "fixture_sha256": "7665aa3483f6929c8ad61403690513f124fc0e7a4b8bc36c2eabd1900bceb5d1",
+  "git_commit": "e4bcf922f46bccd2f66bf15e0eaf574a0157c501",
+  "git_dirty": true,
+  "memory_label": "MEMORY_NONE",
+  "metrics": {
+    "context_memory_tokens": null,
+    "final_test_status": "PASS",
+    "hard_constraint_violation": false,
+    "memory_dependent_requirement_satisfied": true,
+    "repeated_file_reads": null,
+    "routing_complete": null,
+    "stale_memory_used": false,
+    "task_success": true,
+    "tests_run": true,
+    "tool_calls": 6,
+    "total_input_tokens": 92212,
+    "total_output_tokens": 1005,
+    "unsupported_memory_used": false,
+    "wall_clock_seconds": 36.630756
+  },
+  "model_version": "gpt-6.1-sol",
+  "os": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+  "package_version": "0.13.0",
+  "prompt_sha256": "340e40a4b4b315ddc908d5f7c5a7c2644ef6b46969455d6be3195b4001759182",
+  "protocol_version": "0.8",
+  "repetition_id": "pilot-20261113",
+  "result_format": "1",
+  "result_id": "core__route-notes-superseded-load-all__v1__MEMORYCUSTODIAN__codex__reppilot-20261113__7665aa3483f6",
+  "runner_source_sha256": {
+    "benchmarks/graders/mechanical.py": "228586fa06c1b7c65b8e10dd01eb2b86bc6c03005610c591c177db276718d234",
+    "benchmarks/runners/codex_runtime.py": "0735c9cd3d9fbcce264e27cfbc7c853e5a90fd75ebe0c5b8e9baec0abc9c4dc7",
+    "benchmarks/runners/harness.py": "8907a1ab2d254d8813a8677f46c1babe6e1073c7a68fcaf72ffc40e3382b2007",
+    "scripts/run-batch-benchmark.py": "1a46ea736e3c7371a7703b3186f1ad8d28bfe9632ea6c71a7119b93d5e396595"
+  },
+  "runtime": "codex",
+  "runtime_metadata": {
+    "action_trace": [
+      {
+        "event": "item.completed",
+        "id": "item_1",
+        "text_sha256": "d88515737aa64ca6a579d39a20135d8c10363e4ebbda29ab1db9b4d2e24bcc05",
+        "type": "agent_message"
+      },
+      {
+        "aggregated_output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "event": "item.started",
+        "id": "item_2",
+        "status": "in_progress",
+        "type": "command_execution"
+      },
+      {
+        "aggregated_output_sha256": "1da13001e650dcb831e9ef898d71e00478adc6e10bac07b25b1b9f7c1024f6e2",
+        "event": "item.completed",
+        "exit_code": 0,
+        "id": "item_2",
+        "status": "completed",
+        "type": "command_execution"
+      },
+      {
+        "aggregated_output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "event": "item.started",
+        "id": "item_3",
+        "source_path_mentions": [
+          "docs/memory/brief.md",
+          "docs/memory/manifest.md"
+        ],
+        "status": "in_progress",
+        "type": "command_execution"
+      },
+      {
+        "aggregated_output_sha256": "da1d5e76a8dca912b4031977de58cdfd607f8d2398eaee5d8b95ae058870dd93",
+        "event": "item.completed",
+        "exit_code": 0,
+        "id": "item_3",
+        "source_path_mentions": [
+          "docs/memory/brief.md",
+          "docs/memory/manifest.md"
+        ],
+        "status": "completed",
+        "type": "command_execution"
+      },
+      {
+        "aggregated_output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "event": "item.started",
+        "id": "item_4",
+        "source_path_mentions": [
+          "docs/memory/constraints.md",
+          "docs/memory/decisions.md",
+          "docs/memory/do-not-use.md"
+        ],
+        "status": "in_progress",
+        "type": "command_execution"
+      },
+      {
+        "aggregated_output_sha256": "d136f9ba9789eb71fdf5855c079317f4f9d0aa36418086c42ef5d626e65af306",
+        "event": "item.completed",
+        "exit_code": 128,
+        "id": "item_4",
+        "source_path_mentions": [
+          "docs/memory/constraints.md",
+          "docs/memory/decisions.md",
+          "docs/memory/do-not-use.md"
+        ],
+        "status": "failed",
+        "type": "command_execution"
+      },
+      {
+        "event": "item.completed",
+        "id": "item_5",
+        "text_sha256": "0b821f17cff2a787f25d8df021f944df0ec5001a4164be2f0738c86c0785c09e",
+        "type": "agent_message"
+      },
+      {
+        "changes": [
+          {
+            "kind": "update",
+            "path": "router.py"
+          },
+          {
+            "kind": "update",
+            "path": "tests/test_visible.py"
+          }
+        ],
+        "event": "item.started",
+        "id": "item_6",
+        "status": "in_progress",
+        "type": "file_change"
+      },
+      {
+        "changes": [
+          {
+            "kind": "update",
+            "path": "router.py"
+          },
+          {
+            "kind": "update",
+            "path": "tests/test_visible.py"
+          }
+        ],
+        "event": "item.completed",
+        "id": "item_6",
+        "status": "completed",
+        "type": "file_change"
+      },
+      {
+        "aggregated_output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "event": "item.started",
+        "id": "item_7",
+        "status": "in_progress",
+        "type": "command_execution"
+      },
+      {
+        "aggregated_output_sha256": "5e4e795afaf7b2ac3694348801079911c9a51af17a801a9a9ee5368403a2d58a",
+        "event": "item.completed",
+        "exit_code": 127,
+        "id": "item_7",
+        "status": "failed",
+        "type": "command_execution"
+      },
+      {
+        "aggregated_output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "event": "item.started",
+        "id": "item_8",
+        "status": "in_progress",
+        "type": "command_execution"
+      },
+      {
+        "aggregated_output_sha256": "51aee8acbcdcfe8473ef9654817efaaa2ffc97d43d09609ff02a1220486eacde",
+        "event": "item.completed",
+        "exit_code": 0,
+        "id": "item_8",
+        "status": "completed",
+        "type": "command_execution"
+      },
+      {
+        "event": "item.completed",
+        "id": "item_9",
+        "text_sha256": "e883c5c67204bc2c3bc96ad8a722001384213a82f16a370ce411cdac3c5956c6",
+        "type": "agent_message"
+      }
+    ],
+    "adapter": "codex-exec-jsonl-v1",
+    "cached_input_tokens": 85376,
+    "cli_version": "codex-cli 0.167.0-alpha.4.1",
+    "completion_events": 1,
+    "effective_prompt_sha256": "fd1bf38aff0fff4abf7bcf28d04005099d0256ad928efb0123d7056004baf22b",
+    "event_count": 19,
+    "event_stream_sha256": "5774e9aab5bb1b3b35ed8f18f9ec342f72569b10b5a6aa051afc44132d77c162",
+    "exit_code": 0,
+    "prompt_prefix_sha256": "babbaf31a27274e8d0fd0fe7bbea081856f2165a9a9336dbec5fe22fa6578754",
+    "raw_trace_retained": false,
+    "requested_model": "gpt-6.1-sol",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "thread_id": "01a1d8b6-5b65-7181-882b-3304af6cac24",
+    "tool_calls": 6,
+    "tool_policy": "codex-workspace-write;network=off;approval=never;user-config=ignored;ephemeral;reasoning=low;host-skills=off;plugins=off;memories=off",
+    "total_input_tokens": 92212,
+    "total_output_tokens": 1005
+  },
+  "status": "PASS",
+  "suite": "core",
+  "task_id": "route-notes-superseded-load-all",
+  "task_version": 1,
+  "tool_policy": "codex-workspace-write;network=off;approval=never;user-config=ignored;ephemeral;reasoning=low;host-skills=off;plugins=off;memories=off",
+  "visible_source_sha256": "54d634296a84f6e9c8524900a92374fc4aee0cb80118cfc834184c6ded086103"
+}

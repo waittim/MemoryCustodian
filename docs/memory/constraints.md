@@ -1,6 +1,18 @@
 # Constraints
 
-## MC-CON-20260921-10000001 — Offline core operations
+## MC-CON-20261110-b07a3269 — Benchmark evidence
+
+Status: active
+Scope: project
+Subject: MC-SUBJ-20260801-60000006
+Facet: adoption-policy
+Evidence:
+- doc:RELEASE-NOTES.md
+
+Constraint:
+General effectiveness claims require held-out live evidence.
+
+## MC-CON-20260921-10000001 — Offline
 
 Status: active
 Scope: project
@@ -10,9 +22,9 @@ Evidence:
 - repo:pyproject.toml
 
 Constraint:
-Core memory operations must be network-independent; distribution may use the network.
+Core stays offline; distribution may use networks.
 
-## MC-CON-20260921-10000002 — Repo-native plain-text storage
+## MC-CON-20260921-10000002 — Storage
 
 Status: active
 Scope: project
@@ -22,9 +34,9 @@ Evidence:
 - user-confirmed
 
 Constraint:
-Keep project memory as reviewable Markdown under docs/, defaulting to docs/memory/; keep RAG, embeddings, vector databases, and cloud memory out of the default architecture.
+Keep Markdown under docs/memory/; exclude RAG, vector DBs, cloud memory.
 
-## MC-CON-20260921-10000003 — Cross-agent compatibility
+## MC-CON-20260921-10000003 — Compatibility
 
 Status: active
 Scope: project
@@ -34,9 +46,9 @@ Evidence:
 - repo:adapters
 
 Constraint:
-Keep the protocol reusable across Codex, Claude Code, Gemini, and generic agents.
+Support Codex, Claude Code, Gemini, generic agents.
 
-## MC-CON-20260921-10000010 — Transactional multi-file mutation
+## MC-CON-20260921-10000010 — Transactions
 
 Status: active
 Scope: project
@@ -46,9 +58,9 @@ Evidence:
 - repo:cli/memory_custodian/transactions.py
 
 Constraint:
-Journal multi-file changes and verify terminal effects before cleanup.
+Journal multi-file writes; verify terminal effects before cleanup.
 
-## MC-CON-20260921-10000011 — No protocol downgrade
+## MC-CON-20260921-10000011 — Versions
 
 Status: active
 Scope: project
@@ -58,4 +70,4 @@ Evidence:
 - repo:cli/memory_custodian/protocol.py
 
 Constraint:
-Repair and migration never downgrade newer protocols or accept malformed versions.
+Repair/migration reject malformed versions and never downgrade.

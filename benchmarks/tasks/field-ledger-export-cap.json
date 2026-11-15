@@ -1,0 +1,102 @@
+{
+  "task_format": "1",
+  "task_id": "field-ledger-export-cap",
+  "task_version": 1,
+  "suite": "core",
+  "split": "pilot-development",
+  "category": "constraint-sensitive-implementation",
+  "repo": {
+    "id": "field-ledger",
+    "root": "benchmarks/fixtures/field-ledger",
+    "commit": "3c53494ae0e974bc8e5e4e59988b22e1ccfd372752f1ca01522c40ea3c992a5b"
+  },
+  "task_prompt": "Implement the active export limit in the ledger. Keep entry order, and do not invent a limit that the project documents do not currently mark as active.",
+  "expected_touched_paths": [
+    "ledger.py"
+  ],
+  "required_constraints": [
+    "Production export stays on the local machine and does not use the network.",
+    "The active daily export cap is 500 rows."
+  ],
+  "forbidden_actions": [
+    "Add a network client.",
+    "Keep a superseded limit."
+  ],
+  "test_command": [
+    "{python}",
+    "-m",
+    "unittest",
+    "discover",
+    "-s",
+    "tests",
+    "-p",
+    "test_visible.py",
+    "-q"
+  ],
+  "success_oracle": {
+    "kind": "hidden-python",
+    "script": "benchmarks/oracles/field-ledger-export-cap/check.py"
+  },
+  "memory_dependencies": [
+    "docs/memory/brief.md",
+    "docs/memory/constraints.md"
+  ],
+  "baseline_notes": "The starter returns every row. The numeric limit is not named in the implementation.",
+  "information_parity_check": {
+    "facts": [
+      "Production export stays on the local machine and does not use the network.",
+      "The active daily export cap is 500 rows."
+    ],
+    "exclusive_facts": [],
+    "memory_paths": [
+      "docs/memory/brief.md",
+      "docs/memory/constraints.md",
+      "docs/memory/decisions.md",
+      "docs/memory/do-not-use.md"
+    ],
+    "manual_paths": [
+      "docs/manual/overview.md",
+      "docs/manual/constraints.md",
+      "docs/manual/decisions.md",
+      "docs/manual/rejected.md"
+    ]
+  },
+  "condition_visibility": {
+    "NO_MEMORY": {
+      "hide": [
+        "docs/manual",
+        "docs/memory"
+      ]
+    },
+    "PLATFORM_FILE_ONLY": {
+      "hide": [
+        "docs/manual",
+        "docs/memory"
+      ]
+    },
+    "EQUIVALENT_MANUAL_DOCS": {
+      "hide": [
+        "docs/memory"
+      ]
+    },
+    "MEMORYCUSTODIAN": {
+      "hide": [
+        "docs/manual"
+      ]
+    }
+  },
+  "offline_expectations": {
+    "reference_dir": "benchmarks/references/field-ledger-export-cap",
+    "starter_labels": [
+      "MEMORY_OMISSION"
+    ],
+    "negatives": [
+      {
+        "dir": "benchmarks/negatives/field-ledger-export-cap",
+        "labels": [
+          "MEMORY_STALE_USE"
+        ]
+      }
+    ]
+  }
+}

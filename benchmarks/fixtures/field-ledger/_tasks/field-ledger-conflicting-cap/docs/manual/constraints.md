@@ -1,0 +1,4 @@
+# Constraints
+
+The active daily export cap is 500 rows.
+The active daily export cap is 2000 rows.

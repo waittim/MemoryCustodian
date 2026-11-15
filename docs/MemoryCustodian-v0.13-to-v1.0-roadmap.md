@@ -550,18 +550,27 @@ If confidence is inconclusive, publish the inconclusive result.
 ## 4.7 Definition of Done
 
 ```text
-[ ] benchmark manifest committed
-[ ] 12–18 pinned pilot tasks across at least two repositories
-[ ] four primary conditions implemented, including the information-matched control
-[ ] deterministic fixture grader
-[ ] memory-specific failure taxonomy
-[ ] append-only result notes
-[ ] one live runtime completes the controlled pilot
-[ ] held-out expansion plan and uncertainty reporting documented
-[ ] result reproduction instructions
-[ ] CI fixture-integrity check
-[ ] README evidence wording audited
+[x] benchmark manifest committed
+[x] 12–18 pinned pilot tasks across at least two repositories
+[x] four primary conditions implemented, including the information-matched control
+[x] deterministic fixture grader
+[x] memory-specific failure taxonomy
+[x] append-only result notes
+[x] one live runtime completes the controlled pilot
+[x] held-out expansion plan and uncertainty reporting documented
+[x] result reproduction instructions
+[x] CI fixture-integrity check
+[x] README evidence wording audited
 ```
+
+Validated locally on 2026-11-13: the [fixed development pilot](evaluations/benchmark/PILOT-2026-11-13.md)
+completed 72 independent Codex sessions across all 18 tasks and four conditions,
+including failures and zero runtime blockers. [Results and evidence](evaluations/benchmark/RESULTS.md)
+report the paired outcome and uncertainty. This closes the controlled pilot
+gate within the documented fixture bootstrap scope; it does not establish
+general effectiveness, cross-runtime equivalence, or a full installed Skill/CLI
+workflow. Release packaging and tagging require a reviewed, clean commit with
+successful remote CI.
 
 ---
 
