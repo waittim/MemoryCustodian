@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -57,9 +58,12 @@ METHODS = (
     "benchmarks/runners/installed_skill_live.py", "scripts/run-installed-skill-eval.py",
     "docs/evaluations/INSTALLED-SKILL-LIVE-PLAN-2026-11-16.md",
     "docs/evaluations/INSTALLED-SKILL-LIVE-DIAGNOSTIC-PLAN-2026-11-17.md",
+    "docs/evaluations/INSTALLED-SKILL-LIVE-OBSERVER-PLAN-2026-11-17.md",
     "benchmarks/runners/codex_runtime.py",
 )
 DIAGNOSTIC_PLAN = "docs/evaluations/INSTALLED-SKILL-LIVE-DIAGNOSTIC-PLAN-2026-11-17.md"
+OBSERVER_PLAN = "docs/evaluations/INSTALLED-SKILL-LIVE-OBSERVER-PLAN-2026-11-17.md"
+OBSERVATIONS_SCHEMA_VERSION = 2
 ERROR_CATEGORIES = frozenset({"transport", "auth", "rate-limit", "provider", "unknown", "timeout", "encoding", "launch"})
 EVENT_KINDS = frozenset({"thread.started", "turn.started", "turn.completed", "turn.failed", "error", "item.started", "item.completed"})
 EVENT_STATUSES = frozenset({"in_progress", "completed", "failed", "pending", "declined", "cancelled"})
@@ -291,9 +295,75 @@ def _cli_documents(text: str) -> list[dict]:
     return values
 
 
+def _single_cli_arguments(command: str) -> list[str] | None:
+    """Recognize a narrow single invocation, never interpret a shell program."""
+    try:
+        outer = shlex.split(command)
+        if len(outer) == 3 and Path(outer[0]).name in {"bash", "zsh", "sh"} and outer[1] in {"-c", "-lc"}:
+            command = outer[2]
+        if any(marker in command for marker in ("\n", "\r", "$", "`", "*", "?", "[", "]", "{", "}", "~", "#")):
+            return None
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|<>")
+        lexer.whitespace_split = True
+        lexer.commenters = ""
+        tokens = list(lexer)
+    except ValueError:
+        return None
+    if any(token and set(token) <= set(";&|<>") for token in tokens):
+        return None
+    if tokens and tokens[0] == "exec":
+        tokens = tokens[1:]
+    if not tokens or not any(tokens[0] == entry or tokens[0].endswith("/" + entry) for entry in ENTRY_POINTS):
+        return None
+    return tokens[1:]
+
+
+def _cli_completion(command: str, output: str, exit_code: object) -> tuple[str, bool]:
+    """Return only a fixed action category and public-plan presence."""
+    arguments = _single_cli_arguments(command)
+    if arguments is None or type(exit_code) is not int or "--" in arguments:
+        return "uncertain", False
+    if exit_code == 0 and ("--help" in arguments or "-h" in arguments):
+        return "readonly-help", False
+    if (exit_code == 0 and "--version" in arguments) or (arguments and exit_code in (0, 1, 2)
+            and (arguments[0] in {"read", "status", "check", "audit", "list", "show"}
+                 or arguments[:2] in (["subject", "list"], ["subject", "show"]))):
+        return "readonly-command", False
+    if exit_code != 0:
+        return "uncertain", False
+    documents = [document for document in _cli_documents(output)
+                 if document.get("status") in ("PASS", "REVIEW")
+                 and document.get("exit_class") in ("success", "success-with-review")]
+    public_plan = any(isinstance(document["data"].get("plan"), dict)
+                      and type(document["data"]["plan"].get("public_plan_schema_version")) is int
+                      and document["data"]["plan"]["public_plan_schema_version"] == 1
+                      for document in documents)
+    subject_add = arguments[:2] == ["subject", "add"]
+    add = bool(arguments) and arguments[0] == "add"
+    options = {argument.split("=", 1)[0] for argument in arguments if argument.startswith("--")}
+    common = {"--project-root", "--memory-dir", "--format", "--evidence", "--apply", "--confirm-plan", "--lock-timeout", "--break-stale-lock"}
+    allowed = (common | {"--kind", "--canonical-ref", "--alias"}) if subject_add else (
+        common | {"--type", "--name", "--from-legacy", "--title", "--scope", "--area", "--reason",
+                  "--allow-missing-evidence", "--candidate", "--supersedes", "--subject", "--facet", "--allow-long"}
+    )
+    if not (subject_add or add) or not options <= allowed:
+        return "uncertain", public_plan
+    preview_add = add and bool(options & {"--supersedes", "--from-legacy"})
+    if (subject_add or preview_add) and "--apply" not in options and public_plan:
+        return "readonly-preview", True
+    if subject_add and "--apply" in options and public_plan:
+        return "confirmed-write", True
+    if add and not preview_add and not public_plan and any(document.get("command") == "add" for document in documents):
+        return "confirmed-write", public_plan
+    return "uncertain", public_plan
+
+
 def observe(stdout: str) -> dict:
     """Classify observable events; raw values are never returned."""
     metadata, strict_reads, skill_reads, mutations = [], [], [], []
+    confirmed, uncertain, readonly = set(), set(), set()
+    pending = {}
+    unbounded_mutation = False
     external = False
     for sequence, line in enumerate(stdout.splitlines(), 1):
         try:
@@ -330,7 +400,36 @@ def observe(stdout: str) -> dict:
             if kind == "file_change" or shell_write or memory_write:
                 mutations.append(sequence)
                 row["possible_mutation"] = True
+                if kind == "file_change":
+                    confirmed.add(sequence)
+                    row["mutation_evidence"] = "file-change-attempt"
+                else:
+                    uncertain.add(sequence)
+            if (kind == "command_execution" and isinstance(item.get("id"), str)
+                    and (shell_write or memory_write or any(entry in command for entry in ENTRY_POINTS))):
+                pending[item["id"]] = sequence
+                uncertain.add(sequence)
         if event["type"] == "item.completed" and kind == "command_execution":
+            if any(entry in command for entry in ENTRY_POINTS):
+                action, public_plan = _cli_completion(command, output, code)
+                row["cli_action"] = action
+                if public_plan:
+                    row["public_plan_observed"] = True
+                start = pending.get(item["id"]) if isinstance(item.get("id"), str) else None
+                if action.startswith("readonly-"):
+                    readonly.add(start if start is not None else sequence)
+                    if start is not None:
+                        uncertain.discard(start)
+                elif action == "confirmed-write":
+                    if start is None:
+                        unbounded_mutation = True
+                        uncertain.add(sequence)
+                    else:
+                        uncertain.discard(start)
+                        confirmed.add(start)
+                elif start is None:
+                    unbounded_mutation = True
+                    uncertain.add(sequence)
             if (SKILL in command or ".installed/memory-custodian/skills/memory-custodian/SKILL.md" in command) and code == 0:
                 if "name: memory-custodian" in output and "## Hard Gate" in output:
                     skill_reads.append(sequence)
@@ -349,8 +448,14 @@ def observe(stdout: str) -> dict:
                         strict_reads.append(proof)
                         row["installed_cli_strict_read"] = proof
         metadata.append(row)
-    return {"events": metadata, "strict_reads": strict_reads, "skill_read_sequences": skill_reads,
-            "mutation_sequences": mutations, "forbidden_external_tool": external}
+    return {"observations_schema_version": OBSERVATIONS_SCHEMA_VERSION,
+            "events": metadata, "strict_reads": strict_reads, "skill_read_sequences": skill_reads,
+            # Retain the old field's meaning: these are possible lexical events.
+            "mutation_sequences": mutations,
+            "confirmed_mutation_sequences": sorted(confirmed),
+            "uncertain_mutation_sequences": sorted(uncertain),
+            "readonly_cli_sequences": sorted(readonly), "unbounded_mutation": unbounded_mutation,
+            "forbidden_external_tool": external}
 
 
 def run_runtime(command: list[str], checkout: Path, state: Path, prompt: str, *, timeout: int,
@@ -454,10 +559,21 @@ def grade(checkout: Path, state: Path, fixture: dict, runtime: dict) -> dict:
         checks["observation_retained"] = "retr" in inbox.casefold() and "throughput" in inbox.casefold()
         checks["no_active_inbox_entry"] = "Status: active" not in inbox
     if task != "missing-scope":
-        mutations = observations["mutation_sequences"]
-        if changes and not mutations:
-            return {"status": "REVIEW", "checks": checks, "detail": "artifact changed without an observable mutation boundary"}
-        checks["strict_read_before_mutation"] = bool(reads) and bool(mutations) and min(value["sequence"] for value in reads) < min(mutations)
+        first_read = min((value["sequence"] for value in reads), default=None)
+        confirmed = observations.get("confirmed_mutation_sequences", [])
+        uncertain = observations.get("uncertain_mutation_sequences", [])
+        ordering = None
+        if first_read is None:
+            ordering = False
+        elif confirmed and min(confirmed) <= first_read:
+            ordering = False
+        elif (observations.get("observations_schema_version") == OBSERVATIONS_SCHEMA_VERSION
+              and confirmed and not observations.get("unbounded_mutation", False)
+              and not any(sequence <= first_read for sequence in uncertain)):
+            ordering = True
+        checks["strict_read_before_mutation"] = ordering
+        if ordering is None and all(value for name, value in checks.items() if name != "strict_read_before_mutation"):
+            return {"status": "REVIEW", "checks": checks, "detail": "observable mutation ordering is insufficient"}
     return {"status": "PASS" if all(checks.values()) else "FAIL", "checks": checks}
 
 

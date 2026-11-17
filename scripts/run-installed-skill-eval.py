@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from benchmarks.runners.installed_skill_live import (
-    DIAGNOSTIC_PLAN, INSTRUCTIONS, METHODS, POLICY, TASK_IDS, TASKS, SmokeError, grade, make_record,
+    INSTRUCTIONS, METHODS, OBSERVATIONS_SCHEMA_VERSION, OBSERVER_PLAN, POLICY, TASK_IDS, TASKS, SmokeError, grade, make_record,
     prepare_fixture, run_runtime, runtime_argv, sha,
 )
 
@@ -41,6 +41,7 @@ def report(records: list[dict], metadata: dict) -> str:
               "Error categories are coarse observations from allowlisted error fields/stderr, not confirmed root causes.",
               "This is a single-runtime workflow smoke, not effectiveness, cross-agent conformance, or checkpoint evidence.",
               "Strict-read proofs require CLI JSON content and observable event order; command mentions alone are insufficient.",
+              "Observer schema 2 separates possible lexical events from confirmed writes and verified read-only CLI actions; unresolved ordering remains REVIEW.",
               "Raw prompts, commands, output, reasoning, messages and machine paths are not retained.",
               "Source/fixture hashes and allowlisted metadata support consistency, not tamper-proof runtime attestation.", ""]
     return "\n".join(lines)
@@ -74,7 +75,8 @@ def main(argv=None) -> int:
                     "cli_version": version, "cli_binary_sha256": sha(Path(executable).read_bytes()),
                     "model": args.model_version, "policy": POLICY, "timeout_seconds": 180,
                     "tasks": selected_tasks, "original_cohort_tasks": list(TASK_IDS),
-                    "diagnostics_schema_version": 1, "plan": DIAGNOSTIC_PLAN,
+                    "diagnostics_schema_version": 1, "observations_schema_version": OBSERVATIONS_SCHEMA_VERSION,
+                    "plan": OBSERVER_PLAN,
                     "source_sha256": source_hashes}
         write_new(args.record_dir / "experiment.json", metadata)
         records, sessions = [], set()

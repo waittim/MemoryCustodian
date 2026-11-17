@@ -5,6 +5,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -52,6 +53,51 @@ def runtime(observations):
 
 
 class InstalledSkillObservationTests(unittest.TestCase):
+    def test_single_cli_recognition_rejects_composite_help_and_substitutions(self):
+        help_command = smoke.CLI + " add --help"
+        self.assertEqual(smoke._cli_completion(help_command, "usage: memory-custodian", 0)[0], "readonly-help")
+        wrapped = "/bin/sh -c " + shlex.quote(help_command)
+        self.assertEqual(smoke._cli_completion(wrapped, "usage: memory-custodian", 0)[0], "readonly-help")
+        for command in (
+            help_command + "; python -c 'write_text()'",
+            help_command + " && " + smoke.CLI + " add value --candidate",
+            help_command + " > help.txt", help_command + "\necho another-command",
+            "$(echo " + smoke.CLI + ") add --help",
+            smoke.CLI + " subject add item $FLAGS",
+            smoke.CLI + " subject add item ${FLAGS}",
+            smoke.CLI + " subject add item *",
+            smoke.CLI + " subject add item [a-z]*",
+            smoke.CLI + " subject add item {--apply,--help}",
+            smoke.CLI + " subject add item # --apply",
+        ):
+            with self.subTest(command=command):
+                self.assertIsNone(smoke._single_cli_arguments(command))
+                self.assertEqual(smoke._cli_completion(command, "usage: memory-custodian", 0)[0], "uncertain")
+
+    def test_cli_option_terminators_abbreviations_and_equals_previews_are_conservative(self):
+        document = json.dumps({"output_schema_version": 1, "protocol_version": "0.8", "command": "add",
+                               "status": "PASS", "exit_class": "success",
+                               "data": {"plan": {"public_plan_schema_version": 1}}})
+        for suffix in ("add --supersedes=MC-CON-example value", "add --from-legacy=constraints.md:0"):
+            with self.subTest(suffix=suffix):
+                self.assertEqual(smoke._cli_completion(smoke.CLI + " " + suffix, document, 0)[0], "readonly-preview")
+        for suffix in (
+            "add --type decision --candidate -- --help", "subject add value --ap", "subject add value --app",
+            "add --sup=MC-CON-example value", "add --from-l=constraints.md:0",
+        ):
+            with self.subTest(suffix=suffix):
+                self.assertEqual(smoke._cli_completion(smoke.CLI + " " + suffix, document, 0)[0], "uncertain")
+        unknown = smoke.CLI + " subject rename MC-SUBJ-example Replacement"
+        observed = proof(event({"type": "command_execution", "id": "unknown", "command": unknown}, "item.started"),
+                         event({"type": "command_execution", "id": "unknown", "command": unknown,
+                                "aggregated_output": "opaque CLI result", "exit_code": 0}))
+        self.assertEqual(observed["mutation_sequences"], [])
+        self.assertEqual(observed["uncertain_mutation_sequences"], [2])
+        missing_start = proof(event({"type": "command_execution", "id": "unknown", "command": unknown,
+                                     "aggregated_output": "opaque CLI result", "exit_code": 0}))
+        self.assertEqual(missing_start["uncertain_mutation_sequences"], [2])
+        self.assertTrue(missing_start["unbounded_mutation"])
+
     def test_error_diagnostics_keep_only_allowlisted_categories_status_and_counts(self):
         samples = (
             ({"error": {"code": "invalid_api_key", "message": "PRIVATE_TOKEN https://private.invalid/?key=sk-secret"}}, {"auth"}),
@@ -213,6 +259,105 @@ class InstalledSkillObservationTests(unittest.TestCase):
 
 @unittest.skipUnless(os.name == "posix", "fixture installation uses a real POSIX bundled wrapper")
 class InstalledSkillFixtureTests(unittest.TestCase):
+    def test_real_readonly_controls_then_read_then_write_and_uncertain_boundaries(self):
+        with tempfile.TemporaryDirectory() as name:
+            base = Path(name)
+            checkout, state = base / "project", base / "state"
+            fixture = smoke.prepare_fixture(ROOT, checkout, state, "unconfirmed-observation")
+            inbox = checkout / "docs/memory/inbox.md"
+            initial_inbox = inbox.read_bytes()
+            add_args = ["add", "Retries might improve throughput.", "--type", "decision", "--candidate", "--evidence", "agent-observed"]
+            read_args = ["read", "--task", "maintenance", "--path", "docs/memory/inbox.md", "--strict-routing"]
+
+            def call(identifier, arguments):
+                end = arguments.index("--") if "--" in arguments else len(arguments)
+                arguments = [*arguments[:end], "--project-root", ".", "--format", "json", *arguments[end:]]
+                command = shlex.join([smoke.CLI, *arguments])
+                result = subprocess.run([str(checkout / smoke.CLI), *arguments], cwd=checkout,
+                                        env=smoke.environment(state), text=True, capture_output=True,
+                                        timeout=30, check=False)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                return (
+                    event({"type": "command_execution", "id": identifier, "command": command}, "item.started"),
+                    event({"type": "command_execution", "id": identifier, "command": command,
+                           "aggregated_output": result.stdout, "exit_code": 0}),
+                )
+
+            literal_help = call("literal-help", ["add", "--type", "decision", "--candidate", "--evidence", "agent-observed", "--", "--help"])
+            self.assertNotEqual(inbox.read_bytes(), initial_inbox)  # This really wrote a candidate named --help.
+            literal_observed = proof(*literal_help)
+            self.assertEqual(literal_observed["readonly_cli_sequences"], [])
+            self.assertTrue(literal_observed["uncertain_mutation_sequences"])
+            inbox.write_bytes(initial_inbox)
+            help_events = call("help", ["add", "--help"])
+            preview_events = call("preview", ["subject", "add", "Readonly preview", "--kind", "concept", "--evidence", "user-confirmed"])
+            self.assertEqual(smoke.fingerprints(checkout), fixture["initial_files"])
+            read_events = call("read", read_args)
+            add_events = call("write", add_args)
+            observed = proof(*help_events, *preview_events, *read_events, *add_events)
+            result = smoke.grade(checkout, state, fixture, runtime(observed))
+            self.assertEqual(result["status"], "PASS", result)
+            self.assertEqual(observed["observations_schema_version"], 2)
+            self.assertEqual(len(observed["mutation_sequences"]), 3)  # Preserve legacy possible-event meaning.
+            self.assertEqual(len(observed["confirmed_mutation_sequences"]), 1)
+            self.assertEqual(observed["uncertain_mutation_sequences"], [])
+            first_read = observed["strict_reads"][0]["sequence"]
+            self.assertLess(min(observed["mutation_sequences"]), first_read)  # Old earliest-possible rule falsely fails.
+            actions = [row.get("cli_action") for row in observed["events"]]
+            self.assertIn("readonly-help", actions)
+            self.assertIn("readonly-preview", actions)
+            self.assertIn("confirmed-write", actions)
+
+            # A fresh starting artifact state, then an actual installed-CLI write
+            # before the actual strict read, still fails.
+            inbox.write_bytes(initial_inbox)
+            early_add = call("early-write", add_args)
+            late_read = call("late-read", read_args)
+            violation = smoke.grade(checkout, state, fixture, runtime(proof(*early_add, *late_read)))
+            self.assertEqual(violation["status"], "FAIL", violation)
+            self.assertFalse(violation["checks"]["strict_read_before_mutation"])
+
+            # A compound help+write is not a single read-only invocation. Its
+            # ambiguous execution cannot earn PASS, even with valid final data.
+            inbox.write_bytes(initial_inbox)
+            compound = shlex.join([smoke.CLI, "add", "--help"]) + "; " + shlex.join(
+                [smoke.CLI, *add_args, "--project-root", ".", "--format", "json"]
+            )
+            completed = subprocess.run(["/bin/sh", "-c", compound], cwd=checkout, env=smoke.environment(state),
+                                       capture_output=True, text=True, timeout=30, check=False)
+            self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+            compound_events = (
+                event({"type": "command_execution", "id": "compound", "command": compound}, "item.started"),
+                event({"type": "command_execution", "id": "compound", "command": compound,
+                       "aggregated_output": completed.stdout, "exit_code": 0}),
+            )
+            after_compound_read = call("after-compound", read_args)
+            ambiguous = smoke.grade(checkout, state, fixture, runtime(proof(*compound_events, *after_compound_read)))
+            self.assertEqual(ambiguous["status"], "REVIEW", ambiguous)
+            self.assertIsNone(ambiguous["checks"]["strict_read_before_mutation"])
+
+            # A complex but genuinely read-only command is left uncertain; it
+            # cannot silently certify a later write as having obeyed ordering.
+            for unknown_command in (smoke.CLI + " add --help && true", smoke.CLI + " subject rename MC-SUBJ-example Replacement"):
+                inbox.write_bytes(initial_inbox)
+                early_unknown = (
+                    event({"type": "command_execution", "id": "unknown", "command": unknown_command}, "item.started"),
+                    event({"type": "command_execution", "id": "unknown", "command": unknown_command,
+                           "aggregated_output": "opaque CLI result", "exit_code": 0}),
+                )
+                new_read = call("new-read", read_args)
+                new_add = call("new-write", add_args)
+                uncertain = smoke.grade(checkout, state, fixture, runtime(proof(*early_unknown, *new_read, *new_add)))
+                self.assertEqual(uncertain["status"], "REVIEW", uncertain)
+                self.assertTrue(all(value for key, value in uncertain["checks"].items() if key != "strict_read_before_mutation"))
+            unknown_without_start = event({"type": "command_execution", "id": "unbounded",
+                                           "command": smoke.CLI + " subject rename MC-SUBJ-example Replacement",
+                                           "aggregated_output": "opaque CLI result", "exit_code": 0})
+            unbounded = smoke.grade(checkout, state, fixture, runtime(proof(unknown_without_start, *new_read, *new_add)))
+            self.assertEqual(unbounded["status"], "REVIEW", unbounded)
+            for secret in ("Readonly preview", "Retries might improve throughput.", name):
+                self.assertNotIn(secret, json.dumps(observed))
+
     def test_controller_records_only_explicit_subset_and_rejects_duplicates(self):
         from contextlib import redirect_stderr, redirect_stdout
         import io
@@ -232,7 +377,8 @@ class InstalledSkillFixtureTests(unittest.TestCase):
             metadata = json.loads((base / "records/experiment.json").read_text())
             self.assertEqual(metadata["tasks"], selected)
             self.assertEqual(metadata["diagnostics_schema_version"], 1)
-            self.assertEqual(metadata["plan"], smoke.DIAGNOSTIC_PLAN)
+            self.assertEqual(metadata["plan"], smoke.OBSERVER_PLAN)
+            self.assertEqual(metadata["observations_schema_version"], 2)
             records = [json.loads(path.read_text()) for path in (base / "records").glob("installed-skill__*.json")]
             self.assertEqual({record["task_id"] for record in records}, set(selected))
             self.assertFalse((base / "records/installed-skill__scoped-implementation.json").exists())
@@ -268,12 +414,14 @@ class InstalledSkillFixtureTests(unittest.TestCase):
             refused = smoke.grade(checkout, state, missing, runtime(proof(read_event(route="INCOMPLETE"))))
             self.assertEqual(refused["status"], "PASS", refused)
             candidate_fixture = dict(fixture, task_id="unconfirmed-observation")
-            smoke.installed_cli(checkout, state, "add", "Retries might improve throughput.", "--type", "decision",
-                                "--candidate", "--evidence", "agent-observed")
+            candidate_payload = smoke.installed_cli(checkout, state, "add", "Retries might improve throughput.", "--type", "decision",
+                                                    "--candidate", "--evidence", "agent-observed")
             candidate_write = event({"type": "command_execution", "id": "add",
                                      "command": smoke.CLI + " add --candidate"}, "item.started")
+            candidate_done = event({"type": "command_execution", "id": "add", "command": smoke.CLI + " add --candidate",
+                                    "aggregated_output": json.dumps(candidate_payload), "exit_code": 0})
             candidate = smoke.grade(checkout, state, candidate_fixture,
-                                    runtime(proof(read_event(task="maintenance"), candidate_write)))
+                                    runtime(proof(read_event(task="maintenance"), candidate_write, candidate_done)))
             self.assertEqual(candidate["status"], "PASS", candidate)
             (checkout / smoke.INSTALL / "scripts/memory-custodian").write_text("changed", encoding="utf-8")
             changed = smoke.grade(checkout, state, candidate_fixture, runtime(proof(read_event(task="maintenance"))))
