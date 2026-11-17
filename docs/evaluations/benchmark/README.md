@@ -100,6 +100,9 @@ The next two revisions have separate reports and append-only evidence:
 
 - [Rename helper v2](CONTRACT-RENAME-HELPER-RESULTS.md): 19/19 fixed controls.
 - [No-prose-area v2](CONTRACT-AREA-PLAN-RESULTS.md): 23/23 fixed controls.
+- [Offline-plan v2](CONTRACT-OFFLINE-PLAN-RESULTS.md): 13/13 plan controls, with
+  separate actual-source import-policy regression checks.
+- [Token-estimate v2](CONTRACT-TOKEN-ESTIMATE-RESULTS.md): 19/19 implementation controls.
 
 Their explicitly published v2 delegation/format requirements govern those
 controls; they do not revise historical agent scores. Validator method hashes
@@ -109,3 +112,9 @@ sources. The original WP14A sample corresponds to commit `307e326`.
 The [local installed-workflow smoke](../INSTALLED-WORKFLOW-2026-11-16.md) covers
 actual installation, hook, and CLI execution without launching a model. It is
 separate from both contract-control evidence and live-agent evaluation.
+
+The [initial explicit installed-Skill live sample](../INSTALLED-SKILL-LIVE-RESULTS-2026-11-16.md)
+retains one PASS and two incomplete-runtime BLOCKER outcomes. Its
+[diagnostic follow-up plan](../INSTALLED-SKILL-LIVE-DIAGNOSTIC-PLAN-2026-11-17.md)
+selects only those incomplete tasks, preserving the initial sample and method
+snapshots. It does not establish automatic discovery or general effectiveness.

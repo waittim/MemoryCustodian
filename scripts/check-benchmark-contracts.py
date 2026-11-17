@@ -37,14 +37,14 @@ def main(argv: list[str] | None = None) -> int:
             for record in records:
                 path = args.record_dir / (record["result_id"] + ".json")
                 payload = json.dumps(record, indent=2, sort_keys=True) + "\n"
-                with path.open("x", encoding="utf-8") as handle:
+                with path.open("x", encoding="utf-8", newline="\n") as handle:
                     handle.write(payload)
                 inventory.append(hashlib.sha256(payload.encode()).hexdigest() + "  " + path.name)
-            with (args.record_dir / "SHA256SUMS").open("x", encoding="utf-8") as handle:
+            with (args.record_dir / "SHA256SUMS").open("x", encoding="utf-8", newline="\n") as handle:
                 handle.write("\n".join(inventory) + "\n")
         if args.report_file:
             args.report_file.parent.mkdir(parents=True, exist_ok=True)
-            with args.report_file.open("x", encoding="utf-8") as handle:
+            with args.report_file.open("x", encoding="utf-8", newline="\n") as handle:
                 handle.write(markdown_report(records))
         if args.format == "json":
             print(json.dumps(records, indent=2, sort_keys=True))

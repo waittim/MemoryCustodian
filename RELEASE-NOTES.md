@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+_Candidate for package version 0.14.0; not released._
+
 ### 0.14 development
 
 - Started the [0.14 reliability plan](docs/MemoryCustodian-v0.14.0-plan.md).
@@ -21,14 +23,25 @@
 - Added a local installed-plugin smoke covering the real installer, hook, and
   12 bundled-CLI calls in temporary directories. It found no defect in the tested
   paths; it does not launch an agent or validate live Skill behavior.
+- Completed independent offline-plan and token-estimate v2 contracts with 13
+  and 19 controls. Prose about avoiding network requests is accepted; a bounded
+  AST policy checks actual client imports without executing candidate code.
+  Varied whitespace-word checks reject the old constant-answer loophole.
+- Canonical UTF-8/LF evidence writing keeps inventory hashes consistent across
+  platforms. Candidate version checks now include the Skill-eval contract and
+  live-evaluation recipe.
+- Added a fixed real-Codex installed-Skill smoke. Its first sample observed one
+  scoped-implementation PASS and two incomplete-runtime BLOCKER outcomes;
+  preserved records and method snapshots keep those outcomes distinct. A
+  separately planned diagnostic sample retries only the incomplete tasks.
 - Preserve the original 18 tasks, fixtures, oracles, runner source hashes, and
   published pilot/interruption outcomes. New contract revisions use separate
   records; an oracle defect is not by itself a production Skill/CLI defect.
 - Keep production checkpointing deferred. The development interruption screen
   found no summary advantage beyond native continuation, and does not establish
   a material interruption-specific failure or general checkpoint uselessness.
-  Protocol stays 0.8 and Entry schema stays 3. The package version remains
-  unchanged; 0.14 has not been released.
+  Protocol stays 0.8 and Entry schema stays 3. Package metadata is synchronized
+  to the 0.14.0 candidate; no release has been published by this work.
 
 ## v0.13.0 - 2026-11-14
 

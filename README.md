@@ -8,13 +8,15 @@ It stores memory as plain Markdown in your repo and routes a bounded context pac
 
 **Durable memory. Minimal context.**
 
-[![Version](https://img.shields.io/badge/version-0.13.0-blue.svg)](https://github.com/waittim/MemoryCustodian/releases/latest)
+[![Version](https://img.shields.io/badge/version-0.14.0-blue.svg)](https://github.com/waittim/MemoryCustodian/releases/latest)
 [![CI](https://github.com/waittim/MemoryCustodian/actions/workflows/ci.yml/badge.svg)](https://github.com/waittim/MemoryCustodian/actions/workflows/ci.yml)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-agnostic-blue.svg)](#)
 [![Design: Offline-first](https://img.shields.io/badge/design-offline--first-blue.svg)](#)
 [![Blog](https://img.shields.io/badge/blog-MemoryCustodian-orange.svg)](https://www.zekun.blog/2026/07/01/memory-custodian/)
+
+> Development candidate: **0.14.0**. The published release remains available through the release link above.
 
 ## Why MemoryCustodian?
 
@@ -316,7 +318,7 @@ MemoryCustodian was developed prior to OpenAI Build Week (v0.7.0 baseline) and e
 ## Upgrading & Versioning
 
 MemoryCustodian tracks related package and protocol schemas:
-- **Package version** (`0.13.0`): CLI, skill bundle, and plugin metadata.
+- **Package version** (`0.14.0`): CLI, skill bundle, and plugin metadata.
 - **Protocol version** (`0.8`): manifest/routing rules, Entry schema 3, transaction schema 1, audit schema 1, and output envelope schema 1.
 - **Erasure scope** (`1`): the canonical `data.erasure_scope` child object shared by forget, purge, ID forget, local reset, and recovery.
 - **Project memory version**: Protocol metadata declared in your repository's `manifest.md`.

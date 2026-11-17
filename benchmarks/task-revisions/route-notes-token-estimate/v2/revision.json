@@ -1,0 +1,14 @@
+{
+  "base_oracle_sha256": "0db4a7d7c21c0ca8088a71526490dfa6094f5c9560078075913a6935e659a829",
+  "base_reference_sha256": "eb5e52b13cd784779414fe9ee6cb0c08b398d9b10bdfc40f4bd545f1b52b1d08",
+  "base_task_sha256": "18d8e09e87e5ec6f2552573030388b33e32a09fee2b9c3f0644a30ce6040756a",
+  "base_task_version": 1,
+  "cases_sha256": "9d662b9d7eac14785026c01eb37e5ffbf139f16eae41ba531540f88eeb6cc758",
+  "fixture_sha256": "7665aa3483f6929c8ad61403690513f124fc0e7a4b8bc36c2eabd1900bceb5d1",
+  "oracle_sha256": "41bcfef7d7fd59324c30b11890e5f882ef596ba031788c050f1c202eaf8bf7fd",
+  "public_contract_sha256": "22c92b3cdee655b8d53c4162e91972455fc5835923cc7145b8a5592c05c6b35d",
+  "reason": "Replace the single behavioral sample with an explicit word-count contract and varied deterministic controls; preserve version-1 materials and results.",
+  "revision_format": 1,
+  "task_id": "route-notes-token-estimate",
+  "task_version": 2
+}

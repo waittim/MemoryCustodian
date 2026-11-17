@@ -1,0 +1,20 @@
+{
+  "cli_binary_sha256": "3ea20787e106af94573d3d6c19480aed93a1334b0dd32b6b04e2f780ce82cf4b",
+  "cli_version": "codex-cli 0.169.0-alpha.11.1",
+  "generated_at": "2026-11-17T04:19:19.354811+00:00",
+  "installed_skill_experiment_format": 1,
+  "model": "gpt-6.1-sol",
+  "policy": "workspace-write;agent-shell-network=off;approval=never;ephemeral;user-config=ignored;host-skills/bundled-skills/apps/plugins/memories/web/delegation=off;manual-project-skill-invocation;reasoning=low",
+  "source_sha256": {
+    "benchmarks/runners/codex_runtime.py": "0735c9cd3d9fbcce264e27cfbc7c853e5a90fd75ebe0c5b8e9baec0abc9c4dc7",
+    "benchmarks/runners/installed_skill_live.py": "834817ea810dd785b62b127fa68bd52bb2472590cf91cd0675813103baa53000",
+    "docs/evaluations/INSTALLED-SKILL-LIVE-PLAN-2026-11-16.md": "6241bb4a5e467444ad61e577f7d59298b66b25018767682475f3049f9b1d2a7e",
+    "scripts/run-installed-skill-eval.py": "bfe6cae1080cb4fd8b27ef01f562ec07a3c016ceb04431d6789e435c1a4629ba"
+  },
+  "tasks": [
+    "scoped-implementation",
+    "missing-scope",
+    "unconfirmed-observation"
+  ],
+  "timeout_seconds": 180
+}

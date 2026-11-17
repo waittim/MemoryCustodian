@@ -1,0 +1,12 @@
+{
+  "copied_source_sha256": {
+    "benchmarks/runners/installed_skill_live.py": "834817ea810dd785b62b127fa68bd52bb2472590cf91cd0675813103baa53000",
+    "docs/evaluations/INSTALLED-SKILL-LIVE-PLAN-2026-11-16.md": "6241bb4a5e467444ad61e577f7d59298b66b25018767682475f3049f9b1d2a7e",
+    "scripts/run-installed-skill-eval.py": "bfe6cae1080cb4fd8b27ef01f562ec07a3c016ceb04431d6789e435c1a4629ba"
+  },
+  "original_experiment_sha256": "1f29afd8cf2aa00339aafd2cc49920744d5ca30dffd30d66b811b6b21e354c2b",
+  "snapshot_format": 1,
+  "unchanged_historical_source_sha256": {
+    "benchmarks/runners/codex_runtime.py": "0735c9cd3d9fbcce264e27cfbc7c853e5a90fd75ebe0c5b8e9baec0abc9c4dc7"
+  }
+}

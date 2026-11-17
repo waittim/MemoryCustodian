@@ -1,12 +1,12 @@
 # MemoryCustodian v0.14.0 development plan
 
-Status: In progress; WP14A and the first two WP14B revisions validated locally.
+Status: Candidate preparation; all five contract revisions validated locally.
 
 Started: 2026-11-16.
 
 Target: Evidence-backed reliability and evaluation-contract improvements.
-Compatibility: Shared Protocol 0.8; Entry schema 3. Package version is not bumped
-by this work package, and this document is not a release announcement.
+Compatibility: Candidate package 0.14.0; Shared Protocol 0.8; Entry schema 3.
+Candidate metadata is prepared for validation; this is not a release announcement.
 
 ## Scope decision
 
@@ -90,12 +90,11 @@ matrices; remote CI and other local Python/OS combinations have not been run.
 
 ## WP14B — Review adjacent evaluation contracts
 
-Status: First two revisions completed on 2026-11-16; remaining findings are queued.
+Status: All four adjacent revisions completed; formal offline evidence retained.
 
-First inspect `route-notes-rename-helper` for syntax-specific acceptance and
-`route-notes-no-prose-area` for rejection caused by explanatory text. Then
-consider string-specific rejection in `field-ledger-offline-plan` and accidental
-acceptance of constant answers in `route-notes-token-estimate`.
+The review covers syntax-specific acceptance in `route-notes-rename-helper`,
+explanatory text in `route-notes-no-prose-area`, offline-plan keyword rejection,
+and accidental acceptance of constant token estimates.
 
 Completed:
 
@@ -106,6 +105,13 @@ Completed:
 - `route-notes-no-prose-area` v2: 23/23 controls, with independent action-line
   parsing that accepts explanatory text and rejects inline-only or conflicting
   actions. The supported line syntax is explicit in its public contract.
+- `field-ledger-offline-plan` v2: 13/13 plan controls, plus regression tests for
+  actual client imports, permitted local URL utilities, unavailable source,
+  parser complexity, and no candidate-code execution. Prose is not classified
+  through network-keyword bans.
+- `route-notes-token-estimate` v2: 19/19 controls, with varied fixed inputs and
+  composition checks for the public whitespace-word rule. A constant answer
+  that passed the old single sample is rejected.
 - The validator now permits each task's declared supported output files and
   writes task-specific reports. Records retain method hashes and Git context;
   the earlier WP14A records remain reproducible at commit `307e326`, even as the
@@ -119,8 +125,15 @@ remote CI has not been run in this session.
 
 These controls use the explicitly published v2 contracts, which clarify some
 delegation and format requirements. Their acceptance classes do not retroactively
-change the v1 contract or the recorded agent scores. The next contract candidates
-are `field-ledger-offline-plan` and `route-notes-token-estimate`.
+change the v1 contract or the recorded agent scores. The final reports are
+[offline plan](evaluations/benchmark/CONTRACT-OFFLINE-PLAN-RESULTS.md) and
+[token estimate](evaluations/benchmark/CONTRACT-TOKEN-ESTIMATE-RESULTS.md).
+
+Across WP14A/B, all 89 constructed controls match their expected outcomes.
+Evidence files and their inventories use UTF-8/LF so Windows newline conversion
+cannot invalidate recorded byte hashes; Windows CI includes a focused writer
+test. Candidate version checks also include the Skill-eval contract and recipe,
+preventing an omitted evaluation version from drifting after a package update.
 
 For each confirmed defect, write the public behavioral contract, demonstrate
 both a conforming and nonconforming case, and add a separate task revision and
@@ -130,7 +143,7 @@ increase its success rate.
 
 ## WP14C — Reproduce product failures through installed workflows
 
-Status: Local installed-artifact smoke completed; live-agent validation remains open.
+Status: Local installed-artifact smoke passed; live sample partially completed.
 
 The [installed-workflow report](evaluations/INSTALLED-WORKFLOW-2026-11-16.md)
 records a temporary copied-plugin installation, the real installed hook, and
@@ -139,9 +152,15 @@ candidate memory, strict routing, checks, and audit. No CLI defect was observed
 within that coverage. Installation and state were temporary; global configuration
 and authentication were untouched.
 
-This does not exercise a model's discovery or use of the installed Skill and
-does not replay the discarded pilot workspaces. It therefore does not close
-full installed-Skill live-agent validation or establish task effectiveness.
+This local smoke does not itself exercise a model. The separate
+[initial live sample](evaluations/INSTALLED-SKILL-LIVE-RESULTS-2026-11-16.md)
+observed a real Codex PASS for scoped implementation using explicitly invoked
+installed Skill/CLI files. Its other two tasks stopped before runtime completion
+and remain infrastructure BLOCKER, not product failures or successes. Original
+records and exact method snapshots are retained. A new
+[diagnostic follow-up](evaluations/INSTALLED-SKILL-LIVE-DIAGNOSTIC-PLAN-2026-11-17.md)
+selects only those two incomplete tasks with unchanged prompts and acceptance.
+Automatic discovery, other runtimes, and comparative effectiveness are untested.
 
 Exercise a fully installed Skill/CLI path before assigning a benchmark failure
 to the production product. Record the exact installation, runtime, task, scoped
@@ -163,12 +182,13 @@ evidence of incremental value.
 
 ## Completion and release gates
 
-WP14A and the first two WP14B revisions have checked offline evidence. Continue
-with the queued contract candidates or a separately planned live installed-Skill
-evaluation when justified. Mark later work
+WP14A/B have checked offline evidence. Complete the independent diagnostic
+follow-up and candidate validation before final review. Mark later work
 packages as deferred when their prerequisites are absent; they are not all
 mandatory release features. Before any 0.14 release, identify the work actually
 shipped, pass its relevant checks and repository-required tests, retain the
 historical evidence, and keep public claims within the measured scope.
 
-This development work does not authorize a package-version bump, tag, or release.
+Candidate metadata is prepared under the user's instruction to execute this
+plan. Tagging and publication remain separate from candidate validation. See
+the [readiness record](MemoryCustodian-v0.14.0-readiness.md) for remaining gates.

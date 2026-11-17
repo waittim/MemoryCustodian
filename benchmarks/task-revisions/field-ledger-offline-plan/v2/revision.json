@@ -1,0 +1,14 @@
+{
+  "base_oracle_sha256": "56234daa6ea5b2befc3dc5c81efc9b110d46108669d44f7b8f318b880bede63f",
+  "base_reference_sha256": "a650765a4c417ada575b7b87979aa71ffa9176501fd98fe87265648669c3e39c",
+  "base_task_sha256": "94cd1dfccf71391b43e84bded256e16e6ae24f43e96df3d571446f9fc2496a2a",
+  "base_task_version": 1,
+  "cases_sha256": "280c99c5e1ccb012132f80b821743d49d009bd6a0ec88cdc6ce7c121fd41f303",
+  "fixture_sha256": "3c53494ae0e974bc8e5e4e59988b22e1ccfd372752f1ca01522c40ea3c992a5b",
+  "oracle_sha256": "e9b1fad36ec7768e48206bd1ac88127820065bb7a5330790cf76717bb83ad446",
+  "public_contract_sha256": "573abe1873e70b8dac537dcc092f8ef5f2481dd538bc1825a7bac512d7c35076",
+  "reason": "Accept operational-constraint prose without keyword bans and check a bounded actual-source network-client import policy; preserve version-1 materials and results.",
+  "revision_format": 1,
+  "task_id": "field-ledger-offline-plan",
+  "task_version": 2
+}

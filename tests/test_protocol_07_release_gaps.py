@@ -16,6 +16,8 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
+from memory_custodian import __version__
+
 from memory_custodian.conflicts import analyze_conflicts
 from memory_custodian.context import ContextRoutingResult
 from memory_custodian.entries import (
@@ -3862,8 +3864,8 @@ class MergeAndDeterminismReleaseTests(unittest.TestCase):
             original_manifest = manifest.read_text(encoding="utf-8")
             manifest.write_text(
                 original_manifest.replace(
-                    "initialized_with: memory-custodian 0.13.0",
-                    "initialized_with: memory-custodian 0.13.0-audit",
+                    f"initialized_with: memory-custodian {__version__}",
+                    f"initialized_with: memory-custodian {__version__}-audit",
                 ),
                 encoding="utf-8",
             )

@@ -16,5 +16,5 @@ Current direction:
 - Keep context packs small and manifest-driven; substantial work uses `brief.md` plus root constraints and explicit scope.
 - Keep memory useful through real project briefs, concise scope-first decisions, and semantic review before decision archival.
 - Evaluate governed memory with controlled, information-matched pilots before adding recall, checkpoints, or memory formation. Require held-out evidence for general effectiveness claims; keep Protocol 0.8.
-- 0.14 reliability: split-export, rename-helper, and area-plan v2 controls pass; preserve historical definitions/results. Plan: docs/MemoryCustodian-v0.14.0-plan.md.
-- Local installed CLI smoke passes; live-agent Skill behavior remains untested. Checkpoint evidence remains insufficient. Reports: docs/evaluations/benchmark/README.md.
+- 0.14 candidate: five v2 contracts pass 89 offline controls; preserve historical definitions/results. Plan: docs/MemoryCustodian-v0.14.0-plan.md.
+- Local installed CLI smoke passes. Explicit installed-Skill live sample: one scoped PASS, two runtime BLOCKER; diagnostics follow separately. Automatic discovery and checkpoint value remain unproven. Reports: docs/evaluations/benchmark/README.md.

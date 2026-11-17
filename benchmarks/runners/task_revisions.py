@@ -15,7 +15,8 @@ import tempfile
 
 from benchmarks.graders.mechanical import FAILURE_LABELS, grade_script, run_visible_tests
 from benchmarks.runners.harness import (
-    HarnessError, SOLUTION_FILES, command_for, fixture_pin_issues, git_dirty, git_head, prepare_checkout,
+    HarnessError, SOLUTION_FILES, command_for, fixture_pin_issues, git_dirty, git_head,
+    host_protocol, package_version, prepare_checkout,
     tree_hash, validate_manifest, validate_task,
 )
 
@@ -30,6 +31,7 @@ METHOD_PATHS = (
     "benchmarks/runners/task_revisions.py", "scripts/check-benchmark-contracts.py",
     "benchmarks/runners/harness.py", "benchmarks/graders/mechanical.py",
     "benchmarks/oracles/_lib/oracle_support.py",
+    "pyproject.toml", "docs/memory/manifest.md",
 )
 
 
@@ -222,9 +224,9 @@ def run_contracts(root: Path, revision: dict) -> list[dict]:
                 prepare_checkout(root, base, "MEMORYCUSTODIAN", checkout)
                 # New requirements are explicit in the revision's visible input.
                 # These constructed cases are not historical agent checkouts.
-                (checkout / "TASK-CONTRACT.md").write_text(contract, encoding="utf-8")
+                (checkout / "TASK-CONTRACT.md").write_text(contract, encoding="utf-8", newline="\n")
                 for relative, source in case["files"].items():
-                    (checkout / relative).write_text(source, encoding="utf-8")
+                    (checkout / relative).write_text(source, encoding="utf-8", newline="\n")
                 hashes.append(tree_hash(checkout))
                 visible = run_visible_tests(checkout, command_for(base))
                 graded = grade_script(oracle, checkout, root / "benchmarks/oracles/_lib")
@@ -244,6 +246,7 @@ def run_contracts(root: Path, revision: dict) -> list[dict]:
                 "result_id": f"contract__{base['task_id']}__v{version}__{case['name']}",
                 "evidence_class": "offline-contract", "status": status,
                 "task_id": base["task_id"], "task_version": version,
+                "package_version": package_version(root), "protocol_version": host_protocol(root),
                 "case": case["name"], "description": case["description"],
                 "expected_status": case["expected_status"], "expected_labels": case["expected_labels"],
                 "visible_source_sha256": hashes[0], "grades": grades,
