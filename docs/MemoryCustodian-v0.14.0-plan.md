@@ -1,6 +1,6 @@
 # MemoryCustodian v0.14.0 development plan
 
-Status: In progress; WP14A completed and locally validated.
+Status: In progress; WP14A and the first two WP14B revisions validated locally.
 
 Started: 2026-11-16.
 
@@ -90,12 +90,37 @@ matrices; remote CI and other local Python/OS combinations have not been run.
 
 ## WP14B — Review adjacent evaluation contracts
 
-Status: Planned; each finding requires independent confirmation.
+Status: First two revisions completed on 2026-11-16; remaining findings are queued.
 
 First inspect `route-notes-rename-helper` for syntax-specific acceptance and
 `route-notes-no-prose-area` for rejection caused by explanatory text. Then
 consider string-specific rejection in `field-ledger-offline-plan` and accidental
 acceptance of constant answers in `route-notes-token-estimate`.
+
+Completed:
+
+- `route-notes-rename-helper` v2: 19/19 controls, including equivalent sorting
+  expressions and an actual wrapper delegation probe. Its public contract
+  explicitly states the dynamic helper binding, call count, argument forwarding,
+  and result identity required by the probe.
+- `route-notes-no-prose-area` v2: 23/23 controls, with independent action-line
+  parsing that accepts explanatory text and rejects inline-only or conflicting
+  actions. The supported line syntax is explicit in its public contract.
+- The validator now permits each task's declared supported output files and
+  writes task-specific reports. Records retain method hashes and Git context;
+  the earlier WP14A records remain reproducible at commit `307e326`, even as the
+  revision validator evolves.
+
+Reports: [rename helper](evaluations/benchmark/CONTRACT-RENAME-HELPER-RESULTS.md)
+and [area plan](evaluations/benchmark/CONTRACT-AREA-PLAN-RESULTS.md). All 574 local
+unittest cases passed. The original fixture, evidence, skill/adapter, erasure,
+and version checks also passed. Linux and Windows CI include all three revisions;
+remote CI has not been run in this session.
+
+These controls use the explicitly published v2 contracts, which clarify some
+delegation and format requirements. Their acceptance classes do not retroactively
+change the v1 contract or the recorded agent scores. The next contract candidates
+are `field-ledger-offline-plan` and `route-notes-token-estimate`.
 
 For each confirmed defect, write the public behavioral contract, demonstrate
 both a conforming and nonconforming case, and add a separate task revision and
@@ -105,7 +130,18 @@ increase its success rate.
 
 ## WP14C — Reproduce product failures through installed workflows
 
-Status: Conditional on diagnostic evidence.
+Status: Local installed-artifact smoke completed; live-agent validation remains open.
+
+The [installed-workflow report](evaluations/INSTALLED-WORKFLOW-2026-11-16.md)
+records a temporary copied-plugin installation, the real installed hook, and
+12 actual bundled-CLI invocations covering initialization, Subjects, active and
+candidate memory, strict routing, checks, and audit. No CLI defect was observed
+within that coverage. Installation and state were temporary; global configuration
+and authentication were untouched.
+
+This does not exercise a model's discovery or use of the installed Skill and
+does not replay the discarded pilot workspaces. It therefore does not close
+full installed-Skill live-agent validation or establish task effectiveness.
 
 Exercise a fully installed Skill/CLI path before assigning a benchmark failure
 to the production product. Record the exact installation, runtime, task, scoped
@@ -127,7 +163,9 @@ evidence of incremental value.
 
 ## Completion and release gates
 
-WP14A has checked offline evidence; the next work package is WP14B. Mark later work
+WP14A and the first two WP14B revisions have checked offline evidence. Continue
+with the queued contract candidates or a separately planned live installed-Skill
+evaluation when justified. Mark later work
 packages as deferred when their prerequisites are absent; they are not all
 mandatory release features. Before any 0.14 release, identify the work actually
 shipped, pass its relevant checks and repository-required tests, retain the

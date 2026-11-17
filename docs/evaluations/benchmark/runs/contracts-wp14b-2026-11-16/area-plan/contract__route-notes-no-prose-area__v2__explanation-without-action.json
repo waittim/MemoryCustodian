@@ -1,0 +1,66 @@
+{
+  "case": "explanation-without-action",
+  "contract_record_format": 1,
+  "description": "A correct explanation does not replace the action line.",
+  "evidence_class": "offline-contract",
+  "expected_labels": [
+    "MEMORY_OMISSION"
+  ],
+  "expected_status": "FAIL",
+  "grades": {
+    "v1": {
+      "failure_labels": [
+        "MEMORY_FALSE_POSITIVE"
+      ],
+      "oracle_exit_code": 1,
+      "oracle_status": "FAIL",
+      "status": "FAIL",
+      "visible_tests": "PASS"
+    },
+    "v2": {
+      "failure_labels": [
+        "MEMORY_OMISSION"
+      ],
+      "oracle_exit_code": 1,
+      "oracle_status": "FAIL",
+      "status": "FAIL",
+      "visible_tests": "PASS"
+    }
+  },
+  "method_context": {
+    "git_commit": "307e326a970402f14df959ec3205202da054c0f5",
+    "git_dirty": true
+  },
+  "result_id": "contract__route-notes-no-prose-area__v2__explanation-without-action",
+  "revision_descriptor": {
+    "base_oracle_sha256": "0704f3452949c94b5d0b64e7e6684672ec92b7dd834f963b76f771007b2f26d1",
+    "base_reference_sha256": "59646fbeb594c190f3a7e1f33fb7d718c235529d96e165ee8676fbe6a6985bd5",
+    "base_task_sha256": "9d11638a9aa8d401938e75c495c9cfcaeb09fca0664223ed45fb4031140e810e",
+    "base_task_version": 1,
+    "cases_sha256": "89b02831fac11cf2aaad8db215c314e69dd11a16fa55dc35f2e238c620586102",
+    "fixture_sha256": "7665aa3483f6929c8ad61403690513f124fc0e7a4b8bc36c2eabd1900bceb5d1",
+    "oracle_sha256": "f9ef7147b945a5755070c2fecc489796f26f28d102db3c0469cf9e6efc7b53a3",
+    "public_contract_sha256": "7ab7c9d83a13485c4f10e56adf6f63d6b68d1f939959b0613d8e3761031b5fc7",
+    "reason": "Distinguish explicit standalone action lines from explanatory or quoted text, enforcing the published own-line requirement; preserve version-1 materials and outcomes.",
+    "revision_format": 1,
+    "task_id": "route-notes-no-prose-area",
+    "task_version": 2
+  },
+  "source_sha256": {
+    "benchmarks/graders/mechanical.py": "228586fa06c1b7c65b8e10dd01eb2b86bc6c03005610c591c177db276718d234",
+    "benchmarks/oracles/_lib/oracle_support.py": "622ddacdc098659badc0ba521e2ab0dc4fac9e5957d366b3b966cd2f996467e6",
+    "benchmarks/oracles/route-notes-no-prose-area/check.py": "0704f3452949c94b5d0b64e7e6684672ec92b7dd834f963b76f771007b2f26d1",
+    "benchmarks/runners/harness.py": "8907a1ab2d254d8813a8677f46c1babe6e1073c7a68fcaf72ffc40e3382b2007",
+    "benchmarks/runners/task_revisions.py": "ff8d96f572f85552e4d79af8f8c84e87f93b6c522c1513702b75ca42e2391659",
+    "benchmarks/task-revisions/route-notes-no-prose-area/v2/cases.py": "89b02831fac11cf2aaad8db215c314e69dd11a16fa55dc35f2e238c620586102",
+    "benchmarks/task-revisions/route-notes-no-prose-area/v2/check.py": "f9ef7147b945a5755070c2fecc489796f26f28d102db3c0469cf9e6efc7b53a3",
+    "benchmarks/task-revisions/route-notes-no-prose-area/v2/public-contract.md": "7ab7c9d83a13485c4f10e56adf6f63d6b68d1f939959b0613d8e3761031b5fc7",
+    "benchmarks/task-revisions/route-notes-no-prose-area/v2/revision.json": "ffe13213c687a9161a5e77ceb00f110904ef52dd061337fcf8c4512695848d81",
+    "benchmarks/tasks/route-notes-no-prose-area.json": "9d11638a9aa8d401938e75c495c9cfcaeb09fca0664223ed45fb4031140e810e",
+    "scripts/check-benchmark-contracts.py": "83e60cfae78a2cd113254a6d9d5f56bbf2dd24fe4846b78540f8e0993e4f9a84"
+  },
+  "status": "PASS",
+  "task_id": "route-notes-no-prose-area",
+  "task_version": 2,
+  "visible_source_sha256": "8facc718fe8a395d7d1f2ee379d60f9fe6e8240f079f38de964def7e23b982f0"
+}

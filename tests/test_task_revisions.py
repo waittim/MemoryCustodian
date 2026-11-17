@@ -223,8 +223,35 @@ class RevisionMaterials(unittest.TestCase):
             revisions.load_cases(self.root, revision)
         self.assertFalse(marker.exists(), "case import preceded base-material verification")
 
+    def test_case_outputs_are_limited_to_declared_supported_task_paths(self):
+        path = self.root / REVISION / "cases.py"
+        for output in ("router.py", "PLAN.md", "TASK-CONTRACT.md", "../ledger.py", "/tmp/ledger.py"):
+            with self.subTest(output=output):
+                case = {"name": "unexpected-output", "expected_status": "PASS", "expected_labels": [],
+                        "description": "A case cannot change an undeclared output.", "files": {output: ""}}
+                path.write_text("def build_cases(root):\n    return " + repr([case]) + "\n")
+                self.descriptor["cases_sha256"] = sha(path)
+                self.write_descriptor()
+                with self.assertRaisesRegex(HarnessError, "declared supported task outputs"):
+                    revisions.load_cases(self.root, self.load())
+
 
 class TaskRevisionExecutionTests(unittest.TestCase):
+    def test_revisions_load_router_and_plan_outputs_with_task_specific_reports(self):
+        for task_id, output, count in (("route-notes-rename-helper", "router.py", 19),
+                                       ("route-notes-no-prose-area", "PLAN.md", 23)):
+            with self.subTest(task_id=task_id):
+                revision = revisions.load_revision(ROOT, task_id, 2)
+                cases = revisions.load_cases(ROOT, revision)
+                self.assertEqual(len(cases), count)
+                self.assertTrue(all(set(case["files"]) == {output} for case in cases))
+                record = {"task_id": task_id, "task_version": 2, "case": "reference",
+                          "expected_status": "PASS", "status": "PASS",
+                          "grades": {"v1": {"oracle_status": "PASS"}, "v2": {"oracle_status": "PASS"}}}
+                report = revisions.markdown_report([record])
+                self.assertTrue(report.startswith(f"# {task_id} v2 contract validation"))
+                self.assertIn(f"--task {task_id}", report)
+
     def test_combined_status_preserves_all_infrastructure_outcomes(self):
         self.assertEqual(revisions.combined_status("PASS", "PASS"), "PASS")
         for pair in (("PASS", "FAIL"), ("FAIL", "PASS"), ("FAIL", "FAIL")):
@@ -261,6 +288,7 @@ class TaskRevisionExecutionTests(unittest.TestCase):
                     self.assertEqual(record["status"], "PASS")
                     self.assertEqual(record["evidence_class"], "offline-contract")
                     self.assertEqual(record["task_version"], 2)
+                    self.assertEqual(set(record["method_context"]), {"git_commit", "git_dirty"})
                     self.assertEqual(record["revision_descriptor"]["base_task_version"], 1)
                     self.assertEqual(record["grades"]["v2"]["oracle_status"], record["expected_status"])
                     self.assertEqual(record["grades"]["v2"]["failure_labels"], record["expected_labels"])

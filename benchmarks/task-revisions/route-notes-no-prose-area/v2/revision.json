@@ -1,0 +1,14 @@
+{
+  "base_oracle_sha256": "0704f3452949c94b5d0b64e7e6684672ec92b7dd834f963b76f771007b2f26d1",
+  "base_reference_sha256": "59646fbeb594c190f3a7e1f33fb7d718c235529d96e165ee8676fbe6a6985bd5",
+  "base_task_sha256": "9d11638a9aa8d401938e75c495c9cfcaeb09fca0664223ed45fb4031140e810e",
+  "base_task_version": 1,
+  "cases_sha256": "89b02831fac11cf2aaad8db215c314e69dd11a16fa55dc35f2e238c620586102",
+  "fixture_sha256": "7665aa3483f6929c8ad61403690513f124fc0e7a4b8bc36c2eabd1900bceb5d1",
+  "oracle_sha256": "f9ef7147b945a5755070c2fecc489796f26f28d102db3c0469cf9e6efc7b53a3",
+  "public_contract_sha256": "7ab7c9d83a13485c4f10e56adf6f63d6b68d1f939959b0613d8e3761031b5fc7",
+  "reason": "Distinguish explicit standalone action lines from explanatory or quoted text, enforcing the published own-line requirement; preserve version-1 materials and outcomes.",
+  "revision_format": 1,
+  "task_id": "route-notes-no-prose-area",
+  "task_version": 2
+}

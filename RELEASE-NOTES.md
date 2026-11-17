@@ -13,6 +13,14 @@
 - Added revision descriptors with source hashes, checks that reject changed
   sources before case execution, append-only offline evidence, 16 regression
   tests, and revision checks in CI.
+- Added independent version-2 contracts for `route-notes-rename-helper` and
+  `route-notes-no-prose-area`, with 19 and 23 fixed controls respectively.
+  The former verifies behavior and actual wrapper delegation; the latter
+  separates standalone actions from explanatory text. The validator accepts
+  declared supported task outputs and retains method hashes and Git context.
+- Added a local installed-plugin smoke covering the real installer, hook, and
+  12 bundled-CLI calls in temporary directories. It found no defect in the tested
+  paths; it does not launch an agent or validate live Skill behavior.
 - Preserve the original 18 tasks, fixtures, oracles, runner source hashes, and
   published pilot/interruption outcomes. New contract revisions use separate
   records; an oracle defect is not by itself a production Skill/CLI defect.

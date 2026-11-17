@@ -129,6 +129,11 @@ python3 scripts/check-benchmark-contracts.py \
   --task field-ledger-split-export --task-version 2
 ```
 
+The same entry point also accepts `route-notes-rename-helper` and
+`route-notes-no-prose-area` at version 2. Cases may write only files that are both
+declared task outputs and supported by the fixture harness; they cannot alter
+another task's outputs or overwrite `TASK-CONTRACT.md`.
+
 The checker makes the revision's `public-contract.md` visible as
 `TASK-CONTRACT.md` in each constructed checkout. Separate checkouts with
 identical input hashes are graded by the v1 and v2 oracles. Its record status
@@ -140,3 +145,8 @@ append-only, source-bound records and their SHA-256 inventory. Every run checks
 the descriptor pins before executing cases and rechecks them before writing
 evidence. A failed or unavailable grader stays explicit; it never becomes a
 successful contract check. See the [0.14 plan](../docs/MemoryCustodian-v0.14.0-plan.md).
+
+The immutable v1 harness remains separate from the revision validator. As the
+revision validator evolves, new records retain method hashes and Git context;
+older records retain their original hashes and are reproduced using their
+recorded method source, not silently compared as if the method were unchanged.

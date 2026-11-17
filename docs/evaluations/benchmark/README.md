@@ -95,3 +95,17 @@ the historical pilot scores remain as recorded.
 
 The [0.14 plan](../../MemoryCustodian-v0.14.0-plan.md) tracks the next contract
 reviews and the prerequisites for product-path or checkpoint work.
+
+The next two revisions have separate reports and append-only evidence:
+
+- [Rename helper v2](CONTRACT-RENAME-HELPER-RESULTS.md): 19/19 fixed controls.
+- [No-prose-area v2](CONTRACT-AREA-PLAN-RESULTS.md): 23/23 fixed controls.
+
+Their explicitly published v2 delegation/format requirements govern those
+controls; they do not revise historical agent scores. Validator method hashes
+can evolve across samples, while each recorded sample retains its original
+sources. The original WP14A sample corresponds to commit `307e326`.
+
+The [local installed-workflow smoke](../INSTALLED-WORKFLOW-2026-11-16.md) covers
+actual installation, hook, and CLI execution without launching a model. It is
+separate from both contract-control evidence and live-agent evaluation.

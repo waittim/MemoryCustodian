@@ -1,0 +1,14 @@
+{
+  "base_oracle_sha256": "da8bbd2a2ca6c6749b867e9d1c2bd840ab005d84687b707299cf679f2c08b125",
+  "base_reference_sha256": "b693637cb38d8f7c9a1f4f0eff8123faaa4b021b80a9301dc8603f93bbfc137f",
+  "base_task_sha256": "1adb79b2683bef5fde3f468b750d411179f7e8f40867bc68677a8521359ac2d6",
+  "base_task_version": 1,
+  "cases_sha256": "ef59f8cb231da01954774029b32a57b482fa3a77d17d7a919111496735048216",
+  "fixture_sha256": "7665aa3483f6929c8ad61403690513f124fc0e7a4b8bc36c2eabd1900bceb5d1",
+  "oracle_sha256": "47d13d6805ffe516481ce344698eba6d5822651396f70a244038d0755a17d894",
+  "public_contract_sha256": "c1accf7ba8aa817d7a492e6982cbf09b442c5f9900e22644129e9fe3452002ce",
+  "reason": "Replace sorting-expression source matching with an explicit selection-behavior and live-helper delegation contract; preserve version-1 materials and outcomes.",
+  "revision_format": 1,
+  "task_id": "route-notes-rename-helper",
+  "task_version": 2
+}

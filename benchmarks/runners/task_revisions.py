@@ -15,7 +15,7 @@ import tempfile
 
 from benchmarks.graders.mechanical import FAILURE_LABELS, grade_script, run_visible_tests
 from benchmarks.runners.harness import (
-    HarnessError, command_for, fixture_pin_issues, prepare_checkout,
+    HarnessError, SOLUTION_FILES, command_for, fixture_pin_issues, git_dirty, git_head, prepare_checkout,
     tree_hash, validate_manifest, validate_task,
 )
 
@@ -171,6 +171,7 @@ def load_cases(root: Path, revision: dict) -> list[dict]:
     if not isinstance(cases, list) or not cases:
         raise HarnessError("contract cases must be a nonempty list")
     names = set()
+    allowed_files = set(current["base_task"]["expected_touched_paths"]) & SOLUTION_FILES
     for case in cases:
         if not isinstance(case, dict) or set(case) != {
             "name", "expected_status", "expected_labels", "description", "files",
@@ -191,9 +192,9 @@ def load_cases(root: Path, revision: dict) -> list[dict]:
         if not isinstance(case["description"], str) or not case["description"]:
             raise HarnessError("contract case needs a description")
         files = case["files"]
-        if (not isinstance(files, dict) or not files or set(files) - {"ledger.py", "export.py"}
+        if (not isinstance(files, dict) or not files or set(files) - allowed_files
                 or not all(isinstance(value, str) for value in files.values())):
-            raise HarnessError("contract cases may change only ledger.py and export.py")
+            raise HarnessError("contract cases may change only declared supported task outputs")
     return cases
 
 
@@ -208,6 +209,7 @@ def run_contracts(root: Path, revision: dict) -> list[dict]:
     version = revision["descriptor"]["task_version"]
     cases = load_cases(root, revision)
     contract = (revision["directory"] / "public-contract.md").read_text(encoding="utf-8")
+    method_context = {"git_commit": git_head(root), "git_dirty": git_dirty(root)}
     records = []
     with tempfile.TemporaryDirectory(prefix="memory-custodian-contract-") as name:
         scratch = Path(name)
@@ -246,6 +248,7 @@ def run_contracts(root: Path, revision: dict) -> list[dict]:
                 "expected_status": case["expected_status"], "expected_labels": case["expected_labels"],
                 "visible_source_sha256": hashes[0], "grades": grades,
                 "revision_descriptor": revision["descriptor"], "source_sha256": revision["source_sha256"],
+                "method_context": method_context,
             })
     # Verify every pinned source again before publishing any record.
     current = load_revision(root, base["task_id"], version)
@@ -258,7 +261,7 @@ def markdown_report(records: list[dict]) -> str:
     if not records:
         raise HarnessError("cannot report an empty contract run")
     first = records[0]
-    lines = ["# Split-export v2 contract validation", "",
+    lines = [f"# {first['task_id']} v{first['task_version']} contract validation", "",
              f"Generated: {datetime.now(timezone.utc).isoformat()}",
              f"Task: `{first['task_id']}`, revision `{first['task_version']}`.", "",
              "Constructed offline cases only; no live-agent, effectiveness, or checkpoint claim.", "",
@@ -272,9 +275,9 @@ def markdown_report(records: list[dict]) -> str:
     lines += ["", f"Contract checks passed: {sum(row['status'] == 'PASS' for row in records)}/{len(records)}.",
               f"The v1 oracle rejected {false_rejects} positive examples and accepted {false_accepts} negative examples in this constructed set.",
               "", "## Scope and interpretation", "",
-              "The v2 public contract explicitly locates row selection and construction of the returned list in export.py.",
-              "Helper names and import spelling are unrestricted. Behavior checks cover row content/order, dynamic caps, and shallow-list semantics.",
-              "Runtime call/return evidence checks delegation without matching source strings; this is not an adversarial anti-cheating guarantee.",
+              "The task revision's public-contract.md is visible as TASK-CONTRACT.md in every constructed checkout.",
+              "Acceptance follows that explicit task contract, with positive and negative controls for behavior and supported syntax.",
+              "These finite development checks are not an adversarial anti-cheating guarantee or a general natural-language evaluator.",
               "This development revision is informed by the pilot outcomes and cannot be treated as held-out evidence.",
               "The old task, fixture, reference, v1 oracle, frozen runtime methods, and historical result records remain unchanged.",
               "These are newly constructed examples, not regrading of discarded agent workspaces; historical scores are not revised.",
@@ -283,6 +286,7 @@ def markdown_report(records: list[dict]) -> str:
               "Each record pins the base task, fixture, v1 oracle/reference, v2 descriptor/oracle/public contract/cases, and method sources.",
               "The two graders receive separate checkouts with identical input hashes. Infrastructure failures stay BLOCKER.",
               "Records use exclusive creation and a directory separate from the historical pilots.", "",
+              "Each record retains method source hashes and Git context. A later validator implementation may differ; historical records are not overwritten.", "",
               "```bash", "python3 scripts/check-benchmark-contracts.py \\",
               f"  --task {first['task_id']} --task-version {first['task_version']}", "```", ""]
     return "\n".join(lines)

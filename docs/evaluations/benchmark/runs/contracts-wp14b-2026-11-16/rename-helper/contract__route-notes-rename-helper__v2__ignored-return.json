@@ -1,0 +1,64 @@
+{
+  "case": "ignored-return",
+  "contract_record_format": 1,
+  "description": "Calling the helper but recomputing the answer ignores its return value.",
+  "evidence_class": "offline-contract",
+  "expected_labels": [
+    "MEMORY_OMISSION"
+  ],
+  "expected_status": "FAIL",
+  "grades": {
+    "v1": {
+      "failure_labels": [],
+      "oracle_exit_code": 0,
+      "oracle_status": "PASS",
+      "status": "PASS",
+      "visible_tests": "PASS"
+    },
+    "v2": {
+      "failure_labels": [
+        "MEMORY_OMISSION"
+      ],
+      "oracle_exit_code": 1,
+      "oracle_status": "FAIL",
+      "status": "FAIL",
+      "visible_tests": "PASS"
+    }
+  },
+  "method_context": {
+    "git_commit": "307e326a970402f14df959ec3205202da054c0f5",
+    "git_dirty": true
+  },
+  "result_id": "contract__route-notes-rename-helper__v2__ignored-return",
+  "revision_descriptor": {
+    "base_oracle_sha256": "da8bbd2a2ca6c6749b867e9d1c2bd840ab005d84687b707299cf679f2c08b125",
+    "base_reference_sha256": "b693637cb38d8f7c9a1f4f0eff8123faaa4b021b80a9301dc8603f93bbfc137f",
+    "base_task_sha256": "1adb79b2683bef5fde3f468b750d411179f7e8f40867bc68677a8521359ac2d6",
+    "base_task_version": 1,
+    "cases_sha256": "ef59f8cb231da01954774029b32a57b482fa3a77d17d7a919111496735048216",
+    "fixture_sha256": "7665aa3483f6929c8ad61403690513f124fc0e7a4b8bc36c2eabd1900bceb5d1",
+    "oracle_sha256": "47d13d6805ffe516481ce344698eba6d5822651396f70a244038d0755a17d894",
+    "public_contract_sha256": "c1accf7ba8aa817d7a492e6982cbf09b442c5f9900e22644129e9fe3452002ce",
+    "reason": "Replace sorting-expression source matching with an explicit selection-behavior and live-helper delegation contract; preserve version-1 materials and outcomes.",
+    "revision_format": 1,
+    "task_id": "route-notes-rename-helper",
+    "task_version": 2
+  },
+  "source_sha256": {
+    "benchmarks/graders/mechanical.py": "228586fa06c1b7c65b8e10dd01eb2b86bc6c03005610c591c177db276718d234",
+    "benchmarks/oracles/_lib/oracle_support.py": "622ddacdc098659badc0ba521e2ab0dc4fac9e5957d366b3b966cd2f996467e6",
+    "benchmarks/oracles/route-notes-rename-helper/check.py": "da8bbd2a2ca6c6749b867e9d1c2bd840ab005d84687b707299cf679f2c08b125",
+    "benchmarks/runners/harness.py": "8907a1ab2d254d8813a8677f46c1babe6e1073c7a68fcaf72ffc40e3382b2007",
+    "benchmarks/runners/task_revisions.py": "ff8d96f572f85552e4d79af8f8c84e87f93b6c522c1513702b75ca42e2391659",
+    "benchmarks/task-revisions/route-notes-rename-helper/v2/cases.py": "ef59f8cb231da01954774029b32a57b482fa3a77d17d7a919111496735048216",
+    "benchmarks/task-revisions/route-notes-rename-helper/v2/check.py": "47d13d6805ffe516481ce344698eba6d5822651396f70a244038d0755a17d894",
+    "benchmarks/task-revisions/route-notes-rename-helper/v2/public-contract.md": "c1accf7ba8aa817d7a492e6982cbf09b442c5f9900e22644129e9fe3452002ce",
+    "benchmarks/task-revisions/route-notes-rename-helper/v2/revision.json": "14ce75e0589c4c104ea31ab94478d54d77e987956c2558d507cd90f585905a6c",
+    "benchmarks/tasks/route-notes-rename-helper.json": "1adb79b2683bef5fde3f468b750d411179f7e8f40867bc68677a8521359ac2d6",
+    "scripts/check-benchmark-contracts.py": "83e60cfae78a2cd113254a6d9d5f56bbf2dd24fe4846b78540f8e0993e4f9a84"
+  },
+  "status": "PASS",
+  "task_id": "route-notes-rename-helper",
+  "task_version": 2,
+  "visible_source_sha256": "29e58e118cac0f31a068031e1d2936f26572f9aac839e334af9c65e6aeeeee74"
+}
