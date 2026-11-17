@@ -1,0 +1,14 @@
+{
+  "base_oracle_sha256": "4c2ca7de9aedd4797a0be539117c9f7448e832b134a314b9c376c58991b6243e",
+  "base_reference_sha256": "81be4a25413bd3a88e563f983d6aedf2031c2a8fc7b3fd7b9af44877508dfc11",
+  "base_task_sha256": "02b90c18b1e5498e19c144f7d4e25391d032de351e67eba2cb9b52168377ddc6",
+  "base_task_version": 1,
+  "cases_sha256": "a91c456b019bfd44247e28e8bc3c733a50308b429e6a89e59da66dad3df1b2f5",
+  "fixture_sha256": "3c53494ae0e974bc8e5e4e59988b22e1ccfd372752f1ca01522c40ea3c992a5b",
+  "oracle_sha256": "a255648169acd40fd96aba727aa717aa7e6d94c3ec268586f8ef89bc51c1540e",
+  "public_contract_sha256": "aea2385a64c6a5cce2063544e838a854747f615bf4e5cf96b9773c90fc980c08",
+  "reason": "Replace identifier matching with an explicit public delegation and behavior contract; retain all version-1 materials and results.",
+  "revision_format": 1,
+  "task_id": "field-ledger-split-export",
+  "task_version": 2
+}

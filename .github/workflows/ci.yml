@@ -28,6 +28,7 @@ jobs:
       - run: PYTHONPATH=cli python -m unittest discover -s tests
       - run: PYTHONPATH=cli python scripts/check-skill-evals.py
       - run: python scripts/run-memory-bench.py --check-integrity
+      - run: python scripts/check-benchmark-contracts.py --task field-ledger-split-export --task-version 2
       - run: python scripts/check-benchmark-evidence.py --report-file docs/evaluations/benchmark/RESULTS.md
       - run: python scripts/check-adapter-contracts.py
       - run: python scripts/check-erasure-language.py
@@ -70,6 +71,7 @@ jobs:
         env:
           PYTHONPATH: cli
       - run: python scripts/run-memory-bench.py --check-integrity
+      - run: python scripts/check-benchmark-contracts.py --task field-ledger-split-export --task-version 2
       - run: python scripts/check-benchmark-evidence.py --report-file docs/evaluations/benchmark/RESULTS.md
       - run: python scripts/check-adapter-contracts.py
       - run: python scripts/check-erasure-language.py

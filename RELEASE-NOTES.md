@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+### 0.14 development
+
+- Started the [0.14 reliability plan](docs/MemoryCustodian-v0.14.0-plan.md).
+  The first work package adds a separate version-2 `field-ledger-split-export`
+  public behavioral contract and offline validator. It checks executed export
+  delegation, row content/order, dynamic caps, and shallow-list behavior without
+  requiring a particular helper name. All 15 fixed controls passed; the
+  [report](docs/evaluations/benchmark/CONTRACT-RESULTS.md) documents the scope.
+- Added revision descriptors with source hashes, checks that reject changed
+  sources before case execution, append-only offline evidence, 16 regression
+  tests, and revision checks in CI.
+- Preserve the original 18 tasks, fixtures, oracles, runner source hashes, and
+  published pilot/interruption outcomes. New contract revisions use separate
+  records; an oracle defect is not by itself a production Skill/CLI defect.
+- Keep production checkpointing deferred. The development interruption screen
+  found no summary advantage beyond native continuation, and does not establish
+  a material interruption-specific failure or general checkpoint uselessness.
+  Protocol stays 0.8 and Entry schema stays 3. The package version remains
+  unchanged; 0.14 has not been released.
+
 ## v0.13.0 - 2026-11-14
 
 Package 0.13.0 adds a controlled benchmark harness and development pilot. Protocol stays 0.8 and

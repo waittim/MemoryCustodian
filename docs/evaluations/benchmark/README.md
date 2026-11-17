@@ -83,3 +83,15 @@ All three conditions passed 4/6 blocks; there were no blockers and no summary
 wins over native continuation. This short-task screen does not satisfy the
 0.14 checkpoint prerequisites or isolate interruption as the cause of failure.
 The existing 0.13 pilot and its method hashes remain unchanged.
+
+## Contract revision controls — 2026-11-16
+
+The [split-export v2 report](CONTRACT-RESULTS.md) records 15/15 offline contract
+checks: four positive and eleven negative implementations. V2 accepts different
+helper names and checks executed delegation plus preserved export behavior.
+The original oracle rejected three positives and accepted eight negatives in
+this constructed set. These are new grader controls, not regraded agent runs;
+the historical pilot scores remain as recorded.
+
+The [0.14 plan](../../MemoryCustodian-v0.14.0-plan.md) tracks the next contract
+reviews and the prerequisites for product-path or checkpoint work.
