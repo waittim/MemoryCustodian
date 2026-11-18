@@ -1,3 +1,4 @@
 benchmarks/** text eol=lf
+docs/evaluations/** text eol=lf
 scripts/run-memory-bench.py text eol=lf
 tests/test_benchmark_runner.py text eol=lf

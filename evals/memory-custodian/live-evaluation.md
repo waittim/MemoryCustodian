@@ -5,7 +5,7 @@ executed the four agents.  The offline fixture runner in
 `scripts/check-skill-evals.py` exercises the same CLI contract for each named
 adapter, but it is not a substitute for this live evaluation.
 
-1. Check out the same commit on a clean machine and install package version `0.13.0`.
+1. Check out the same commit on a clean machine and install package version `0.14.0`.
 2. Disable local overlays or pass `--no-local`.
 3. For Codex, Claude Code, Gemini, and a generic agent, give the adapter its normal entry file and the same prompt: implement a no-op review touching `cli/memory_custodian/read.py`.
 4. Capture the exact CLI invocation and the JSON from `memory-custodian read --task implementation --path cli/memory_custodian/read.py --strict-routing --explain --no-local --format json`.

@@ -1,0 +1,276 @@
+{
+  "checkpoint": {
+    "authority": "advisory execution metadata; verify against current files",
+    "changed_files": {},
+    "completed_tools": [
+      {
+        "exit_code": 0,
+        "id": "item_2",
+        "type": "command_execution"
+      },
+      {
+        "exit_code": 0,
+        "id": "item_3",
+        "type": "command_execution"
+      }
+    ],
+    "deleted_files": [],
+    "experimental_observable_summary_version": 1,
+    "next_step": "Continue the original task from the current files and verify it with tests.",
+    "public_progress": [
+      "I\u2019ll check the project memory and export code, make the module move, and verify that the returned rows stay unchanged."
+    ],
+    "unobserved": [
+      "hidden reasoning",
+      "raw command arguments",
+      "raw tool output",
+      "repeated file reads"
+    ]
+  },
+  "conditions": [
+    {
+      "condition": "FRESH",
+      "failure_labels": [
+        "MEMORY_OMISSION"
+      ],
+      "fixture_memory_unchanged": true,
+      "oracle_status": "FAIL",
+      "runtime": {
+        "cached_input_tokens": 75008,
+        "completed_tools": [
+          {
+            "exit_code": 0,
+            "id": "item_2",
+            "type": "command_execution"
+          },
+          {
+            "exit_code": 0,
+            "id": "item_3",
+            "type": "command_execution"
+          },
+          {
+            "exit_code": 0,
+            "id": "item_4",
+            "type": "command_execution"
+          },
+          {
+            "changed_paths": [
+              "export.py",
+              "ledger.py",
+              "tests/test_export.py"
+            ],
+            "id": "item_6",
+            "type": "file_change"
+          },
+          {
+            "exit_code": 0,
+            "id": "item_7",
+            "type": "command_execution"
+          }
+        ],
+        "completion_events": 1,
+        "detail": "one successful runtime turn",
+        "event_contract_valid": true,
+        "event_stream_sha256": "68b8d6fdf60c27cbb4e334a7eeeeba551909af022be5c9e64a855f92957d9b9f",
+        "exit_code": 0,
+        "prompt_sha256": "85ae9dfb008105a74e0b39ae322145d435f730502940ba81fb1a269e3e50cac2",
+        "raw_trace_retained": false,
+        "repeated_file_reads": null,
+        "status": "COMPLETED",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "thread_id": "01a1dea7-1ba9-7102-b6d1-285ff1049f7e",
+        "token_usage_scope": "recovery session",
+        "tool_calls": 5,
+        "total_input_tokens": 83853,
+        "total_output_tokens": 1104,
+        "wall_clock_seconds": 34.782295
+      },
+      "starting_tree_sha256": "f738de3245236ff8fa5f597962f714d0b0056c1031585eaf480f9c7dabf6b339",
+      "status": "FAIL",
+      "visible_tests": "PASS"
+    },
+    {
+      "condition": "OBSERVABLE_CHECKPOINT",
+      "failure_labels": [
+        "MEMORY_OMISSION"
+      ],
+      "fixture_memory_unchanged": true,
+      "oracle_status": "FAIL",
+      "runtime": {
+        "cached_input_tokens": 71168,
+        "completed_tools": [
+          {
+            "exit_code": 0,
+            "id": "item_2",
+            "type": "command_execution"
+          },
+          {
+            "exit_code": 0,
+            "id": "item_3",
+            "type": "command_execution"
+          },
+          {
+            "exit_code": 128,
+            "id": "item_4",
+            "type": "command_execution"
+          },
+          {
+            "exit_code": 0,
+            "id": "item_5",
+            "type": "command_execution"
+          },
+          {
+            "changed_paths": [
+              "export.py",
+              "ledger.py",
+              "tests/test_export.py"
+            ],
+            "id": "item_7",
+            "type": "file_change"
+          },
+          {
+            "exit_code": 0,
+            "id": "item_8",
+            "type": "command_execution"
+          }
+        ],
+        "completion_events": 1,
+        "detail": "one successful runtime turn",
+        "event_contract_valid": true,
+        "event_stream_sha256": "0e0e485f3982e332a46978b391c5616e064901f974dc06ff15d37369e476cd4c",
+        "exit_code": 0,
+        "prompt_sha256": "0afe12f8e365233331e0c21c7708bb09b432ab88c0a83057c906bf2b826faf5b",
+        "raw_trace_retained": false,
+        "repeated_file_reads": null,
+        "status": "COMPLETED",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "thread_id": "01a1dea7-a3e7-7900-9d2e-948f63ae7e0d",
+        "token_usage_scope": "recovery session",
+        "tool_calls": 6,
+        "total_input_tokens": 84695,
+        "total_output_tokens": 1040,
+        "wall_clock_seconds": 33.475283
+      },
+      "starting_tree_sha256": "f738de3245236ff8fa5f597962f714d0b0056c1031585eaf480f9c7dabf6b339",
+      "status": "FAIL",
+      "visible_tests": "PASS"
+    },
+    {
+      "condition": "NATIVE_RESUME",
+      "failure_labels": [
+        "MEMORY_OMISSION"
+      ],
+      "fixture_memory_unchanged": true,
+      "oracle_status": "FAIL",
+      "runtime": {
+        "cached_input_tokens": null,
+        "completed_tools": [
+          {
+            "exit_code": 0,
+            "id": "item_2",
+            "type": "command_execution"
+          },
+          {
+            "exit_code": 128,
+            "id": "item_3",
+            "type": "command_execution"
+          },
+          {
+            "exit_code": 0,
+            "id": "item_4",
+            "type": "command_execution"
+          },
+          {
+            "changed_paths": [
+              "export.py",
+              "ledger.py",
+              "tests/test_export.py"
+            ],
+            "id": "item_6",
+            "type": "file_change"
+          },
+          {
+            "exit_code": 0,
+            "id": "item_7",
+            "type": "command_execution"
+          }
+        ],
+        "completion_events": 1,
+        "detail": "one successful runtime turn",
+        "event_contract_valid": true,
+        "event_stream_sha256": "87178f2473b7fb85cbda47e4e35beab9f324ef05d94081581789ade3385deec6",
+        "exit_code": 0,
+        "prompt_sha256": "85ae9dfb008105a74e0b39ae322145d435f730502940ba81fb1a269e3e50cac2",
+        "raw_trace_retained": false,
+        "repeated_file_reads": null,
+        "runtime_reported_cached_input_tokens": 68736,
+        "runtime_reported_total_input_tokens": 76906,
+        "runtime_reported_total_output_tokens": 906,
+        "status": "COMPLETED",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "thread_id": "01a1dea7-01c3-7230-8e03-7a1795b2b13e",
+        "token_usage_scope": "session cumulative; post-resume baseline unavailable",
+        "tool_calls": 5,
+        "total_input_tokens": null,
+        "total_output_tokens": null,
+        "wall_clock_seconds": 28.091071
+      },
+      "starting_tree_sha256": "f738de3245236ff8fa5f597962f714d0b0056c1031585eaf480f9c7dabf6b339",
+      "status": "FAIL",
+      "visible_tests": "PASS"
+    }
+  ],
+  "declared_fixture_sha256": "3c53494ae0e974bc8e5e4e59988b22e1ccfd372752f1ca01522c40ea3c992a5b",
+  "experiment_sha256": "e6b306bd5c9d2fe7ce69b5abacfb606e0ca3783b97255f6938fd530ef5d1bbf4",
+  "initial_visible_tree_sha256": "f738de3245236ff8fa5f597962f714d0b0056c1031585eaf480f9c7dabf6b339",
+  "interrupted_tree_sha256": "f738de3245236ff8fa5f597962f714d0b0056c1031585eaf480f9c7dabf6b339",
+  "prefix": {
+    "cached_input_tokens": null,
+    "completed_tools": [
+      {
+        "exit_code": 0,
+        "id": "item_2",
+        "type": "command_execution"
+      },
+      {
+        "exit_code": 0,
+        "id": "item_3",
+        "type": "command_execution"
+      }
+    ],
+    "completion_events": 0,
+    "detail": "forced process-group interruption at completed-tool boundary",
+    "event_contract_valid": true,
+    "event_stream_sha256": "7aaaff563573735347cf34e5b3b216e20d98e610359c324687a372915fc6c0f5",
+    "exit_code": -15,
+    "interruption": {
+      "alive_at_signal": true,
+      "boundary_completed_tools": 2,
+      "signal_exit_observed": true
+    },
+    "prompt_sha256": "6b46b393c1c101d05be08dd1b6d0f0c29fcfcb6813a2546acd939c72b9fc7e14",
+    "raw_trace_retained": false,
+    "repeated_file_reads": null,
+    "status": "INTERRUPTED",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "thread_id": "01a1dea7-01c3-7230-8e03-7a1795b2b13e",
+    "tool_calls": 2,
+    "total_input_tokens": null,
+    "total_output_tokens": null,
+    "wall_clock_seconds": 6.475019
+  },
+  "prefix_grade": {
+    "failure_labels": [
+      "MEMORY_OMISSION"
+    ],
+    "oracle_status": "FAIL",
+    "status": "FAIL",
+    "visible_tests": "PASS"
+  },
+  "prefix_prompt_sha256": "6b46b393c1c101d05be08dd1b6d0f0c29fcfcb6813a2546acd939c72b9fc7e14",
+  "repetition": 1,
+  "status": "COMPLETE",
+  "task_id": "field-ledger-split-export",
+  "task_sha256": "ba74de886600b60a27c511f794b5388818b138fd4e83043cdec46598e5b11498",
+  "task_version": 1
+}

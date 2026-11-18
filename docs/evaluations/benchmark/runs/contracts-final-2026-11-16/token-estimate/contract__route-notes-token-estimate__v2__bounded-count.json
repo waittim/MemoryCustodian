@@ -1,0 +1,68 @@
+{
+  "case": "bounded-count",
+  "contract_record_format": 1,
+  "description": "A three-word ceiling passes the old example but truncates larger counts.",
+  "evidence_class": "offline-contract",
+  "expected_labels": [
+    "MEMORY_OMISSION"
+  ],
+  "expected_status": "FAIL",
+  "grades": {
+    "v1": {
+      "failure_labels": [],
+      "oracle_exit_code": 0,
+      "oracle_status": "PASS",
+      "status": "PASS",
+      "visible_tests": "PASS"
+    },
+    "v2": {
+      "failure_labels": [
+        "MEMORY_OMISSION"
+      ],
+      "oracle_exit_code": 1,
+      "oracle_status": "FAIL",
+      "status": "FAIL",
+      "visible_tests": "PASS"
+    }
+  },
+  "method_context": {
+    "git_commit": "f5d69a9c610de9fa5d783333dcd8646b56f2b6fe",
+    "git_dirty": true
+  },
+  "package_version": "0.14.0",
+  "protocol_version": "0.8",
+  "result_id": "contract__route-notes-token-estimate__v2__bounded-count",
+  "revision_descriptor": {
+    "base_oracle_sha256": "0db4a7d7c21c0ca8088a71526490dfa6094f5c9560078075913a6935e659a829",
+    "base_reference_sha256": "eb5e52b13cd784779414fe9ee6cb0c08b398d9b10bdfc40f4bd545f1b52b1d08",
+    "base_task_sha256": "18d8e09e87e5ec6f2552573030388b33e32a09fee2b9c3f0644a30ce6040756a",
+    "base_task_version": 1,
+    "cases_sha256": "9d662b9d7eac14785026c01eb37e5ffbf139f16eae41ba531540f88eeb6cc758",
+    "fixture_sha256": "7665aa3483f6929c8ad61403690513f124fc0e7a4b8bc36c2eabd1900bceb5d1",
+    "oracle_sha256": "41bcfef7d7fd59324c30b11890e5f882ef596ba031788c050f1c202eaf8bf7fd",
+    "public_contract_sha256": "22c92b3cdee655b8d53c4162e91972455fc5835923cc7145b8a5592c05c6b35d",
+    "reason": "Replace the single behavioral sample with an explicit word-count contract and varied deterministic controls; preserve version-1 materials and results.",
+    "revision_format": 1,
+    "task_id": "route-notes-token-estimate",
+    "task_version": 2
+  },
+  "source_sha256": {
+    "benchmarks/graders/mechanical.py": "228586fa06c1b7c65b8e10dd01eb2b86bc6c03005610c591c177db276718d234",
+    "benchmarks/oracles/_lib/oracle_support.py": "622ddacdc098659badc0ba521e2ab0dc4fac9e5957d366b3b966cd2f996467e6",
+    "benchmarks/oracles/route-notes-token-estimate/check.py": "0db4a7d7c21c0ca8088a71526490dfa6094f5c9560078075913a6935e659a829",
+    "benchmarks/runners/harness.py": "8907a1ab2d254d8813a8677f46c1babe6e1073c7a68fcaf72ffc40e3382b2007",
+    "benchmarks/runners/task_revisions.py": "3efd13ecdee9f97cfa3998acde7aad0f194c76336be1acd99774958d8e1fe45d",
+    "benchmarks/task-revisions/route-notes-token-estimate/v2/cases.py": "9d662b9d7eac14785026c01eb37e5ffbf139f16eae41ba531540f88eeb6cc758",
+    "benchmarks/task-revisions/route-notes-token-estimate/v2/check.py": "41bcfef7d7fd59324c30b11890e5f882ef596ba031788c050f1c202eaf8bf7fd",
+    "benchmarks/task-revisions/route-notes-token-estimate/v2/public-contract.md": "22c92b3cdee655b8d53c4162e91972455fc5835923cc7145b8a5592c05c6b35d",
+    "benchmarks/task-revisions/route-notes-token-estimate/v2/revision.json": "d663876f9c7ec4d462a9821c08e5aba5188aa6e9a67f7766757c1f5090d2070a",
+    "benchmarks/tasks/route-notes-token-estimate.json": "18d8e09e87e5ec6f2552573030388b33e32a09fee2b9c3f0644a30ce6040756a",
+    "docs/memory/manifest.md": "45242d78494173b491bb47f044f96bc5db8a58dd54bd10eddf2b7cdec077bdc5",
+    "pyproject.toml": "ea2c04471f09e8418ab85e261e423f981af60311c6dbe471c09bad6a4a76f8b6",
+    "scripts/check-benchmark-contracts.py": "ac528b797c4fb77c6cd2340eaf63ff4f97ad5645ab46bed719957b7bce96a973"
+  },
+  "status": "PASS",
+  "task_id": "route-notes-token-estimate",
+  "task_version": 2,
+  "visible_source_sha256": "5884b5dc910454fb51d8fb587c5f3461e5d8aec8b795a07216d1a4e652325b01"
+}

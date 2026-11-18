@@ -44,6 +44,14 @@
       {
         "path": "examples/nightnotes-video-demo/docs/memory/manifest.md",
         "regex": "^- last_migrated_with: memory-custodian ([0-9.]+)"
+      },
+      {
+        "path": "evals/memory-custodian/eval-manifest.json",
+        "regex": "package ([0-9.]+) / Protocol"
+      },
+      {
+        "path": "evals/memory-custodian/live-evaluation.md",
+        "regex": "install package version `([0-9.]+)`"
       }
     ],
     "protocol_version": [

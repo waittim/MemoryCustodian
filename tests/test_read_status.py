@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "cli"))
 
 from tests.cli_test_support import main
+from memory_custodian import __version__
 from memory_custodian.entries import render_active_entry
 
 
@@ -79,7 +80,7 @@ class ReadStatusTests(unittest.TestCase):
                 code = main(["status", "--project-root", tmp])
             self.assertEqual(code, 1)
             text = out.getvalue()
-            self.assertIn("CLI version: 0.13.0", text)
+            self.assertIn(f"CLI version: {__version__}", text)
             self.assertIn("Protocol version: 0.8 (current)", text)
             self.assertIn("brief.md: NEEDS CURATION", text)
             self.assertIn("inbox.md: OK", text)

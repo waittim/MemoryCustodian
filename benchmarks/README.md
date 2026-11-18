@@ -113,3 +113,41 @@ Add `--check-current-source` to verify that the current runner/grader source
 bytes still match this historical pilot's method hashes. The validator checks
 record consistency, not cryptographic runtime attestation or independent
 regrading of discarded checkouts.
+
+## Versioned contract corrections
+
+The 0.14 development work keeps the historical `core` suite immutable. Corrected
+contracts live under `benchmarks/task-revisions/<task>/v<version>/`, with a
+descriptor pinning the original task, fixture, oracle and reference plus the new
+public contract, oracle and implementation cases. They are not added to the
+original 18-task pilot or used to rewrite its scores.
+
+Run the independent offline check:
+
+```bash
+python3 scripts/check-benchmark-contracts.py \
+  --task field-ledger-split-export --task-version 2
+```
+
+The same entry point also accepts `route-notes-rename-helper`,
+`route-notes-no-prose-area`, `field-ledger-offline-plan`, and
+`route-notes-token-estimate` at version 2. Cases may write only files that are both
+declared task outputs and supported by the fixture harness; they cannot alter
+another task's outputs or overwrite `TASK-CONTRACT.md`.
+
+The checker makes the revision's `public-contract.md` visible as
+`TASK-CONTRACT.md` in each constructed checkout. Separate checkouts with
+identical input hashes are graded by the v1 and v2 oracles. Its record status
+means that the oracle correctly accepted or rejected the stated control case;
+it is not an agent task-success score. Raw oracle output is not retained.
+
+Use `--record-dir <new-directory> --report-file <new-report.md>` to retain
+append-only, source-bound records and their SHA-256 inventory. Every run checks
+the descriptor pins before executing cases and rechecks them before writing
+evidence. A failed or unavailable grader stays explicit; it never becomes a
+successful contract check. See the [0.14 plan](../docs/MemoryCustodian-v0.14.0-plan.md).
+
+The immutable v1 harness remains separate from the revision validator. As the
+revision validator evolves, new records retain method hashes and Git context;
+older records retain their original hashes and are reproduced using their
+recorded method source, not silently compared as if the method were unchanged.

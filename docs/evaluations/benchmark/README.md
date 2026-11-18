@@ -73,3 +73,53 @@ Fix the smallest meaningful effect before collecting claim-bearing data; use
 independent repetitions to measure runtime variation. General or named
 cross-runtime claims require corresponding held-out live evidence. Publish
 inconclusive or negative results when uncertainty or outcomes warrant it.
+
+## Interruption development screen — 2026-11-15
+
+The [fixed interruption plan](INTERRUPTION-2026-11-15.md) and
+[results](INTERRUPTION-RESULTS.md) compare fresh restart, an observable progress
+summary, and native Codex continuation from six paired interrupted snapshots.
+All three conditions passed 4/6 blocks; there were no blockers and no summary
+wins over native continuation. This short-task screen does not satisfy the
+0.14 checkpoint prerequisites or isolate interruption as the cause of failure.
+The existing 0.13 pilot and its method hashes remain unchanged.
+
+## Contract revision controls — 2026-11-16
+
+The [split-export v2 report](CONTRACT-RESULTS.md) records 15/15 offline contract
+checks: four positive and eleven negative implementations. V2 accepts different
+helper names and checks executed delegation plus preserved export behavior.
+The original oracle rejected three positives and accepted eight negatives in
+this constructed set. These are new grader controls, not regraded agent runs;
+the historical pilot scores remain as recorded.
+
+The [0.14 plan](../../MemoryCustodian-v0.14.0-plan.md) tracks the next contract
+reviews and the prerequisites for product-path or checkpoint work.
+
+The other four revisions have separate reports and append-only evidence:
+
+- [Rename helper v2](CONTRACT-RENAME-HELPER-RESULTS.md): 19/19 fixed controls.
+- [No-prose-area v2](CONTRACT-AREA-PLAN-RESULTS.md): 23/23 fixed controls.
+- [Offline-plan v2](CONTRACT-OFFLINE-PLAN-RESULTS.md): 13/13 plan controls, with
+  separate actual-source import-policy regression checks.
+- [Token-estimate v2](CONTRACT-TOKEN-ESTIMATE-RESULTS.md): 19/19 implementation controls.
+
+Their explicitly published v2 delegation/format requirements govern those
+controls; they do not revise historical agent scores. Validator method hashes
+can evolve across samples, while each recorded sample retains its original
+sources. The original WP14A sample corresponds to commit `307e326`.
+
+The [local installed-workflow smoke](../INSTALLED-WORKFLOW-2026-11-16.md) covers
+actual installation, hook, and CLI execution without launching a model. It is
+separate from both contract-control evidence and live-agent evaluation.
+
+The [initial explicit installed-Skill live sample](../INSTALLED-SKILL-LIVE-RESULTS-2026-11-16.md)
+retains one PASS and two incomplete-runtime BLOCKER outcomes. Its
+[diagnostic follow-up](../INSTALLED-SKILL-LIVE-DIAGNOSTIC-RESULTS-2026-11-17.md)
+recorded missing-scope PASS and unconfirmed-observation FAIL in separate new
+sessions, preserving the initial sample and method snapshots. An independently
+reproduced observer defect has its own
+[correction plan](../INSTALLED-SKILL-LIVE-OBSERVER-PLAN-2026-11-17.md) and one new
+[candidate-task PASS](../INSTALLED-SKILL-LIVE-OBSERVER-RESULTS-2026-11-17.md), without
+regrading that FAIL or pooling cohorts. These samples do not establish automatic discovery or
+general effectiveness.

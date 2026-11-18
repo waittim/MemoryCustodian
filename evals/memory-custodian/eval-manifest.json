@@ -169,7 +169,7 @@
     {
       "id": "protocol-08-machine-contract",
       "terms": [
-        "package 0.13.0 / Protocol 0.8",
+        "package 0.14.0 / Protocol 0.8",
         "Entry schema 3",
         "transaction schema 1",
         "output_schema_version: 1",

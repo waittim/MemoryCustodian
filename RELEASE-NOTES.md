@@ -2,6 +2,51 @@
 
 ## Unreleased
 
+_Candidate for package version 0.14.0; not released._
+
+### 0.14 development
+
+- Started the [0.14 reliability plan](docs/MemoryCustodian-v0.14.0-plan.md).
+  The first work package adds a separate version-2 `field-ledger-split-export`
+  public behavioral contract and offline validator. It checks executed export
+  delegation, row content/order, dynamic caps, and shallow-list behavior without
+  requiring a particular helper name. All 15 fixed controls passed; the
+  [report](docs/evaluations/benchmark/CONTRACT-RESULTS.md) documents the scope.
+- Added revision descriptors with source hashes, checks that reject changed
+  sources before case execution, append-only offline evidence, 16 regression
+  tests, and revision checks in CI.
+- Added independent version-2 contracts for `route-notes-rename-helper` and
+  `route-notes-no-prose-area`, with 19 and 23 fixed controls respectively.
+  The former verifies behavior and actual wrapper delegation; the latter
+  separates standalone actions from explanatory text. The validator accepts
+  declared supported task outputs and retains method hashes and Git context.
+- Added a local installed-plugin smoke covering the real installer, hook, and
+  12 bundled-CLI calls in temporary directories. It found no defect in the tested
+  paths; it does not launch an agent or validate live Skill behavior.
+- Completed independent offline-plan and token-estimate v2 contracts with 13
+  and 19 controls. Prose about avoiding network requests is accepted; a bounded
+  AST policy checks actual client imports without executing candidate code.
+  Varied whitespace-word checks reject the old constant-answer loophole.
+- Canonical UTF-8/LF evidence writing keeps inventory hashes consistent across
+  platforms. Candidate version checks now include the Skill-eval contract and
+  live-evaluation recipe.
+- Added a fixed real-Codex installed-Skill smoke. Its first sample observed one
+  scoped-implementation PASS and two incomplete-runtime BLOCKER outcomes;
+  preserved records and method snapshots keep those outcomes distinct. A
+  separately planned diagnostic sample completed with missing-scope PASS and
+  unconfirmed-observation FAIL. A separately tested observer correction
+  distinguishes verified read-only CLI help/previews from writes; uncertain
+  order remains REVIEW. One new independent candidate-task sample passed under
+  the corrected method. Earlier outcomes are retained, not regraded or pooled.
+- Preserve the original 18 tasks, fixtures, oracles, runner source hashes, and
+  published pilot/interruption outcomes. New contract revisions use separate
+  records; an oracle defect is not by itself a production Skill/CLI defect.
+- Keep production checkpointing deferred. The development interruption screen
+  found no summary advantage beyond native continuation, and does not establish
+  a material interruption-specific failure or general checkpoint uselessness.
+  Protocol stays 0.8 and Entry schema stays 3. Package metadata is synchronized
+  to the 0.14.0 candidate; no release has been published by this work.
+
 ## v0.13.0 - 2026-11-14
 
 Package 0.13.0 adds a controlled benchmark harness and development pilot. Protocol stays 0.8 and

@@ -6,6 +6,8 @@ import tempfile
 import unittest
 import zipfile
 
+from memory_custodian import __version__
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -87,7 +89,7 @@ class PluginPackageTests(unittest.TestCase):
         entry = plugins[0]
         self.assertEqual(entry["name"], "memory-custodian")
         self.assertEqual(entry["source"], "./")
-        self.assertEqual(entry["version"], "0.13.0")
+        self.assertEqual(entry["version"], __version__)
 
     def test_session_start_hook_outputs_lightweight_context(self):
         result = subprocess.run(
@@ -124,7 +126,7 @@ class PluginPackageTests(unittest.TestCase):
         )
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("memory-custodian 0.13.0", result.stdout)
+        self.assertIn(f"memory-custodian {__version__}", result.stdout)
 
     def test_claude_plugin_bin_wrapper_runs_packaged_cli(self):
         wrapper = ROOT / "bin" / "memory-custodian"
@@ -141,7 +143,7 @@ class PluginPackageTests(unittest.TestCase):
         )
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("memory-custodian 0.13.0", result.stdout)
+        self.assertIn(f"memory-custodian {__version__}", result.stdout)
 
     def test_installer_can_install_claude_plugin_to_custom_home(self):
         with tempfile.TemporaryDirectory() as tmp:

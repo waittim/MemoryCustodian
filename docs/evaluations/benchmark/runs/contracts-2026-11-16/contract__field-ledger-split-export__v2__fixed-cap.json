@@ -1,0 +1,60 @@
+{
+  "case": "fixed-cap",
+  "contract_record_format": 1,
+  "description": "The export helper cannot freeze the current cap at import time.",
+  "evidence_class": "offline-contract",
+  "expected_labels": [
+    "MEMORY_FALSE_POSITIVE"
+  ],
+  "expected_status": "FAIL",
+  "grades": {
+    "v1": {
+      "failure_labels": [],
+      "oracle_exit_code": 0,
+      "oracle_status": "PASS",
+      "status": "PASS",
+      "visible_tests": "PASS"
+    },
+    "v2": {
+      "failure_labels": [
+        "MEMORY_FALSE_POSITIVE"
+      ],
+      "oracle_exit_code": 1,
+      "oracle_status": "FAIL",
+      "status": "FAIL",
+      "visible_tests": "PASS"
+    }
+  },
+  "result_id": "contract__field-ledger-split-export__v2__fixed-cap",
+  "revision_descriptor": {
+    "base_oracle_sha256": "4c2ca7de9aedd4797a0be539117c9f7448e832b134a314b9c376c58991b6243e",
+    "base_reference_sha256": "81be4a25413bd3a88e563f983d6aedf2031c2a8fc7b3fd7b9af44877508dfc11",
+    "base_task_sha256": "02b90c18b1e5498e19c144f7d4e25391d032de351e67eba2cb9b52168377ddc6",
+    "base_task_version": 1,
+    "cases_sha256": "a91c456b019bfd44247e28e8bc3c733a50308b429e6a89e59da66dad3df1b2f5",
+    "fixture_sha256": "3c53494ae0e974bc8e5e4e59988b22e1ccfd372752f1ca01522c40ea3c992a5b",
+    "oracle_sha256": "a255648169acd40fd96aba727aa717aa7e6d94c3ec268586f8ef89bc51c1540e",
+    "public_contract_sha256": "aea2385a64c6a5cce2063544e838a854747f615bf4e5cf96b9773c90fc980c08",
+    "reason": "Replace identifier matching with an explicit public delegation and behavior contract; retain all version-1 materials and results.",
+    "revision_format": 1,
+    "task_id": "field-ledger-split-export",
+    "task_version": 2
+  },
+  "source_sha256": {
+    "benchmarks/graders/mechanical.py": "228586fa06c1b7c65b8e10dd01eb2b86bc6c03005610c591c177db276718d234",
+    "benchmarks/oracles/_lib/oracle_support.py": "622ddacdc098659badc0ba521e2ab0dc4fac9e5957d366b3b966cd2f996467e6",
+    "benchmarks/oracles/field-ledger-split-export/check.py": "4c2ca7de9aedd4797a0be539117c9f7448e832b134a314b9c376c58991b6243e",
+    "benchmarks/runners/harness.py": "8907a1ab2d254d8813a8677f46c1babe6e1073c7a68fcaf72ffc40e3382b2007",
+    "benchmarks/runners/task_revisions.py": "6978c5b7ffbda2a55dbc4183713c5b3926e59252572bde1f7eedb73a80367a2a",
+    "benchmarks/task-revisions/field-ledger-split-export/v2/cases.py": "a91c456b019bfd44247e28e8bc3c733a50308b429e6a89e59da66dad3df1b2f5",
+    "benchmarks/task-revisions/field-ledger-split-export/v2/check.py": "a255648169acd40fd96aba727aa717aa7e6d94c3ec268586f8ef89bc51c1540e",
+    "benchmarks/task-revisions/field-ledger-split-export/v2/public-contract.md": "aea2385a64c6a5cce2063544e838a854747f615bf4e5cf96b9773c90fc980c08",
+    "benchmarks/task-revisions/field-ledger-split-export/v2/revision.json": "85f72f8d59ba231927cfce9b81b9f788b63721bcbfbfd527f0934604f59097db",
+    "benchmarks/tasks/field-ledger-split-export.json": "02b90c18b1e5498e19c144f7d4e25391d032de351e67eba2cb9b52168377ddc6",
+    "scripts/check-benchmark-contracts.py": "83e60cfae78a2cd113254a6d9d5f56bbf2dd24fe4846b78540f8e0993e4f9a84"
+  },
+  "status": "PASS",
+  "task_id": "field-ledger-split-export",
+  "task_version": 2,
+  "visible_source_sha256": "44e0915627553ca164441ef4dbc1dc18aebf238e29b543a1cdf1b90eec10cce9"
+}

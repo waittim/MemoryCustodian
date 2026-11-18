@@ -1,0 +1,31 @@
+{
+  "cli_version": "codex-cli 0.169.0-alpha.11.1",
+  "conditions": [
+    "FRESH",
+    "OBSERVABLE_CHECKPOINT",
+    "NATIVE_RESUME"
+  ],
+  "experiment_schema_version": 1,
+  "generated_at": "2026-11-15T10:00:49.095127+00:00",
+  "git_dirty": true,
+  "git_head": "7b63ec67eba73d7a237f8d4f027e08ebe0e70aa8",
+  "interrupt_after_completed_tools": 2,
+  "jobs": 2,
+  "model": "gpt-6.1-sol",
+  "policy": "workspace-write;network=off;approval=never;config/skills/plugins/memories/delegation=off;reasoning=low",
+  "repetitions": 2,
+  "source_sha256": {
+    "benchmarks/graders/mechanical.py": "228586fa06c1b7c65b8e10dd01eb2b86bc6c03005610c591c177db276718d234",
+    "benchmarks/runners/codex_runtime.py": "0735c9cd3d9fbcce264e27cfbc7c853e5a90fd75ebe0c5b8e9baec0abc9c4dc7",
+    "benchmarks/runners/harness.py": "8907a1ab2d254d8813a8677f46c1babe6e1073c7a68fcaf72ffc40e3382b2007",
+    "benchmarks/runners/interruption.py": "38b07c9d9cf1f3398e95234cf0e06cda17ce3c10a8142c080aadf455a229f0d8",
+    "docs/evaluations/benchmark/INTERRUPTION-2026-11-15.md": "0dd29593c314312fdba557cfbcf151bca95a37bd8d368b42e87ca8ab33aa751e",
+    "scripts/run-interruption-bench.py": "315ecd3d03ec555964586e0238d1b018f4ef3b0132c875d72c9056e8c7dd59b3"
+  },
+  "tasks": [
+    "field-ledger-split-export",
+    "field-ledger-rounding",
+    "route-notes-redact-secrets"
+  ],
+  "timeout": 180
+}

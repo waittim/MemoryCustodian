@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "cli"))
 
 from tests.cli_test_support import main
+from memory_custodian import __version__
 
 
 class InitTests(unittest.TestCase):
@@ -34,7 +35,7 @@ class InitTests(unittest.TestCase):
             self.assertIn("## MemoryCustodian Protocol", manifest)
             self.assertIn("- protocol_version: 0.8", manifest)
             self.assertIn("- entry_schema_version: 3", manifest)
-            self.assertIn("- initialized_with: memory-custodian 0.13.0", manifest)
+            self.assertIn(f"- initialized_with: memory-custodian {__version__}", manifest)
             decisions = (memory / "decisions.md").read_text(encoding="utf-8")
             constraints = (memory / "constraints.md").read_text(encoding="utf-8")
             self.assertIn("Entries are newest first.", decisions)

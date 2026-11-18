@@ -10,7 +10,7 @@ Loading map for local project memory. Load only the files listed for the current
 - routing_schema_version: 1
 - conflict_schema_version: 1
 - initialized_with: memory-custodian 0.13.0
-- last_migrated_with: memory-custodian 0.13.0
+- last_migrated_with: memory-custodian 0.14.0
 - project_id: <UUIDv4 generated once by memory-custodian init>
 - admission_policy: evidence-required
 - routing_policy: explicit-task-and-scope
