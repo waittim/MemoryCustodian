@@ -1,0 +1,36 @@
+{
+  "source_commit": "d125910bc54866b2dc77a71fc6730b676f748f03",
+  "builds": [
+    {
+      "format": "zip",
+      "sha256": "f8091fd2fb0b5a38284ab7cb5e5a04a71f42793ea8ea7b3ed9259d8b51bbac11",
+      "identical_builds": 2
+    },
+    {
+      "format": "tar.gz",
+      "sha256": "820cac39c290f92ed76815faf0a24f8b0ca6bcf32d8e88514ad94eddf7bad96a",
+      "identical_builds": 2
+    }
+  ],
+  "archives_have_identical_payloads": true,
+  "smoke": [
+    {
+      "format": "zip",
+      "entries": 61,
+      "version": "memory-custodian 0.14.0",
+      "strict_routing": "COMPLETE",
+      "check": "PASS",
+      "audit": "PASS",
+      "source_tree_on_import_path": false
+    },
+    {
+      "format": "tar.gz",
+      "entries": 61,
+      "version": "memory-custodian 0.14.0",
+      "strict_routing": "COMPLETE",
+      "check": "PASS",
+      "audit": "PASS",
+      "source_tree_on_import_path": false
+    }
+  ]
+}

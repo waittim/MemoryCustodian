@@ -33,7 +33,11 @@ _Candidate for package version 0.14.0; not released._
 - Added a fixed real-Codex installed-Skill smoke. Its first sample observed one
   scoped-implementation PASS and two incomplete-runtime BLOCKER outcomes;
   preserved records and method snapshots keep those outcomes distinct. A
-  separately planned diagnostic sample retries only the incomplete tasks.
+  separately planned diagnostic sample completed with missing-scope PASS and
+  unconfirmed-observation FAIL. A separately tested observer correction
+  distinguishes verified read-only CLI help/previews from writes; uncertain
+  order remains REVIEW. One new independent candidate-task sample passed under
+  the corrected method. Earlier outcomes are retained, not regraded or pooled.
 - Preserve the original 18 tasks, fixtures, oracles, runner source hashes, and
   published pilot/interruption outcomes. New contract revisions use separate
   records; an oracle defect is not by itself a production Skill/CLI defect.

@@ -129,8 +129,9 @@ python3 scripts/check-benchmark-contracts.py \
   --task field-ledger-split-export --task-version 2
 ```
 
-The same entry point also accepts `route-notes-rename-helper` and
-`route-notes-no-prose-area` at version 2. Cases may write only files that are both
+The same entry point also accepts `route-notes-rename-helper`,
+`route-notes-no-prose-area`, `field-ledger-offline-plan`, and
+`route-notes-token-estimate` at version 2. Cases may write only files that are both
 declared task outputs and supported by the fixture harness; they cannot alter
 another task's outputs or overwrite `TASK-CONTRACT.md`.
 

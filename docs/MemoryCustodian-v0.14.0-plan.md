@@ -1,6 +1,6 @@
 # MemoryCustodian v0.14.0 development plan
 
-Status: Candidate preparation; all five contract revisions validated locally.
+Status: Candidate validated for release review; no tag or release published.
 
 Started: 2026-11-16.
 
@@ -159,7 +159,23 @@ installed Skill/CLI files. Its other two tasks stopped before runtime completion
 and remain infrastructure BLOCKER, not product failures or successes. Original
 records and exact method snapshots are retained. A new
 [diagnostic follow-up](evaluations/INSTALLED-SKILL-LIVE-DIAGNOSTIC-PLAN-2026-11-17.md)
-selects only those two incomplete tasks with unchanged prompts and acceptance.
+selected only those two incomplete tasks with unchanged prompts and acceptance.
+Its [separate results](evaluations/INSTALLED-SKILL-LIVE-DIAGNOSTIC-RESULTS-2026-11-17.md)
+are missing-scope PASS and unconfirmed-observation FAIL. The latter's artifacts
+conformed, but its recorded read-before-write order failed. The early command
+was not retained, so its cause was unknown at collection. An independently
+demonstrated observer defect concerning read-only help/previews has its own
+[fixed correction plan](evaluations/INSTALLED-SKILL-LIVE-OBSERVER-PLAN-2026-11-17.md)
+and one new independent candidate-task sample; earlier outcomes remain intact.
+That [new sample passed](evaluations/INSTALLED-SKILL-LIVE-OBSERVER-RESULTS-2026-11-17.md)
+under committed method `8f0bbe1`, with strict maintenance reading before confirmed
+candidate writing and all artifact checks satisfied. The corrected observer's
+14 tests and the final 605-test local suite passed. Do not pool these cohorts
+into a replacement original score.
+The new sample's verified read-only help command/output hashes match the old
+early event, supporting an observer-misclassification explanation; this is a
+cross-sample inference, not a causal reconstruction or a regrade. See the
+[readiness record](MemoryCustodian-v0.14.0-readiness.md) for the limits.
 Automatic discovery, other runtimes, and comparative effectiveness are untested.
 
 Exercise a fully installed Skill/CLI path before assigning a benchmark failure
@@ -182,8 +198,10 @@ evidence of incremental value.
 
 ## Completion and release gates
 
-WP14A/B have checked offline evidence. Complete the independent diagnostic
-follow-up and candidate validation before final review. Mark later work
+WP14A/B have checked offline evidence. The separate diagnostic and observer
+follow-ups are complete. All ten Linux/Windows × Python 3.10–3.14 candidate
+[CI jobs passed](https://github.com/waittim/MemoryCustodian/actions/runs/44157617701),
+and both distribution formats reproduced byte-for-byte. Mark later work
 packages as deferred when their prerequisites are absent; they are not all
 mandatory release features. Before any 0.14 release, identify the work actually
 shipped, pass its relevant checks and repository-required tests, retain the

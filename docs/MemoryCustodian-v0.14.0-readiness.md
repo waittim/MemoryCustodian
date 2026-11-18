@@ -1,6 +1,6 @@
 # MemoryCustodian v0.14.0 candidate readiness
 
-Updated: 2026-11-17. Status: candidate preparation; release gates remain open.
+Updated: 2026-11-17. Status: validated candidate for release review; not published.
 
 The proposed release improves evaluation contracts and verification reliability.
 It does not change production memory semantics, authoritative routing, or the
@@ -35,18 +35,19 @@ checks, not live-agent task successes or held-out effectiveness evidence.
 | Public contracts and independent records | PASS | Five versioned contracts and 89 matching controls above; preserve public requirements and source hashes. |
 | Historical evidence preservation | PASS | Original [0.13 pilot](evaluations/benchmark/RESULTS.md): 72 sessions. Original [interruption screen](evaluations/benchmark/INTERRUPTION-RESULTS.md): six paired blocks. Their definitions, methods, and outcomes remain unchanged. |
 | Local installed CLI workflow | PASS, local scope | Isolated installed-CLI smoke passed. This does not establish automatic Skill discovery or general agent behavior. |
-| Full local unittest suite | PASS | 602 tests passed on 2026-11-17. The prior static package-version expectation was synchronized, and eval version fields now participate in the version-drift gate. |
+| Full local unittest suite | PASS | 605 tests passed on 2026-11-17 after observer correction (`8f0bbe1`). Skill/adapter contracts, fixture integrity, historical evidence, version, erasure language, memory security/privacy and audit checks also passed. |
 | Initial installed-Skill live sample | PARTIAL | 2026-11-16: one PASS, two infrastructure BLOCKER outcomes; see the separate evidence below. |
-| Diagnostic follow-up | PENDING | The separately fixed 2026-11-17 sample covers only the two tasks without completed initial results. Record its outcomes independently. |
-| Remote compatibility CI | PENDING | Linux/Windows and Python 3.10–3.14 checks have not run for the final candidate. Link the successful candidate-commit runs here when available. |
-| Reproducible distribution builds | PENDING | Build ZIP and tar.gz twice from the same candidate source; compare hashes and inspect archive contents. |
-| Reviewed candidate commit | PENDING | WP14A `307e326` and WP14B `f5d69a9` are committed; the remaining candidate changes still need a reviewed commit. |
+| Diagnostic follow-up | COMPLETE, mixed | The independent two-task sample recorded missing-scope PASS and unconfirmed-observation FAIL; preserve both outcomes. |
+| Observer correction and independent sample | PASS, bounded | 14 observer tests passed, including real CLI controls. One new candidate-task session passed under the separately fixed method `8f0bbe1`; see the [result](evaluations/INSTALLED-SKILL-LIVE-OBSERVER-RESULTS-2026-11-17.md). |
+| Remote compatibility CI | PASS | All ten Linux/Windows × Python 3.10–3.14 jobs passed for implementation commit `8f0bbe1`: [CI run 44157617701](https://github.com/waittim/MemoryCustodian/actions/runs/44157617701). The [record](evaluations/CI-CANDIDATE-RESULTS-2026-11-17.json) pins that SHA and each job. Subsequent evidence-only commits receive their own branch CI. |
+| Reproducible distribution builds | PASS, payload pinned | ZIP and tar.gz each reproduced byte-for-byte from `d125910`; both extracted runtimes passed strict routing, check and audit. The packaging script and all payload paths remain unchanged through `8f0bbe1` and current documentation-only updates. See the [build record](evaluations/PACKAGE-BUILD-RESULTS-2026-11-17.md). |
+| Reviewed candidate source | PASS | WP14A `307e326`, WP14B `f5d69a9`, candidate `d125910`, and observer correction `8f0bbe1` are committed. Final validation records accompany this document in a separate evidence commit. |
 | Final tag and publication | NOT AUTHORIZED | Current work covers candidate preparation and CI. Final tagging and publication require separate explicit user authorization. |
 
-Local checks, candidate CI, reproducible builds, and the reviewed commit are
-required before marking this candidate release-ready. Live observations constrain
-the workflow claims that can be made; incomplete runtime evidence must not be
-converted to product success or task failure.
+The scoped candidate checks above are complete. The final evidence commit's CI
+is checked before handoff. Live observations constrain the workflow claims that
+can be made; incomplete runtime evidence must not be converted to product
+success or task failure.
 
 ## Installed-Skill evidence and limits
 
@@ -64,10 +65,34 @@ method files are retained in the original record directory's
 the unchanged fourth helper is pinned by its original hash.
 
 The [2026-11-17 diagnostic plan](evaluations/INSTALLED-SKILL-LIVE-DIAGNOSTIC-PLAN-2026-11-17.md)
-defines a new two-task sample with bounded diagnostic observations. Results are
-pending. Even if both complete, they must not be combined with the initial PASS
-to present the original cohort as 3/3, replace its blockers, or imply automatic
-Skill discovery.
+defined a new two-task sample with bounded diagnostic observations. Both sessions
+completed: [missing-scope passed and unconfirmed-observation failed](evaluations/INSTALLED-SKILL-LIVE-DIAGNOSTIC-RESULTS-2026-11-17.md).
+The latter passed its artifact checks but failed the recorded read-before-write
+ordering check. Its early command's raw payload was not retained; at collection,
+its identity and the cause of that particular failure were unknown.
+
+An independently reproducible observer defect can classify single read-only
+CLI help and preview calls as writes. The separately fixed
+[observer-correction plan](evaluations/INSTALLED-SKILL-LIVE-OBSERVER-PLAN-2026-11-17.md)
+required controls before one new independent candidate-task sample. It preserves
+confirmed write-before-read failures and assigns uncertain ordering to REVIEW.
+Neither the correction nor a later result regrades the earlier FAIL or replaces
+its blockers, and the separate samples must not be pooled as an original 3/3
+score or automatic-discovery evidence.
+
+The [new independent sample](evaluations/INSTALLED-SKILL-LIVE-OBSERVER-RESULTS-2026-11-17.md)
+passed: installed Skill content was observed at sequence 6, the complete strict
+maintenance read at 11 preceded confirmed candidate writing at 14, and all
+artifact checks passed. A separate read-only help event at 12 remained in the
+legacy possible-event list while its verified classification was retained.
+
+That new help event's command SHA-256 (`a7a1fdd5…77c483bb`) and output SHA-256
+(`26c1c212…6c2d4b7d`), with exit 0, exactly match the old diagnostic event at
+9–10. Given reliable hashes and no collision, this cross-sample association
+supports the inference that the old early event was the same help call and its
+ordering failure may reflect the observer defect. It is not a complete causal
+reconstruction: the new help followed its strict read, whereas the old event
+preceded it. No old result is regraded, and no discarded workspace is attested.
 
 ## Claims and deferred work
 
@@ -84,6 +109,6 @@ Skill discovery.
   interruption-specific failure or prove checkpointing generally useless.
   That deferral does not block the evaluation-reliability release scope.
 
-Before final review, replace pending rows with actual results and CI links,
-or explicitly narrow the release claims where evidence remains unavailable.
-Do not mark unrun checks PASS.
+The candidate is ready for review of this evaluation-reliability scope. Tagging,
+merging, and publication are separate actions; this record does not announce a
+published release or extend the measured workflow claims.

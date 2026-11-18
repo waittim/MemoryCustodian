@@ -96,7 +96,7 @@ the historical pilot scores remain as recorded.
 The [0.14 plan](../../MemoryCustodian-v0.14.0-plan.md) tracks the next contract
 reviews and the prerequisites for product-path or checkpoint work.
 
-The next two revisions have separate reports and append-only evidence:
+The other four revisions have separate reports and append-only evidence:
 
 - [Rename helper v2](CONTRACT-RENAME-HELPER-RESULTS.md): 19/19 fixed controls.
 - [No-prose-area v2](CONTRACT-AREA-PLAN-RESULTS.md): 23/23 fixed controls.
@@ -115,6 +115,11 @@ separate from both contract-control evidence and live-agent evaluation.
 
 The [initial explicit installed-Skill live sample](../INSTALLED-SKILL-LIVE-RESULTS-2026-11-16.md)
 retains one PASS and two incomplete-runtime BLOCKER outcomes. Its
-[diagnostic follow-up plan](../INSTALLED-SKILL-LIVE-DIAGNOSTIC-PLAN-2026-11-17.md)
-selects only those incomplete tasks, preserving the initial sample and method
-snapshots. It does not establish automatic discovery or general effectiveness.
+[diagnostic follow-up](../INSTALLED-SKILL-LIVE-DIAGNOSTIC-RESULTS-2026-11-17.md)
+recorded missing-scope PASS and unconfirmed-observation FAIL in separate new
+sessions, preserving the initial sample and method snapshots. An independently
+reproduced observer defect has its own
+[correction plan](../INSTALLED-SKILL-LIVE-OBSERVER-PLAN-2026-11-17.md) and one new
+[candidate-task PASS](../INSTALLED-SKILL-LIVE-OBSERVER-RESULTS-2026-11-17.md), without
+regrading that FAIL or pooling cohorts. These samples do not establish automatic discovery or
+general effectiveness.

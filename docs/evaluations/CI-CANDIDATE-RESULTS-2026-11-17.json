@@ -1,0 +1,84 @@
+{
+  "ci_evidence_format": 1,
+  "conclusion": "success",
+  "event": "push",
+  "headSha": "8f0bbe14d8b303c5fcfcebe907d53d1edbe0dfe1",
+  "jobs": [
+    {
+      "conclusion": "success",
+      "databaseId": 134302484486,
+      "name": "checks (3.11)",
+      "status": "completed",
+      "url": "https://github.com/waittim/MemoryCustodian/actions/runs/44157617701/job/134302484486"
+    },
+    {
+      "conclusion": "success",
+      "databaseId": 134302484769,
+      "name": "checks (3.13)",
+      "status": "completed",
+      "url": "https://github.com/waittim/MemoryCustodian/actions/runs/44157617701/job/134302484769"
+    },
+    {
+      "conclusion": "success",
+      "databaseId": 134302484873,
+      "name": "windows-smoke (3.12)",
+      "status": "completed",
+      "url": "https://github.com/waittim/MemoryCustodian/actions/runs/44157617701/job/134302484873"
+    },
+    {
+      "conclusion": "success",
+      "databaseId": 134302484902,
+      "name": "checks (3.14)",
+      "status": "completed",
+      "url": "https://github.com/waittim/MemoryCustodian/actions/runs/44157617701/job/134302484902"
+    },
+    {
+      "conclusion": "success",
+      "databaseId": 134302484982,
+      "name": "windows-smoke (3.11)",
+      "status": "completed",
+      "url": "https://github.com/waittim/MemoryCustodian/actions/runs/44157617701/job/134302484982"
+    },
+    {
+      "conclusion": "success",
+      "databaseId": 134302484992,
+      "name": "windows-smoke (3.14)",
+      "status": "completed",
+      "url": "https://github.com/waittim/MemoryCustodian/actions/runs/44157617701/job/134302484992"
+    },
+    {
+      "conclusion": "success",
+      "databaseId": 134302485048,
+      "name": "checks (3.12)",
+      "status": "completed",
+      "url": "https://github.com/waittim/MemoryCustodian/actions/runs/44157617701/job/134302485048"
+    },
+    {
+      "conclusion": "success",
+      "databaseId": 134302485049,
+      "name": "windows-smoke (3.13)",
+      "status": "completed",
+      "url": "https://github.com/waittim/MemoryCustodian/actions/runs/44157617701/job/134302485049"
+    },
+    {
+      "conclusion": "success",
+      "databaseId": 134302485178,
+      "name": "windows-smoke (3.10)",
+      "status": "completed",
+      "url": "https://github.com/waittim/MemoryCustodian/actions/runs/44157617701/job/134302485178"
+    },
+    {
+      "conclusion": "success",
+      "databaseId": 134302485370,
+      "name": "checks (3.10)",
+      "status": "completed",
+      "url": "https://github.com/waittim/MemoryCustodian/actions/runs/44157617701/job/134302485370"
+    }
+  ],
+  "repository": "waittim/MemoryCustodian",
+  "run_id": 44157617701,
+  "status": "completed",
+  "url": "https://github.com/waittim/MemoryCustodian/actions/runs/44157617701",
+  "verified_at": "2026-11-17T23:59:30.094744+00:00",
+  "workflow": "CI"
+}
